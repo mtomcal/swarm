@@ -75,6 +75,13 @@ swarm spawn --name w1 --tmux -- claude
 # Tmux + isolated git worktree
 swarm spawn --name w1 --tmux --worktree -- claude
 
+# Wait for agent to be ready before returning (recommended for scripting)
+swarm spawn --name w1 --tmux --ready-wait -- claude --dangerously-skip-permissions
+swarm send w1 "Fix the bug in auth.py"  # Safe to send immediately
+
+# Custom ready timeout (default 30s)
+swarm spawn --name w1 --tmux --ready-wait --ready-timeout 60 -- claude
+
 # Background process (logs to ~/.swarm/logs/)
 swarm spawn --name w1 -- ./my-script.sh
 
@@ -93,7 +100,7 @@ swarm ls --tag team-a
 #!/bin/bash
 # Spawn workers for each ready task
 for id in $(task-tool list --ready); do
-    swarm spawn --name "w-$id" --tmux --worktree -- claude
+    swarm spawn --name "w-$id" --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
     swarm send "w-$id" "/work-on $id"
 done
 

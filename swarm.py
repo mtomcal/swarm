@@ -225,6 +225,7 @@ def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str]) -> 
     subprocess.run(
         [
             "tmux", "new-window",
+            "-a",  # Append after current window (avoids index conflicts with base-index)
             "-t", session,
             "-n", window,
             "-c", str(cwd),
@@ -281,6 +282,49 @@ def tmux_capture_pane(session: str, window: str, history_lines: int = 0) -> str:
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return result.stdout
+
+
+def wait_for_agent_ready(session: str, window: str, timeout: int = 30) -> bool:
+    """Wait for an agent CLI to be ready for input.
+
+    Detects readiness by looking for common prompt patterns:
+    - Claude Code: "> " prompt at start of line, or "bypass permissions" indicator
+    - Generic: Shell prompt patterns like "$ " or "> "
+
+    Args:
+        session: Tmux session name
+        window: Tmux window name
+        timeout: Maximum seconds to wait
+
+    Returns:
+        True if agent became ready, False if timeout
+    """
+    import re
+
+    # Patterns that indicate the agent is ready for input
+    ready_patterns = [
+        r"^> ",                          # Claude Code prompt
+        r"bypass permissions",           # Claude Code ready indicator
+        r"^\$ ",                          # Shell prompt
+        r"^>>> ",                         # Python REPL
+    ]
+
+    start = time.time()
+    while (time.time() - start) < timeout:
+        try:
+            output = tmux_capture_pane(session, window)
+            # Check each line for ready patterns
+            for line in output.split('\n'):
+                for pattern in ready_patterns:
+                    if re.search(pattern, line):
+                        return True
+        except subprocess.CalledProcessError:
+            # Window might not exist yet, keep waiting
+            pass
+
+        time.sleep(0.5)
+
+    return False
 
 
 # =============================================================================
@@ -403,6 +447,10 @@ def main() -> None:
     spawn_p.add_argument("--env", action="append", default=[],
                         help="Environment variable KEY=VAL (repeatable)")
     spawn_p.add_argument("--cwd", help="Working directory")
+    spawn_p.add_argument("--ready-wait", action="store_true",
+                        help="Wait for agent to be ready before returning (tmux only)")
+    spawn_p.add_argument("--ready-timeout", type=int, default=30,
+                        help="Timeout in seconds for --ready-wait (default: 30)")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to run (after --)")
 
@@ -609,6 +657,11 @@ def cmd_spawn(args) -> None:
 
     # Add to state
     state.add_worker(worker)
+
+    # Wait for agent to be ready if requested
+    if args.ready_wait and tmux_info:
+        if not wait_for_agent_ready(tmux_info.session, tmux_info.window, args.ready_timeout):
+            print(f"swarm: warning: agent '{args.name}' did not become ready within {args.ready_timeout}s", file=sys.stderr)
 
     # Print success message
     if tmux_info:
