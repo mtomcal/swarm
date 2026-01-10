@@ -8,7 +8,10 @@ import argparse
 import json
 import os
 import shlex
+import signal
 import subprocess
+import sys
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -355,6 +358,29 @@ def refresh_worker_status(worker: Worker) -> str:
         return "stopped"
 
 
+def relative_time(iso_str: str) -> str:
+    """Convert ISO timestamp to human-readable relative time.
+
+    Args:
+        iso_str: ISO format timestamp string
+
+    Returns:
+        Human-readable time delta (e.g., "5m", "2h", "3d")
+    """
+    dt = datetime.fromisoformat(iso_str)
+    delta = datetime.now() - dt
+    seconds = int(delta.total_seconds())
+
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        return f"{seconds // 60}m"
+    elif seconds < 86400:
+        return f"{seconds // 3600}h"
+    else:
+        return f"{seconds // 86400}d"
+
+
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -480,74 +506,397 @@ def main() -> None:
 # Command stubs - to be implemented in subsequent tasks
 def cmd_spawn(args) -> None:
     """Spawn a new worker."""
-    print("swarm: error: spawn command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    print("swarm: error: spawn command not yet implemented", file=sys.stderr)
+    sys.exit(1)
 
 
 def cmd_ls(args) -> None:
     """List workers."""
-    print("swarm: error: ls command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Refresh status for each worker
+    workers = []
+    for worker in state.workers:
+        worker.status = refresh_worker_status(worker)
+        workers.append(worker)
+
+    # Filter by status if not "all"
+    if args.status != "all":
+        workers = [w for w in workers if w.status == args.status]
+
+    # Filter by tag if specified
+    if args.tag:
+        workers = [w for w in workers if args.tag in w.tags]
+
+    # Output based on format
+    if args.format == "json":
+        # JSON format
+        print(json.dumps([w.to_dict() for w in workers], indent=2))
+
+    elif args.format == "names":
+        # Names format - one per line
+        for worker in workers:
+            print(worker.name)
+
+    else:  # table format
+        # Table format with aligned columns
+        if not workers:
+            # No workers to display
+            return
+
+        # Prepare rows
+        rows = []
+        for worker in workers:
+            # PID/WINDOW column
+            if worker.tmux:
+                pid_window = f"{worker.tmux.session}:{worker.tmux.window}"
+            elif worker.pid:
+                pid_window = str(worker.pid)
+            else:
+                pid_window = "-"
+
+            # STARTED column
+            started = relative_time(worker.started)
+
+            # WORKTREE column
+            worktree = worker.worktree.path if worker.worktree else "-"
+
+            # TAG column
+            tag = ",".join(worker.tags) if worker.tags else "-"
+
+            rows.append({
+                "NAME": worker.name,
+                "STATUS": worker.status,
+                "PID/WINDOW": pid_window,
+                "STARTED": started,
+                "WORKTREE": worktree,
+                "TAG": tag,
+            })
+
+        # Calculate column widths
+        headers = ["NAME", "STATUS", "PID/WINDOW", "STARTED", "WORKTREE", "TAG"]
+        col_widths = {}
+        for header in headers:
+            col_widths[header] = len(header)
+            for row in rows:
+                col_widths[header] = max(col_widths[header], len(row[header]))
+
+        # Print header
+        header_parts = []
+        for header in headers:
+            header_parts.append(header.ljust(col_widths[header]))
+        print("  ".join(header_parts))
+
+        # Print rows
+        for row in rows:
+            row_parts = []
+            for header in headers:
+                row_parts.append(row[header].ljust(col_widths[header]))
+            print("  ".join(row_parts))
 
 
 def cmd_status(args) -> None:
     """Get worker status."""
-    print("swarm: error: status command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Get worker by name
+    worker = state.get_worker(args.name)
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(2)
+
+    # Refresh actual status
+    actual_status = refresh_worker_status(worker)
+
+    # Build status string
+    status_str = f"{worker.name}: {actual_status} ("
+
+    # Add tmux or pid info
+    if worker.tmux:
+        status_str += f"tmux window {worker.tmux.session}:{worker.tmux.window}"
+    elif worker.pid:
+        status_str += f"pid {worker.pid}"
+
+    # Add worktree info if present
+    if worker.worktree:
+        status_str += f", worktree {worker.worktree.path}"
+
+    # Add uptime
+    uptime = relative_time(worker.started)
+    status_str += f", uptime {uptime})"
+
+    # Print status line
+    print(status_str)
+
+    # Exit with appropriate code
+    if actual_status == "running":
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 
 def cmd_send(args) -> None:
     """Send text to worker."""
-    print("swarm: error: send command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Handle --all: get all running tmux workers
+    if args.all:
+        workers = [
+            w for w in state.workers
+            if w.tmux is not None
+        ]
+    else:
+        # Get single worker by name
+        if not args.name:
+            print("swarm: error: --name required when not using --all", file=sys.stderr)
+            sys.exit(1)
+
+        worker = state.get_worker(args.name)
+
+        # Validation: worker not found
+        if worker is None:
+            print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        # Validation: worker is not tmux
+        if worker.tmux is None:
+            print(f"swarm: error: worker '{args.name}' is not a tmux worker", file=sys.stderr)
+            sys.exit(1)
+
+        workers = [worker]
+
+    # For each worker, validate and send
+    for worker in workers:
+        # Refresh status and check if running
+        current_status = refresh_worker_status(worker)
+
+        # Validation: worker is not running
+        if current_status != "running":
+            print(f"swarm: error: worker '{worker.name}' is not running", file=sys.stderr)
+            sys.exit(1)
+
+        # Send text to tmux window
+        tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter)
+
+        # Print confirmation
+        print(f"sent to {worker.name}")
 
 
 def cmd_interrupt(args) -> None:
     """Send Ctrl-C to worker."""
-    print("swarm: error: interrupt command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Handle --all flag or single worker
+    if args.all:
+        # Get all running tmux workers
+        workers_to_interrupt = []
+        for worker in state.workers:
+            # Refresh status
+            actual_status = refresh_worker_status(worker)
+            if actual_status == "running" and worker.tmux:
+                workers_to_interrupt.append(worker)
+    else:
+        # Get single worker by name
+        if not args.name:
+            print("swarm: error: worker name required when not using --all", file=sys.stderr)
+            sys.exit(1)
+
+        worker = state.get_worker(args.name)
+        if not worker:
+            print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        # Validate worker is tmux
+        if not worker.tmux:
+            print(f"swarm: error: worker '{args.name}' is not a tmux worker", file=sys.stderr)
+            sys.exit(1)
+
+        # Validate worker is running
+        actual_status = refresh_worker_status(worker)
+        if actual_status != "running":
+            print(f"swarm: error: worker '{args.name}' is not running", file=sys.stderr)
+            sys.exit(1)
+
+        workers_to_interrupt = [worker]
+
+    # Send Ctrl-C to each worker
+    for worker in workers_to_interrupt:
+        session = worker.tmux.session
+        window = worker.tmux.window
+        subprocess.run(
+            ["tmux", "send-keys", "-t", f"{session}:{window}", "C-c"],
+            capture_output=True
+        )
+        print(f"interrupted {worker.name}")
 
 
 def cmd_eof(args) -> None:
     """Send Ctrl-D to worker."""
-    print("swarm: error: eof command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Get worker by name
+    worker = state.get_worker(args.name)
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate worker is tmux
+    if not worker.tmux:
+        print(f"swarm: error: worker '{args.name}' is not a tmux worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate worker is running
+    actual_status = refresh_worker_status(worker)
+    if actual_status != "running":
+        print(f"swarm: error: worker '{args.name}' is not running", file=sys.stderr)
+        sys.exit(1)
+
+    # Send Ctrl-D
+    session = worker.tmux.session
+    window = worker.tmux.window
+    subprocess.run(
+        ["tmux", "send-keys", "-t", f"{session}:{window}", "C-d"],
+        capture_output=True
+    )
+    print(f"sent eof to {worker.name}")
 
 
 def cmd_attach(args) -> None:
     """Attach to worker tmux window."""
-    print("swarm: error: attach command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Get worker by name
+    worker = state.get_worker(args.name)
+
+    # Validation: worker not found
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Validation: not a tmux worker
+    if not worker.tmux:
+        print(f"swarm: error: worker '{args.name}' is not a tmux worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Select the window first
+    session = worker.tmux.session
+    window = worker.tmux.window
+    subprocess.run(["tmux", "select-window", "-t", f"{session}:{window}"], check=True)
+
+    # Then attach to session (this replaces current process)
+    os.execvp("tmux", ["tmux", "attach-session", "-t", session])
 
 
 def cmd_logs(args) -> None:
     """View worker output."""
-    print("swarm: error: logs command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    # Load state
+    state = State()
+
+    # Get worker by name
+    worker = state.get_worker(args.name)
+    if not worker:
+        print(f"swarm: no worker named '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Handle tmux workers
+    if worker.tmux:
+        if args.follow:
+            # Follow mode: poll every 1s, clear screen, show last 30 lines
+            try:
+                while True:
+                    history = args.lines if args.history else 0
+                    output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history)
+
+                    # Clear screen and print last 30 lines
+                    print("\033[2J\033[H", end="")  # ANSI clear
+                    lines = output.strip().split('\n')
+                    print('\n'.join(lines[-30:]))
+
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                # Clean exit on Ctrl-C
+                pass
+        else:
+            # Default or history mode
+            history = args.lines if args.history else 0
+            output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history)
+            print(output, end="")
+
+    # Handle non-tmux workers
+    else:
+        log_path = LOGS_DIR / f"{worker.name}.stdout.log"
+
+        if args.follow:
+            # Use tail -f for follow mode
+            os.execvp("tail", ["tail", "-f", str(log_path)])
+        else:
+            # Read and print entire file
+            if log_path.exists():
+                print(log_path.read_text(), end="")
+            else:
+                print(f"swarm: no logs found for {worker.name}", file=sys.stderr)
+                sys.exit(1)
 
 
 def cmd_kill(args) -> None:
     """Kill worker."""
-    print("swarm: error: kill command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    print("swarm: error: kill command not yet implemented", file=sys.stderr)
+    sys.exit(1)
 
 
 def cmd_wait(args) -> None:
     """Wait for worker to finish."""
-    print("swarm: error: wait command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    state = State()
+
+    if args.all:
+        workers = [w for w in state.workers if refresh_worker_status(w) == "running"]
+    else:
+        if not args.name:
+            print("swarm: error: name required (or use --all)", file=sys.stderr)
+            sys.exit(1)
+        worker = state.get_worker(args.name)
+        if not worker:
+            print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+            sys.exit(1)
+        workers = [worker]
+
+    start = time.time()
+    pending = {w.name: w for w in workers}
+
+    while pending:
+        if args.timeout and (time.time() - start) > args.timeout:
+            for name in pending:
+                print(f"{name}: still running (timeout)")
+            sys.exit(1)
+
+        for name in list(pending.keys()):
+            w = pending[name]
+            if refresh_worker_status(w) == "stopped":
+                print(f"{name}: exited")
+                del pending[name]
+
+        if pending:
+            time.sleep(1)
+
+    sys.exit(0)
 
 
 def cmd_clean(args) -> None:
     """Clean up dead workers."""
-    print("swarm: error: clean command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    print("swarm: error: clean command not yet implemented", file=sys.stderr)
+    sys.exit(1)
 
 
 def cmd_respawn(args) -> None:
     """Respawn a dead worker."""
-    print("swarm: error: respawn command not yet implemented", file=os.sys.stderr)
-    os.sys.exit(1)
+    print("swarm: error: respawn command not yet implemented", file=sys.stderr)
+    sys.exit(1)
 
 
 if __name__ == "__main__":
