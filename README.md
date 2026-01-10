@@ -19,7 +19,11 @@ swarm clean --all
 ## Install
 
 ```bash
-# Single file, no dependencies beyond Python stdlib
+curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/setup.sh | sh
+```
+
+Or manually:
+```bash
 cp swarm.py ~/.local/bin/swarm
 chmod +x ~/.local/bin/swarm
 ```
