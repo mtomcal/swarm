@@ -506,8 +506,115 @@ def main() -> None:
 # Command stubs - to be implemented in subsequent tasks
 def cmd_spawn(args) -> None:
     """Spawn a new worker."""
-    print("swarm: error: spawn command not yet implemented", file=sys.stderr)
-    sys.exit(1)
+    # Parse command from args.cmd (strip leading '--' if present)
+    cmd = args.cmd
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+
+    # Validate command is not empty
+    if not cmd:
+        print("swarm: error: no command provided (use -- command...)", file=sys.stderr)
+        sys.exit(1)
+
+    # Load state and check for duplicate name
+    state = State()
+    if state.get_worker(args.name) is not None:
+        print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine working directory
+    cwd = Path.cwd()
+    worktree_info = None
+
+    if args.worktree:
+        # Get git root
+        try:
+            git_root = get_git_root()
+        except subprocess.CalledProcessError:
+            print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
+            sys.exit(1)
+
+        # Compute worktree path relative to git root
+        worktree_dir = Path(args.worktree_dir)
+        if not worktree_dir.is_absolute():
+            worktree_dir = git_root.parent / worktree_dir
+
+        worktree_path = worktree_dir / args.name
+
+        # Determine branch name
+        branch = args.branch if args.branch else args.name
+
+        # Create worktree
+        try:
+            create_worktree(worktree_path, branch)
+        except subprocess.CalledProcessError as e:
+            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Set cwd to worktree
+        cwd = worktree_path
+
+        # Store worktree info
+        worktree_info = WorktreeInfo(
+            path=str(worktree_path),
+            branch=branch,
+            base_repo=str(git_root)
+        )
+    elif args.cwd:
+        cwd = Path(args.cwd)
+
+    # Parse environment variables from KEY=VAL format
+    env_dict = {}
+    for env_str in args.env:
+        if "=" not in env_str:
+            print(f"swarm: error: invalid env format '{env_str}' (expected KEY=VAL)", file=sys.stderr)
+            sys.exit(1)
+        key, val = env_str.split("=", 1)
+        env_dict[key] = val
+
+    # Spawn the worker
+    tmux_info = None
+    pid = None
+
+    if args.tmux:
+        # Spawn in tmux
+        try:
+            create_tmux_window(args.session, args.name, cwd, cmd)
+            tmux_info = TmuxInfo(session=args.session, window=args.name)
+        except subprocess.CalledProcessError as e:
+            print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Spawn as background process
+        log_prefix = LOGS_DIR / args.name
+        try:
+            pid = spawn_process(cmd, cwd, env_dict, log_prefix)
+        except Exception as e:
+            print(f"swarm: error: failed to spawn process: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Create Worker object
+    worker = Worker(
+        name=args.name,
+        status="running",
+        cmd=cmd,
+        started=datetime.now().isoformat(),
+        cwd=str(cwd),
+        env=env_dict,
+        tags=args.tags,
+        tmux=tmux_info,
+        worktree=worktree_info,
+        pid=pid,
+    )
+
+    # Add to state
+    state.add_worker(worker)
+
+    # Print success message
+    if tmux_info:
+        print(f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
+    else:
+        print(f"spawned {args.name} (pid: {pid})")
 
 
 def cmd_ls(args) -> None:
@@ -675,8 +782,13 @@ def cmd_send(args) -> None:
 
         # Validation: worker is not running
         if current_status != "running":
-            print(f"swarm: error: worker '{worker.name}' is not running", file=sys.stderr)
-            sys.exit(1)
+            if args.all:
+                # For --all, skip non-running workers silently
+                continue
+            else:
+                # For single worker, error and exit
+                print(f"swarm: error: worker '{worker.name}' is not running", file=sys.stderr)
+                sys.exit(1)
 
         # Send text to tmux window
         tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter)
@@ -845,9 +957,66 @@ def cmd_logs(args) -> None:
 
 
 def cmd_kill(args) -> None:
-    """Kill worker."""
-    print("swarm: error: kill command not yet implemented", file=sys.stderr)
-    sys.exit(1)
+    """Kill worker processes.
+
+    Handles both tmux and non-tmux workers. For non-tmux workers,
+    attempts graceful shutdown with SIGTERM first, then SIGKILL after 5 seconds.
+    """
+    state = State()
+
+    # Determine which workers to kill
+    if args.all:
+        workers_to_kill = state.workers[:]
+    else:
+        if not args.name:
+            print("swarm: error: must specify worker name or --all", file=sys.stderr)
+            sys.exit(1)
+
+        worker = state.get_worker(args.name)
+        if not worker:
+            print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+            sys.exit(1)
+        workers_to_kill = [worker]
+
+    # Kill each worker
+    for worker in workers_to_kill:
+        # Handle tmux workers
+        if worker.tmux:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                capture_output=True
+            )
+
+        # Handle non-tmux workers with PID
+        elif worker.pid:
+            try:
+                # First try graceful shutdown with SIGTERM
+                os.kill(worker.pid, signal.SIGTERM)
+
+                # Wait up to 5 seconds for process to die
+                for _ in range(50):  # Check every 0.1 seconds
+                    time.sleep(0.1)
+                    if not process_alive(worker.pid):
+                        break
+                else:
+                    # Process still alive after 5 seconds, use SIGKILL
+                    if process_alive(worker.pid):
+                        os.kill(worker.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # Process already dead
+                pass
+
+        # Update worker status
+        worker.status = "stopped"
+
+        # Remove worktree if requested
+        if args.rm_worktree and worker.worktree:
+            remove_worktree(Path(worker.worktree.path))
+
+        print(f"killed {worker.name}")
+
+    # Save updated state
+    state.save()
 
 
 def cmd_wait(args) -> None:
@@ -889,8 +1058,62 @@ def cmd_wait(args) -> None:
 
 def cmd_clean(args) -> None:
     """Clean up dead workers."""
-    print("swarm: error: clean command not yet implemented", file=sys.stderr)
-    sys.exit(1)
+    state = State()
+
+    # Determine which workers to clean
+    workers_to_clean = []
+
+    if args.all:
+        # Get all workers with status "stopped"
+        workers_to_clean = [w for w in state.workers if w.status == "stopped"]
+    else:
+        # Get single worker by name
+        if not args.name:
+            print("swarm: error: must specify worker name or use --all", file=sys.stderr)
+            sys.exit(1)
+
+        worker = state.get_worker(args.name)
+        if not worker:
+            print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        workers_to_clean = [worker]
+
+    # Clean each worker
+    for worker in workers_to_clean:
+        # Refresh status first to confirm stopped
+        current_status = refresh_worker_status(worker)
+
+        if current_status == "running":
+            if args.all:
+                # For --all, skip with warning
+                print(f"swarm: warning: skipping '{worker.name}' (still running)", file=sys.stderr)
+                continue
+            else:
+                # For single worker, error and exit
+                print(f"swarm: error: cannot clean running worker '{worker.name}'", file=sys.stderr)
+                sys.exit(1)
+
+        # Remove worktree if it exists and args.rm_worktree is True
+        if worker.worktree and args.rm_worktree:
+            worktree_path = Path(worker.worktree.path)
+            if worktree_path.exists():
+                remove_worktree(worktree_path)
+
+        # Remove log files if they exist
+        stdout_log = LOGS_DIR / f"{worker.name}.stdout.log"
+        stderr_log = LOGS_DIR / f"{worker.name}.stderr.log"
+
+        if stdout_log.exists():
+            stdout_log.unlink()
+        if stderr_log.exists():
+            stderr_log.unlink()
+
+        # Remove worker from state
+        state.remove_worker(worker.name)
+
+        # Print success message
+        print(f"cleaned {worker.name}")
 
 
 def cmd_respawn(args) -> None:
