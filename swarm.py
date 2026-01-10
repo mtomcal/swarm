@@ -7,6 +7,8 @@ A minimal CLI tool for spawning, tracking, and controlling agent processes via t
 import argparse
 import json
 import os
+import shlex
+import subprocess
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -137,6 +139,220 @@ def ensure_dirs() -> None:
     """Create swarm directories if they don't exist."""
     SWARM_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# =============================================================================
+# Git Operations
+# =============================================================================
+
+def get_git_root() -> Path:
+    """Get root of current git repo."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def create_worktree(path: Path, branch: str) -> None:
+    """Create a git worktree.
+
+    Creates a new worktree at the specified path with the given branch name.
+    If the branch doesn't exist, it's created from the current HEAD.
+    """
+    path = Path(path)
+    # Create parent directory if needed
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Try to create with new branch first, fall back to existing branch
+    result = subprocess.run(
+        ["git", "worktree", "add", "-b", branch, str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # Branch might already exist, try without -b
+        subprocess.run(
+            ["git", "worktree", "add", str(path), branch],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+
+def remove_worktree(path: Path) -> None:
+    """Remove a git worktree."""
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+# =============================================================================
+# Tmux Operations
+# =============================================================================
+
+def ensure_tmux_session(session: str) -> None:
+    """Create tmux session if it doesn't exist."""
+    # Check if session exists
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", shlex.quote(session)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        # Create detached session
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session],
+            capture_output=True,
+            check=True,
+        )
+
+
+def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str]) -> None:
+    """Create a tmux window and run command."""
+    ensure_tmux_session(session)
+
+    # Build the command string safely
+    cmd_str = " ".join(shlex.quote(c) for c in cmd)
+
+    subprocess.run(
+        [
+            "tmux", "new-window",
+            "-t", session,
+            "-n", window,
+            "-c", str(cwd),
+            cmd_str,
+        ],
+        capture_output=True,
+        check=True,
+    )
+
+
+def tmux_send(session: str, window: str, text: str, enter: bool = True) -> None:
+    """Send text to a tmux window."""
+    target = f"{session}:{window}"
+
+    # Use send-keys with literal text
+    cmd = ["tmux", "send-keys", "-t", target, "-l", text]
+    subprocess.run(cmd, capture_output=True, check=True)
+
+    if enter:
+        subprocess.run(
+            ["tmux", "send-keys", "-t", target, "Enter"],
+            capture_output=True,
+            check=True,
+        )
+
+
+def tmux_window_exists(session: str, window: str) -> bool:
+    """Check if a tmux window exists."""
+    target = f"{session}:{window}"
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", target],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def tmux_capture_pane(session: str, window: str, history_lines: int = 0) -> str:
+    """Capture contents of a tmux pane.
+
+    Args:
+        session: Tmux session name
+        window: Tmux window name
+        history_lines: Number of scrollback lines to include (0 = visible only)
+
+    Returns:
+        Captured pane content as string
+    """
+    target = f"{session}:{window}"
+    cmd = ["tmux", "capture-pane", "-t", target, "-p"]
+
+    if history_lines > 0:
+        # Include scrollback history
+        cmd.extend(["-S", f"-{history_lines}"])
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout
+
+
+# =============================================================================
+# Process Operations
+# =============================================================================
+
+def spawn_process(cmd: list[str], cwd: Path, env: dict, log_prefix: Path) -> int:
+    """Spawn a background process, return PID.
+
+    Args:
+        cmd: Command to run as list of strings
+        cwd: Working directory
+        env: Environment variables to set (merged with current env)
+        log_prefix: Path prefix for stdout/stderr log files
+
+    Returns:
+        PID of the spawned process
+    """
+    # Merge with current environment
+    full_env = os.environ.copy()
+    full_env.update(env)
+
+    # Open log files
+    stdout_log = open(f"{log_prefix}.stdout.log", "w")
+    stderr_log = open(f"{log_prefix}.stderr.log", "w")
+
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        env=full_env,
+        stdout=stdout_log,
+        stderr=stderr_log,
+        start_new_session=True,  # Detach from parent
+    )
+
+    return process.pid
+
+
+def process_alive(pid: int) -> bool:
+    """Check if a process is alive."""
+    try:
+        os.kill(pid, 0)  # Signal 0 doesn't kill, just checks
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it
+        return True
+
+
+# =============================================================================
+# Status Refresh
+# =============================================================================
+
+def refresh_worker_status(worker: Worker) -> str:
+    """Check actual status of a worker (tmux or pid).
+
+    Returns:
+        Updated status: "running" or "stopped"
+    """
+    if worker.tmux:
+        # Check tmux window
+        if tmux_window_exists(worker.tmux.session, worker.tmux.window):
+            return "running"
+        else:
+            return "stopped"
+    elif worker.pid:
+        # Check process
+        if process_alive(worker.pid):
+            return "running"
+        else:
+            return "stopped"
+    else:
+        # No tmux or pid, assume stopped
+        return "stopped"
 
 
 def main() -> None:
