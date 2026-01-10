@@ -1117,9 +1117,130 @@ def cmd_clean(args) -> None:
 
 
 def cmd_respawn(args) -> None:
-    """Respawn a dead worker."""
-    print("swarm: error: respawn command not yet implemented", file=sys.stderr)
-    sys.exit(1)
+    """Respawn a dead worker.
+
+    Re-spawns a worker using its original configuration (command, options, etc.).
+    The worker must exist in state. If --clean-first is specified, the old
+    worktree is removed before respawning.
+    """
+    state = State()
+
+    # Get worker by name
+    worker = state.get_worker(args.name)
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Check current status
+    current_status = refresh_worker_status(worker)
+
+    # Kill if still running
+    if current_status == "running":
+        if worker.tmux:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                capture_output=True
+            )
+        elif worker.pid:
+            try:
+                os.kill(worker.pid, signal.SIGTERM)
+                # Wait briefly for graceful shutdown
+                for _ in range(50):
+                    time.sleep(0.1)
+                    if not process_alive(worker.pid):
+                        break
+                else:
+                    if process_alive(worker.pid):
+                        os.kill(worker.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    # Handle --clean-first: remove worktree if it exists
+    if args.clean_first and worker.worktree:
+        worktree_path = Path(worker.worktree.path)
+        if worktree_path.exists():
+            remove_worktree(worktree_path)
+
+    # Store original config before removing from state
+    original_cmd = worker.cmd
+    original_cwd = worker.cwd
+    original_env = worker.env
+    original_tags = worker.tags
+    original_tmux = worker.tmux
+    original_worktree = worker.worktree
+
+    # Remove old worker from state
+    state.remove_worker(args.name)
+
+    # Determine working directory
+    cwd = Path(original_cwd)
+    worktree_info = None
+
+    # Recreate worktree if needed
+    if original_worktree:
+        if args.clean_first or not Path(original_worktree.path).exists():
+            # Need to recreate worktree
+            worktree_path = Path(original_worktree.path)
+            branch = original_worktree.branch
+            try:
+                create_worktree(worktree_path, branch)
+            except subprocess.CalledProcessError as e:
+                print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
+                sys.exit(1)
+            cwd = worktree_path
+        else:
+            # Worktree still exists, use it
+            cwd = Path(original_worktree.path)
+
+        worktree_info = WorktreeInfo(
+            path=str(cwd),
+            branch=original_worktree.branch,
+            base_repo=original_worktree.base_repo
+        )
+
+    # Spawn the worker
+    tmux_info = None
+    pid = None
+
+    if original_tmux:
+        # Spawn in tmux
+        try:
+            create_tmux_window(original_tmux.session, args.name, cwd, original_cmd)
+            tmux_info = TmuxInfo(session=original_tmux.session, window=args.name)
+        except subprocess.CalledProcessError as e:
+            print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Spawn as background process
+        log_prefix = LOGS_DIR / args.name
+        try:
+            pid = spawn_process(original_cmd, cwd, original_env, log_prefix)
+        except Exception as e:
+            print(f"swarm: error: failed to spawn process: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Create new Worker object
+    new_worker = Worker(
+        name=args.name,
+        status="running",
+        cmd=original_cmd,
+        started=datetime.now().isoformat(),
+        cwd=str(cwd),
+        env=original_env,
+        tags=original_tags,
+        tmux=tmux_info,
+        worktree=worktree_info,
+        pid=pid,
+    )
+
+    # Add to state
+    state.add_worker(new_worker)
+
+    # Print success message
+    if tmux_info:
+        print(f"respawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
+    else:
+        print(f"respawned {args.name} (pid: {pid})")
 
 
 if __name__ == "__main__":
