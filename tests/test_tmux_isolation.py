@@ -6,8 +6,12 @@ for integration tests, preventing collisions with user sessions and enabling
 parallel test execution.
 """
 
+import json
+import os
 import shutil
 import subprocess
+import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -69,6 +73,71 @@ class TmuxIsolatedTestCase(unittest.TestCase):
             return []
         return [s for s in result.stdout.strip().split('\n') if s]
 
+    def get_windows(self, session_name: str) -> List[str]:
+        """Get list of window names in a session.
+
+        Args:
+            session_name: Name of the tmux session to query
+
+        Returns:
+            List of window names in the session.
+            Returns empty list if session doesn't exist or has no windows.
+        """
+        result = self.tmux_cmd(
+            "list-windows", "-t", session_name, "-F", "#{window_name}"
+        )
+        if result.returncode != 0:
+            return []
+        return [w for w in result.stdout.strip().split('\n') if w]
+
+    def parse_worker_id(self, output: str) -> str:
+        """Parse worker ID from spawn command output.
+
+        Args:
+            output: stdout from spawn command
+
+        Returns:
+            The worker name/id extracted from output
+
+        Raises:
+            ValueError: If worker ID cannot be parsed from output
+
+        Expected formats:
+            - "spawned <worker-id> (tmux: <session>:<window>)"
+            - "spawned <worker-id> (pid: <pid>)"
+        """
+        for line in output.split('\n'):
+            line = line.strip()
+            if 'spawned' in line.lower():
+                # Format: "spawned test-worker (tmux: session:window)"
+                # or "spawned test-worker (pid: 12345)"
+                parts = line.split()
+                if len(parts) >= 2:
+                    # Second word should be the worker ID
+                    worker_id = parts[1]
+                    # Remove any trailing parentheses or punctuation
+                    worker_id = worker_id.rstrip('(').rstrip(':').rstrip(',')
+                    return worker_id
+
+        raise ValueError(f"Could not parse worker ID from output: {output!r}")
+
+    def get_swarm_session(self) -> str:
+        """Get the swarm session name from the isolated tmux server.
+
+        Returns:
+            The session name starting with 'swarm-'
+
+        Raises:
+            ValueError: If no swarm session found
+        """
+        sessions = self.list_sessions()
+        for session in sessions:
+            if session.startswith('swarm-'):
+                return session
+        raise ValueError(
+            f"No swarm session found. Available sessions: {sessions!r}"
+        )
+
     def run_swarm(self, *args, **kwargs) -> subprocess.CompletedProcess:
         """Run swarm command with isolated tmux socket.
 
@@ -89,13 +158,22 @@ class TmuxIsolatedTestCase(unittest.TestCase):
         swarm_path = Path(__file__).parent.parent / "swarm.py"
 
         # Build command with tmux socket injection
-        cmd = [str(swarm_path)] + list(args)
+        args_list = list(args)
 
         # Inject --tmux-socket flag if spawning with --tmux
-        if "--tmux" in args:
-            # Find position to inject --tmux-socket (after spawn command)
-            cmd.append("--tmux-socket")
-            cmd.append(self.tmux_socket)
+        # Must insert BEFORE '--' separator if present, otherwise append
+        if "--tmux" in args_list:
+            if "--" in args_list:
+                # Insert before the '--' separator
+                dash_idx = args_list.index("--")
+                args_list.insert(dash_idx, "--tmux-socket")
+                args_list.insert(dash_idx + 1, self.tmux_socket)
+            else:
+                # No '--', just append
+                args_list.append("--tmux-socket")
+                args_list.append(self.tmux_socket)
+
+        cmd = [str(swarm_path)] + args_list
 
         # Set default kwargs for capture
         if "capture_output" not in kwargs:
@@ -104,6 +182,44 @@ class TmuxIsolatedTestCase(unittest.TestCase):
             kwargs["text"] = True
 
         return subprocess.run(cmd, **kwargs)
+
+    def get_workers(self) -> List[dict]:
+        """Get list of workers from swarm ls --format json.
+
+        Returns:
+            List of worker dictionaries from swarm state.
+            Each worker dict contains: name, status, cmd, started, cwd, env, tags, tmux, worktree, pid
+
+        Note:
+            This method filters workers to only return those belonging to this test's
+            isolated tmux socket, ensuring proper test isolation.
+
+        Raises:
+            ValueError: If swarm ls fails or returns invalid JSON
+        """
+        result = self.run_swarm('ls', '--format', 'json')
+        if result.returncode != 0:
+            raise ValueError(
+                f"swarm ls failed with code {result.returncode}. "
+                f"Stderr: {result.stderr!r}"
+            )
+        # Handle empty output (no workers)
+        if not result.stdout.strip():
+            return []
+        try:
+            workers = json.loads(result.stdout)
+            # Filter to only workers that belong to this test's socket
+            # This ensures test isolation when multiple tests share global state
+            filtered = []
+            for w in workers:
+                tmux_info = w.get('tmux')
+                if tmux_info and tmux_info.get('socket') == self.tmux_socket:
+                    filtered.append(w)
+            return filtered
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON from swarm ls: {e}. Output: {result.stdout!r}"
+            )
 
 
 def skip_if_no_tmux(test_func):
@@ -250,6 +366,433 @@ class TestTmuxIsolation(TmuxIsolatedTestCase):
             session_name,
             sessions,
             f"Expected session '{session_name}' in sessions list, got: {sessions!r}"
+        )
+
+
+class TestSpawnCreatesDedicatedSession(TmuxIsolatedTestCase):
+    """Integration test for spawn creating a dedicated tmux session."""
+
+    @skip_if_no_tmux
+    def test_spawn_creates_dedicated_session(self):
+        """Verify that spawn with --tmux creates a session with name starting with 'swarm-'."""
+        # Pre-condition: no swarm sessions exist
+        sessions_before = self.list_sessions()
+        self.assertEqual(
+            len(sessions_before),
+            0,
+            f"Expected no sessions before spawn, but found {len(sessions_before)}: {sessions_before!r}"
+        )
+
+        # Action: spawn a worker (use socket suffix in name to ensure uniqueness across tests)
+        worker_name = f"spawn-test-{self.tmux_socket[-8:]}"
+        result = self.run_swarm('spawn', '--name', worker_name, '--tmux', '--', 'echo', 'hello')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected spawn command to succeed (returncode 0), "
+            f"got {result.returncode}. Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+        )
+
+        # Verify: session was created with expected name pattern
+        sessions_after = self.list_sessions()
+        self.assertEqual(
+            len(sessions_after),
+            1,
+            f"Expected exactly 1 session after spawn, "
+            f"got {len(sessions_after)}: {sessions_after!r}"
+        )
+        self.assertTrue(
+            sessions_after[0].startswith('swarm-'),
+            f"Expected session name to start with 'swarm-', "
+            f"got: {sessions_after[0]!r}"
+        )
+
+
+class TestSpawnDoesNotModifyExistingSessions(TmuxIsolatedTestCase):
+    """Test that swarm spawn does not modify pre-existing user sessions."""
+
+    @skip_if_no_tmux
+    def test_spawn_does_not_modify_existing_sessions(self):
+        """Verify spawning a swarm worker does not alter existing user sessions.
+
+        This test ensures that when swarm spawns a new worker in tmux, it creates
+        its own isolated session and does not modify any pre-existing sessions
+        that might belong to the user.
+        """
+        # Setup: create user's pre-existing session with known windows
+        self.tmux_cmd('new-session', '-d', '-s', 'user-work')
+        self.tmux_cmd('new-window', '-t', 'user-work', '-n', 'editor')
+
+        windows_before = self.get_windows('user-work')
+        self.assertEqual(
+            len(windows_before),
+            2,
+            f"Expected 2 windows in 'user-work' session (default + editor), "
+            f"got {len(windows_before)}: {windows_before!r}"
+        )
+
+        # Action: spawn swarm worker
+        result = self.run_swarm('spawn', '--name', 'test-worker', '--tmux', '--', 'sleep', '60')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected swarm spawn to succeed (returncode 0), "
+            f"got {result.returncode}. Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+        )
+
+        # Verify: user session unchanged
+        windows_after = self.get_windows('user-work')
+        self.assertEqual(
+            windows_before,
+            windows_after,
+            f"User session 'user-work' was modified during swarm spawn. "
+            f"Windows before: {windows_before!r}, windows after: {windows_after!r}"
+        )
+
+        # Verify: swarm created its own session
+        sessions = self.list_sessions()
+        self.assertIn(
+            'user-work',
+            sessions,
+            f"Expected 'user-work' session to still exist after spawn, "
+            f"but sessions are: {sessions!r}"
+        )
+        swarm_sessions = [s for s in sessions if s.startswith('swarm-')]
+        self.assertEqual(
+            len(swarm_sessions),
+            1,
+            f"Expected exactly 1 swarm session to be created, "
+            f"got {len(swarm_sessions)}: {swarm_sessions!r}. All sessions: {sessions!r}"
+        )
+
+
+class TestSpawnFromInsideTmux(TmuxIsolatedTestCase):
+    """Test that swarm spawn creates separate sessions when run from inside tmux."""
+
+    @skip_if_no_tmux
+    def test_spawn_from_inside_tmux_creates_separate_session(self):
+        """Verify swarm spawn creates a separate session when run from inside tmux.
+
+        When a user runs swarm spawn from inside an existing tmux session,
+        the worker should be created in a NEW separate session, not as a window
+        in the user's current session. This prevents cluttering the user's
+        workspace and ensures proper isolation.
+        """
+        # Setup: create a "user" tmux session simulating someone's dev environment
+        user_session = "my-dev-session"
+        result = self.tmux_cmd("new-session", "-d", "-s", user_session)
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Failed to create user session '{user_session}'. "
+            f"Returncode: {result.returncode}, Stderr: {result.stderr!r}"
+        )
+
+        # Get absolute path to swarm.py
+        swarm_path = Path(__file__).parent.parent / "swarm.py"
+
+        # Action: run swarm spawn FROM INSIDE the tmux session
+        # This simulates: user has tmux attached -> runs swarm spawn
+        spawn_cmd = f"python3 {swarm_path} spawn --tmux --tmux-socket {self.tmux_socket} sleep 60"
+        result = self.tmux_cmd(
+            "send-keys", "-t", user_session,
+            spawn_cmd,
+            "Enter"
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Failed to send spawn command to session '{user_session}'. "
+            f"Returncode: {result.returncode}, Stderr: {result.stderr!r}"
+        )
+
+        # Wait for spawn to complete by polling for swarm session creation
+        # We poll because send-keys is asynchronous and the command needs time to execute
+        max_wait = 10  # seconds
+        poll_interval = 0.5
+        waited = 0
+        while waited < max_wait:
+            time.sleep(poll_interval)
+            waited += poll_interval
+            sessions = self.list_sessions()
+            swarm_sessions = [s for s in sessions if s.startswith("swarm-")]
+            if swarm_sessions:
+                break
+
+        time.sleep(2)
+
+        # Verify: "my-dev-session" has only 1 window (the original shell)
+        # This confirms swarm didn't add a window to the user's session
+        windows = self.get_windows(user_session)
+        self.assertEqual(
+            len(windows),
+            1,
+            f"Expected user session '{user_session}' to have exactly 1 window "
+            f"(the original shell running swarm), but found {len(windows)} windows: {windows!r}. "
+            f"Swarm should NOT add windows to the user's session."
+        )
+
+        # Verify: swarm created a separate session for the worker
+        sessions = self.list_sessions()
+        swarm_sessions = [s for s in sessions if s.startswith("swarm-")]
+        self.assertGreaterEqual(
+            len(swarm_sessions),
+            1,
+            f"Expected at least 1 swarm session (starting with 'swarm-'), "
+            f"but found {len(swarm_sessions)}. All sessions: {sessions!r}. "
+            f"Swarm spawn should create worker sessions in a separate tmux session."
+        )
+
+
+class TestCleanWithExternallyKilledWorker(TmuxIsolatedTestCase):
+    """Test STATE-1: clean --all should detect externally killed workers."""
+
+    @skip_if_no_tmux
+    def test_clean_all_with_externally_killed_worker(self):
+        """Verify clean --all detects and cleans workers whose tmux windows were killed externally.
+
+        This test verifies that when a tmux window is killed outside of swarm
+        (e.g., by the user running 'tmux kill-window'), the swarm state may still
+        show the worker as 'running' (stale state), but 'clean --all' should
+        detect that the window is actually dead and clean it from state.
+        """
+        # Spawn a worker with a long-running command
+        result = self.run_swarm('spawn', '--name', 'test-worker', '--tmux', '--', 'sleep', '300')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected spawn to succeed (returncode 0), "
+            f"got {result.returncode}. Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+        )
+        worker_id = self.parse_worker_id(result.stdout)
+        self.assertEqual(
+            worker_id,
+            'test-worker',
+            f"Expected worker_id to be 'test-worker', got: {worker_id!r}"
+        )
+
+        # Verify worker is running using get_workers helper
+        workers = self.get_workers()
+        self.assertEqual(
+            len(workers),
+            1,
+            f"Expected exactly 1 worker after spawn, got {len(workers)}: {workers!r}"
+        )
+        self.assertEqual(
+            workers[0]['status'],
+            'running',
+            f"Expected worker status to be 'running', got: {workers[0]['status']!r}"
+        )
+
+        # Kill tmux window EXTERNALLY (not via swarm)
+        session = self.get_swarm_session()
+        kill_result = self.tmux_cmd('kill-window', '-t', f'{session}:{worker_id}')
+        self.assertEqual(
+            kill_result.returncode,
+            0,
+            f"Expected external tmux kill-window to succeed, "
+            f"got returncode {kill_result.returncode}. Stderr: {kill_result.stderr!r}"
+        )
+
+        # State may still show "running" (stale) - this is expected behavior
+        # The clean --all command should detect the window is actually dead
+
+        # Run clean --all
+        result = self.run_swarm('clean', '--all')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected clean --all to succeed (returncode 0), "
+            f"got {result.returncode}. Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+        )
+
+        # Verify: worker cleaned from state
+        workers = self.get_workers()
+        self.assertEqual(
+            len(workers),
+            0,
+            f"Expected 0 workers after clean --all (worker was externally killed and should be cleaned), "
+            f"but got {len(workers)} workers: {workers!r}"
+        )
+
+
+class TestMultipleSwarmInstances(TmuxIsolatedTestCase):
+    """Test isolation between multiple swarm instances with different SWARM_DIRs."""
+
+    @skip_if_no_tmux
+    def test_multiple_swarm_instances_isolation(self):
+        """Verify two swarm instances with different SWARM_DIRs create separate sessions."""
+        # Setup: two separate SWARM_DIRs (different hashes)
+        with tempfile.TemporaryDirectory() as dir1, \
+             tempfile.TemporaryDirectory() as dir2:
+
+            # Spawn worker in first swarm instance
+            env1 = {**os.environ, 'SWARM_DIR': dir1}
+            result1 = self.run_swarm('spawn', '--tmux', 'sleep', '60', env=env1)
+
+            # Spawn worker in second swarm instance
+            env2 = {**os.environ, 'SWARM_DIR': dir2}
+            result2 = self.run_swarm('spawn', '--tmux', 'sleep', '60', env=env2)
+
+            # Both should succeed
+            self.assertEqual(
+                result1.returncode,
+                0,
+                f"First swarm spawn should succeed (returncode 0), "
+                f"got {result1.returncode}. Stdout: {result1.stdout!r}, Stderr: {result1.stderr!r}"
+            )
+            self.assertEqual(
+                result2.returncode,
+                0,
+                f"Second swarm spawn should succeed (returncode 0), "
+                f"got {result2.returncode}. Stdout: {result2.stdout!r}, Stderr: {result2.stderr!r}"
+            )
+
+            # Verify: two different sessions created
+            sessions = self.list_sessions()
+            swarm_sessions = [s for s in sessions if s.startswith('swarm-')]
+            self.assertEqual(
+                len(swarm_sessions),
+                2,
+                f"Expected 2 swarm sessions (one per SWARM_DIR), "
+                f"got {len(swarm_sessions)}. Sessions: {swarm_sessions!r}"
+            )
+
+            # Verify: session names are different (different hashes)
+            self.assertNotEqual(
+                swarm_sessions[0],
+                swarm_sessions[1],
+                f"Expected different session names for different SWARM_DIRs, "
+                f"but both are: {swarm_sessions[0]!r}"
+            )
+
+
+class TestSessionNameCollision(TmuxIsolatedTestCase):
+    """Test that swarm handles session name collisions gracefully."""
+
+    @skip_if_no_tmux
+    def test_session_name_collision_handling(self):
+        """Verify swarm creates unique session when legacy 'swarm' session exists.
+
+        When a session named 'swarm' already exists (legacy behavior or user-created),
+        swarm should create a new session with a hash-based suffix instead of
+        modifying the existing session.
+        """
+        # Setup: create session with legacy "swarm" name
+        create_result = self.tmux_cmd('new-session', '-d', '-s', 'swarm')
+        self.assertEqual(
+            create_result.returncode,
+            0,
+            f"Failed to create legacy 'swarm' session. Stderr: {create_result.stderr!r}"
+        )
+        windows_before = self.get_windows('swarm')
+        self.assertGreater(
+            len(windows_before),
+            0,
+            f"Expected at least one window in legacy 'swarm' session, got: {windows_before!r}"
+        )
+
+        # Action: spawn worker (should use hash-based name)
+        result = self.run_swarm('spawn', '--name', 'test-worker', '--tmux', '--', 'sleep', '60')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected swarm spawn to succeed (returncode 0), got {result.returncode}. "
+            f"Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+        )
+
+        # Verify: legacy "swarm" session unchanged
+        windows_after = self.get_windows('swarm')
+        self.assertEqual(
+            windows_before,
+            windows_after,
+            f"Legacy 'swarm' session should be unchanged. "
+            f"Windows before: {windows_before!r}, Windows after: {windows_after!r}"
+        )
+
+        # Verify: new session created with hash suffix
+        sessions = self.list_sessions()
+        hash_sessions = [s for s in sessions if s.startswith('swarm-') and s != 'swarm']
+        self.assertEqual(
+            len(hash_sessions),
+            1,
+            f"Expected exactly one hash-suffixed session (swarm-*), "
+            f"got {len(hash_sessions)}: {hash_sessions!r}. All sessions: {sessions!r}"
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestCleanupOnlyAffectsSwarmSessions(TmuxIsolatedTestCase):
+    """Test that swarm kill --all only affects swarm-managed sessions."""
+
+    @skip_if_no_tmux
+    def test_cleanup_only_affects_swarm_sessions(self):
+        """Verify that killing swarm workers does not affect user sessions.
+
+        This test ensures that when 'swarm kill --all' is executed, it only
+        terminates swarm-managed workers and leaves user-created tmux sessions
+        completely untouched.
+        """
+        # Setup: create user session with windows
+        self.tmux_cmd('new-session', '-d', '-s', 'user-session')
+        self.tmux_cmd('new-window', '-t', 'user-session', '-n', 'vim')
+        self.tmux_cmd('new-window', '-t', 'user-session', '-n', 'htop')
+        user_windows_before = self.get_windows('user-session')
+        self.assertEqual(
+            len(user_windows_before),
+            3,  # default window + vim + htop
+            f"Expected 3 windows in user-session before spawning workers, "
+            f"got {len(user_windows_before)}: {user_windows_before!r}"
+        )
+
+        # Setup: spawn swarm workers
+        spawn_result1 = self.run_swarm('spawn', '--tmux', 'sleep', '60')
+        self.assertEqual(
+            spawn_result1.returncode,
+            0,
+            f"Failed to spawn first worker. Returncode: {spawn_result1.returncode}, "
+            f"stderr: {spawn_result1.stderr!r}"
+        )
+
+        spawn_result2 = self.run_swarm('spawn', '--tmux', 'sleep', '60')
+        self.assertEqual(
+            spawn_result2.returncode,
+            0,
+            f"Failed to spawn second worker. Returncode: {spawn_result2.returncode}, "
+            f"stderr: {spawn_result2.stderr!r}"
+        )
+
+        # Give workers time to start
+        time.sleep(0.5)
+
+        # Action: kill all swarm workers
+        result = self.run_swarm('kill', '--all')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected 'swarm kill --all' to succeed (returncode 0), "
+            f"got {result.returncode}. Stderr: {result.stderr!r}"
+        )
+
+        # Verify: user session completely untouched
+        user_windows_after = self.get_windows('user-session')
+        self.assertEqual(
+            user_windows_before,
+            user_windows_after,
+            f"User session windows were modified by 'swarm kill --all'. "
+            f"Before: {user_windows_before!r}, After: {user_windows_after!r}"
+        )
+
+        # Verify: user session still exists
+        sessions = self.list_sessions()
+        self.assertIn(
+            'user-session',
+            sessions,
+            f"User session 'user-session' was deleted by 'swarm kill --all'. "
+            f"Remaining sessions: {sessions!r}"
         )
 
 
