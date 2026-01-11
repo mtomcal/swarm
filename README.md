@@ -1,129 +1,120 @@
 # swarm
 
-Unix-style process manager for AI agent CLIs. Spawn, track, and control multiple agent processes via tmux.
+Process manager for AI agent CLIs. Spawn, track, and control multiple agents via tmux with git worktree isolation.
 
-## Philosophy
-
-**Do one thing well.** Swarm manages process lifecycles—nothing more. It doesn't understand your task tracker, your orchestration logic, or your agent framework. Compose it with other tools via shell scripts.
-
-```bash
-# Swarm + your tools = your orchestration
-for task in $(your-task-tool list --ready | head -3); do
-    swarm spawn --name "w-$task" --tmux --worktree -- claude
-    swarm send "w-$task" "/implement $task"
-done
-swarm wait --all
-swarm clean --all
-```
-
-## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/setup.sh | sh
-```
-
-Or manually:
-```bash
-cp swarm.py ~/.local/bin/swarm
-chmod +x ~/.local/bin/swarm
-```
-
-Requires: Python 3.10+, tmux (for `--tmux` mode), git (for `--worktree` mode)
+**Key features:** Process lifecycle management • Worktree isolation per worker • Tmux integration • Readiness detection
 
 ## Quick Start
 
 ```bash
-# Spawn an agent in tmux with isolated worktree
+# Install
+curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/setup.sh | sh
+
+# Spawn an agent in an isolated worktree
 swarm spawn --name agent1 --tmux --worktree -- claude
 
-# Send a command to it
-swarm send agent1 "Fix the auth bug in login.py"
-
-# Check status
-swarm ls
-
-# Attach to watch it work
+# Send work and monitor
+swarm send agent1 "Fix the auth bug"
 swarm attach agent1
-
-# When done, clean up
-swarm kill agent1 --rm-worktree
 ```
 
-## Commands
+## Power User Workflows
 
-| Command | Purpose |
-|---------|---------|
-| `spawn` | Create worker (tmux window or background process) |
-| `ls` | List workers (`--format json\|table\|names`) |
-| `status` | Check if worker is running (exit codes: 0=running, 1=stopped, 2=not found) |
-| `send` | Send text to tmux worker (`--all` for broadcast) |
-| `interrupt` | Send Ctrl-C |
-| `eof` | Send Ctrl-D |
-| `attach` | Connect to tmux window |
-| `logs` | View output (`-f` to follow) |
-| `kill` | Terminate process (`--rm-worktree` to clean worktree) |
-| `wait` | Block until worker exits (`--all`, `--timeout`) |
-| `clean` | Remove stopped workers from state |
-| `respawn` | Restart dead worker with original config |
+### Multi-Agent Parallel Development
 
-## Spawning Options
+Fan out work across multiple isolated agents:
 
 ```bash
-# Tmux window (interactive, capturable)
-swarm spawn --name w1 --tmux -- claude
-
-# Tmux + isolated git worktree
-swarm spawn --name w1 --tmux --worktree -- claude
-
-# Wait for agent to be ready before returning (recommended for scripting)
-swarm spawn --name w1 --tmux --ready-wait -- claude --dangerously-skip-permissions
-swarm send w1 "Fix the bug in auth.py"  # Safe to send immediately
-
-# Custom ready timeout (default 30s)
-swarm spawn --name w1 --tmux --ready-wait --ready-timeout 60 -- claude
-
-# Background process (logs to ~/.swarm/logs/)
-swarm spawn --name w1 -- ./my-script.sh
-
-# With environment variables
-swarm spawn --name w1 --env MODEL=opus --env DEBUG=1 --tmux -- claude
-
-# With tags for filtering
-swarm spawn --name w1 --tag team-a --tag priority -- claude
-swarm ls --tag team-a
-```
-
-## Composition Examples
-
-**Fan-out pattern:**
-```bash
-#!/bin/bash
-# Spawn workers for each ready task
-for id in $(task-tool list --ready); do
-    swarm spawn --name "w-$id" --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
-    swarm send "w-$id" "/work-on $id"
+for task in $(bd ready --format=ids | head -3); do
+    swarm spawn --name "w-$task" --tmux --worktree --ready-wait -- claude
+    swarm send "w-$task" "/beads:implement-task $task"
 done
-
-# Wait for all, then clean up
 swarm wait --all
 swarm clean --all --rm-worktree
 ```
 
-**Pipeline pattern:**
+### Worktree Isolation
+
+Each `--worktree` worker gets its own git branch and directory, preventing merge conflicts:
+
 ```bash
-#!/bin/bash
-# Get names of running workers, pipe to another tool
-swarm ls --format names | xargs -I{} echo "Worker {} is active"
+swarm spawn --name feature-auth --tmux --worktree -- claude
+# Creates: <repo>-worktrees/feature-auth on branch 'feature-auth'
 ```
 
-**Respawn on failure:**
+### Readiness Detection
+
+Use `--ready-wait` to block until the agent is ready for input:
+
+```bash
+swarm spawn --name w1 --tmux --ready-wait -- claude --dangerously-skip-permissions
+swarm send w1 "Start working immediately"  # Safe—agent is ready
+```
+
+### Broadcasting
+
+Send commands to all running workers:
+
+```bash
+swarm send --all "/status"
+swarm interrupt --all  # Ctrl-C all workers
+```
+
+### Worker Tags
+
+Organize workers with tags for filtering:
+
+```bash
+swarm spawn --name w1 --tag team-a --tag urgent --tmux -- claude
+swarm ls --tag team-a  # Filter workers by tag
+```
+
+## Command Reference
+
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `spawn` | Create worker process | `--tmux` `--worktree` `--ready-wait` `--tag` `--env` |
+| `ls` | List workers | `--format json\|table\|names` `--tag` |
+| `status` | Check worker state | Exit: 0=running, 1=stopped, 2=not found |
+| `send` | Send text to worker | `--all` `--no-enter` |
+| `attach` | Connect to tmux window | |
+| `logs` | View worker output | `-f` (follow) |
+| `wait` | Block until exit | `--all` `--timeout` |
+| `kill` | Terminate worker | `--rm-worktree` |
+| `clean` | Remove stopped workers | `--all` `--rm-worktree` |
+| `interrupt` | Send Ctrl-C | `--all` |
+| `eof` | Send Ctrl-D | |
+| `respawn` | Restart dead worker | `--clean-first` |
+
+## Integration Patterns
+
+### With Beads (Issue Tracking)
+
+```bash
+# Process ready issues in parallel
+for id in $(bd ready --format=ids); do
+    swarm spawn --name "bd-$id" --tmux --worktree --ready-wait -- claude
+    swarm send "bd-$id" "/beads:full-cycle $id"
+done
+```
+
+### With Git Worktrees
+
+Swarm creates worktrees in `<repo>-worktrees/<worker-name>`:
+
+```bash
+swarm spawn --name feature-x --tmux --worktree -- claude
+# Worktree: ~/code/myrepo-worktrees/feature-x
+# Branch: feature-x (created from current branch)
+```
+
+### Scripted Orchestration
+
 ```bash
 #!/bin/bash
-# Check and respawn dead workers
+# Respawn any failed workers
 for name in $(swarm ls --format names); do
-    if ! swarm status "$name" >/dev/null 2>&1; then
-        swarm respawn "$name" --clean-first
-    fi
+    swarm status "$name" || swarm respawn "$name" --clean-first
 done
 ```
 
@@ -133,27 +124,17 @@ done
 ~/.swarm/
 ├── state.json              # Worker registry
 └── logs/
-    ├── worker1.stdout.log  # Background process stdout
-    └── worker1.stderr.log  # Background process stderr
+    ├── worker1.stdout.log  # Background process output
+    └── worker1.stderr.log
 ```
 
-Tmux workers capture output in the tmux scrollback buffer—use `swarm logs` to view.
+Tmux workers use scrollback buffer—access via `swarm logs <name>`.
 
-## Exit Codes
+## Requirements
 
-- `0` - Success
-- `1` - Worker stopped / operation failed
-- `2` - Worker not found
-
-## Why Swarm?
-
-Building AI tooling often means running multiple agent processes—each potentially needing:
-- Isolated git branches (no merge conflicts)
-- Interactive tmux sessions (for debugging)
-- Process lifecycle tracking (who's alive?)
-- Graceful shutdown and cleanup
-
-Swarm handles these concerns without dictating your orchestration logic. It's a sharp knife, not a framework.
+- Python 3.10+
+- tmux (for `--tmux` mode)
+- git (for `--worktree` mode)
 
 ## License
 
