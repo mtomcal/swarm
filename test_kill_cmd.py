@@ -189,12 +189,12 @@ def test_kill_with_rm_worktree():
 
             # Mock subprocess.run and remove_worktree
             with patch('subprocess.run') as mock_run, \
-                 patch.object(swarm, 'remove_worktree') as mock_remove_worktree:
+                 patch.object(swarm, 'remove_worktree', return_value=(True, "")) as mock_remove_worktree:
 
                 mock_run.return_value = Mock(returncode=0)
 
                 # Create args using Namespace
-                args = Namespace(name="test-worker", all=False, rm_worktree=True)
+                args = Namespace(name="test-worker", all=False, rm_worktree=True, force_dirty=False)
 
                 # Call cmd_kill
                 swarm.cmd_kill(args)
@@ -205,8 +205,8 @@ def test_kill_with_rm_worktree():
                     capture_output=True
                 )
 
-                # Verify remove_worktree was called
-                mock_remove_worktree.assert_called_once_with(Path("/tmp/worktrees/test-worker"))
+                # Verify remove_worktree was called with force=False
+                mock_remove_worktree.assert_called_once_with(Path("/tmp/worktrees/test-worker"), force=False)
 
     print("  PASS")
 

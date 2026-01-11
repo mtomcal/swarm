@@ -285,18 +285,19 @@ class TestCmdRespawn(unittest.TestCase):
             "pid": 111
         })
 
-        args = Namespace(name="clean-worker", clean_first=True)
+        args = Namespace(name="clean-worker", clean_first=True, force_dirty=False)
 
         with patch('swarm.refresh_worker_status', return_value="stopped"):
-            with patch('swarm.remove_worktree') as mock_remove:
+            with patch('swarm.remove_worktree', return_value=(True, "")) as mock_remove:
                 with patch('swarm.create_worktree') as mock_create:
                     with patch('swarm.spawn_process', return_value=333):
                         with patch('builtins.print'):
                             swarm.cmd_respawn(args)
 
-                            # Verify worktree was removed
+                            # Verify worktree was removed with force=False
                             mock_remove.assert_called_once()
                             self.assertEqual(str(mock_remove.call_args[0][0]), str(worktree_path))
+                            self.assertEqual(mock_remove.call_args[1]['force'], False)
 
                             # Verify worktree was recreated
                             mock_create.assert_called_once()

@@ -294,14 +294,71 @@ def create_worktree(path: Path, branch: str) -> None:
         )
 
 
-def remove_worktree(path: Path) -> None:
-    """Remove a git worktree."""
+def worktree_is_dirty(path: Path) -> bool:
+    """Check if a worktree has uncommitted changes.
+
+    Args:
+        path: Path to the worktree
+
+    Returns:
+        True if the worktree has uncommitted changes (staged, unstaged, or untracked)
+    """
+    if not path.exists():
+        return False
+
+    # Check for any changes: staged, unstaged, or untracked files
+    # Using --porcelain for machine-readable output
+    result = subprocess.run(
+        ["git", "-C", str(path), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+
+    # If command failed, assume dirty to be safe
+    if result.returncode != 0:
+        return True
+
+    # Any output means there are changes
+    return bool(result.stdout.strip())
+
+
+def remove_worktree(path: Path, force: bool = False) -> tuple[bool, str]:
+    """Remove a git worktree.
+
+    Args:
+        path: Path to the worktree
+        force: If True, remove even if worktree has uncommitted changes
+
+    Returns:
+        Tuple of (success: bool, message: str)
+        - On success: (True, "")
+        - On failure due to dirty worktree: (False, description of uncommitted changes)
+        - On failure due to other error: raises exception
+    """
+    path = Path(path)
+
+    if not path.exists():
+        return (True, "")
+
+    # Check for uncommitted changes unless force is specified
+    if not force and worktree_is_dirty(path):
+        # Get summary of what's dirty
+        result = subprocess.run(
+            ["git", "-C", str(path), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        changes = result.stdout.strip().split('\n')
+        num_changes = len(changes)
+        return (False, f"worktree has {num_changes} uncommitted change(s)")
+
     subprocess.run(
         ["git", "worktree", "remove", "--force", str(path)],
         capture_output=True,
         text=True,
         check=True,
     )
+    return (True, "")
 
 
 # =============================================================================
@@ -645,6 +702,8 @@ def main() -> None:
     kill_p.add_argument("name", nargs="?", help="Worker name")
     kill_p.add_argument("--rm-worktree", action="store_true",
                        help="Also remove the git worktree")
+    kill_p.add_argument("--force-dirty", action="store_true",
+                       help="Force removal of worktree even with uncommitted changes")
     kill_p.add_argument("--all", action="store_true", help="Kill all workers")
 
     # wait
@@ -658,6 +717,8 @@ def main() -> None:
     clean_p.add_argument("name", nargs="?", help="Worker name")
     clean_p.add_argument("--rm-worktree", action="store_true", default=True,
                         help="Remove git worktree (default: true)")
+    clean_p.add_argument("--force-dirty", action="store_true",
+                        help="Force removal of worktree even with uncommitted changes")
     clean_p.add_argument("--all", action="store_true", help="Clean all stopped workers")
 
     # respawn
@@ -665,6 +726,8 @@ def main() -> None:
     respawn_p.add_argument("name", help="Worker name")
     respawn_p.add_argument("--clean-first", action="store_true",
                           help="Run clean before respawn")
+    respawn_p.add_argument("--force-dirty", action="store_true",
+                          help="Force removal of worktree even with uncommitted changes")
 
     args = parser.parse_args()
 
@@ -1225,7 +1288,11 @@ def cmd_kill(args) -> None:
 
         # Remove worktree if requested
         if args.rm_worktree and worker.worktree:
-            remove_worktree(Path(worker.worktree.path))
+            force = getattr(args, 'force_dirty', False)
+            success, msg = remove_worktree(Path(worker.worktree.path), force=force)
+            if not success:
+                print(f"swarm: warning: cannot remove worktree for '{worker.name}': {msg}", file=sys.stderr)
+                print(f"swarm: use --force-dirty to remove anyway", file=sys.stderr)
 
         print(f"killed {worker.name}")
 
@@ -1316,7 +1383,12 @@ def cmd_clean(args) -> None:
         if worker.worktree and args.rm_worktree:
             worktree_path = Path(worker.worktree.path)
             if worktree_path.exists():
-                remove_worktree(worktree_path)
+                force = getattr(args, 'force_dirty', False)
+                success, msg = remove_worktree(worktree_path, force=force)
+                if not success:
+                    print(f"swarm: warning: preserving worktree for '{worker.name}': {msg}", file=sys.stderr)
+                    print(f"swarm: worktree at: {worktree_path}", file=sys.stderr)
+                    print(f"swarm: use --force-dirty to remove anyway", file=sys.stderr)
 
         # Remove log files if they exist
         stdout_log = LOGS_DIR / f"{worker.name}.stdout.log"
@@ -1379,7 +1451,13 @@ def cmd_respawn(args) -> None:
     if args.clean_first and worker.worktree:
         worktree_path = Path(worker.worktree.path)
         if worktree_path.exists():
-            remove_worktree(worktree_path)
+            force = getattr(args, 'force_dirty', False)
+            success, msg = remove_worktree(worktree_path, force=force)
+            if not success:
+                print(f"swarm: error: cannot remove worktree: {msg}", file=sys.stderr)
+                print(f"swarm: worktree at: {worktree_path}", file=sys.stderr)
+                print(f"swarm: use --force-dirty to remove anyway, or commit changes first", file=sys.stderr)
+                sys.exit(1)
 
     # Store original config before removing from state
     original_cmd = worker.cmd

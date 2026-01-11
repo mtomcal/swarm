@@ -109,15 +109,16 @@ class TestCmdClean(unittest.TestCase):
         args.name = "test-worker"
         args.all = False
         args.rm_worktree = True
+        args.force_dirty = False
 
         # Mock functions
         with patch('swarm.refresh_worker_status', return_value="stopped"), \
-             patch('swarm.remove_worktree') as mock_remove_worktree, \
+             patch('swarm.remove_worktree', return_value=(True, "")) as mock_remove_worktree, \
              patch('builtins.print'):
             swarm.cmd_clean(args)
 
-        # Verify remove_worktree was called
-        mock_remove_worktree.assert_called_once_with(worktree_path)
+        # Verify remove_worktree was called with force=False
+        mock_remove_worktree.assert_called_once_with(worktree_path, force=False)
 
         # Verify worker removed from state
         state = swarm.State()
@@ -283,9 +284,10 @@ class TestCmdClean(unittest.TestCase):
         args.name = "test-worker"
         args.all = False
         args.rm_worktree = False
+        args.force_dirty = False
 
         with patch('swarm.refresh_worker_status', return_value="stopped"), \
-             patch('swarm.remove_worktree') as mock_remove_worktree, \
+             patch('swarm.remove_worktree', return_value=(True, "")) as mock_remove_worktree, \
              patch('builtins.print'):
             swarm.cmd_clean(args)
 
