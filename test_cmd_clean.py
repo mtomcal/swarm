@@ -212,8 +212,14 @@ class TestCmdClean(unittest.TestCase):
         args.all = True
         args.rm_worktree = True
 
-        # Mock refresh to always return stopped (for already stopped workers)
-        with patch('swarm.refresh_worker_status', return_value="stopped"), \
+        # Mock refresh to return correct status for each worker
+        def refresh_side_effect(worker):
+            if worker.name in ["stopped-1", "stopped-2"]:
+                return "stopped"
+            else:
+                return "running"
+
+        with patch('swarm.refresh_worker_status', side_effect=refresh_side_effect), \
              patch('builtins.print') as mock_print:
             swarm.cmd_clean(args)
 
@@ -362,10 +368,89 @@ class TestCmdClean(unittest.TestCase):
         self.assertIsNone(state.get_worker("worker-1"))
         self.assertIsNotNone(state.get_worker("worker-2"))
 
-        # Verify output: one cleaned, one skipped warning
+        # Verify output: one cleaned
+        # Note: With the fix, worker-2 is filtered out during the initial refresh,
+        # so there's no "skipping" warning - it never makes it to workers_to_clean
         calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any("cleaned worker-1" in str(c) for c in calls))
-        self.assertTrue(any("skipping" in str(c).lower() and "worker-2" in str(c) for c in calls))
+        # worker-2 should NOT appear in output at all (filtered before cleanup)
+
+    def test_clean_all_refreshes_status_before_filtering(self):
+        """Test that clean --all refreshes status before filtering stopped workers.
+
+        This test verifies the fix for the state/reality mismatch bug where
+        clean --all was using cached status from state.json instead of
+        refreshing actual worker status before filtering.
+        """
+        state = swarm.State()
+
+        # Create a worker with stale "running" status in state
+        # but actually stopped (e.g., tmux window was killed externally)
+        worker_stale_running = swarm.Worker(
+            name="stale-running",
+            status="running",  # Cached as running in state.json
+            cmd=["echo", "test"],
+            started="2024-01-01T00:00:00",
+            cwd="/tmp",
+        )
+
+        # Create a worker with stale "stopped" status in state
+        # but actually running (e.g., process was restarted)
+        worker_stale_stopped = swarm.Worker(
+            name="stale-stopped",
+            status="stopped",  # Cached as stopped in state.json
+            cmd=["echo", "test2"],
+            started="2024-01-01T00:00:00",
+            cwd="/tmp",
+        )
+
+        state.add_worker(worker_stale_running)
+        state.add_worker(worker_stale_stopped)
+
+        args = Mock()
+        args.name = None
+        args.all = True
+        args.rm_worktree = True
+
+        # Mock refresh to return actual status (opposite of cached)
+        def refresh_side_effect(worker):
+            if worker.name == "stale-running":
+                # Actually stopped (despite cached "running")
+                return "stopped"
+            elif worker.name == "stale-stopped":
+                # Actually running (despite cached "stopped")
+                return "running"
+            return "stopped"
+
+        with patch('swarm.refresh_worker_status', side_effect=refresh_side_effect) as mock_refresh, \
+             patch('builtins.print') as mock_print:
+            swarm.cmd_clean(args)
+
+        # Critical assertion: refresh_worker_status should be called for ALL workers
+        # during the filtering phase (2 workers) plus once more for the cleaned worker
+        # in the cleanup loop (1 worker) = 3 total calls
+        self.assertGreaterEqual(mock_refresh.call_count, 2,
+                        "refresh_worker_status should be called at least for all workers during filtering")
+
+        # Verify refresh was called during filtering phase (not just cleanup phase)
+        # by checking that both workers were passed to refresh
+        refresh_call_names = {call[0][0].name for call in mock_refresh.call_args_list}
+        self.assertIn("stale-running", refresh_call_names)
+        self.assertIn("stale-stopped", refresh_call_names)
+
+        # Verify correct worker was cleaned:
+        # "stale-running" should be cleaned (actually stopped)
+        # "stale-stopped" should NOT be cleaned (actually running)
+        state = swarm.State()
+        self.assertIsNone(state.get_worker("stale-running"),
+                         "Worker with stale 'running' status but actually stopped should be cleaned")
+        self.assertIsNotNone(state.get_worker("stale-stopped"),
+                           "Worker with stale 'stopped' status but actually running should NOT be cleaned")
+
+        # Verify the actually-running worker's status was updated in state
+        updated_worker = state.get_worker("stale-stopped")
+        self.assertEqual(updated_worker.status, "running",
+                        "Worker status should be updated to actual 'running' in state after refresh")
 
 
 if __name__ == "__main__":

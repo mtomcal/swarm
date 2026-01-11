@@ -74,7 +74,7 @@ class TestCmdSend(unittest.TestCase):
             swarm.cmd_send(args)
 
             # Verify tmux_send was called correctly
-            mock_send.assert_called_once_with("swarm", "w1", "hello world", enter=True)
+            mock_send.assert_called_once_with("swarm", "w1", "hello world", enter=True, socket=None)
             mock_refresh.assert_called_once()
 
             # Verify output
@@ -104,7 +104,7 @@ class TestCmdSend(unittest.TestCase):
             swarm.cmd_send(args)
 
             # Verify enter=False was passed
-            mock_send.assert_called_once_with("swarm", "w1", "hello world", enter=False)
+            mock_send.assert_called_once_with("swarm", "w1", "hello world", enter=False, socket=None)
 
     def test_send_to_all_tmux_workers(self):
         """Test sending text to all running tmux workers."""
@@ -164,8 +164,8 @@ class TestCmdSend(unittest.TestCase):
 
             # Should send to w1 and w2 only (w3 is skipped because stopped, w4 is not tmux)
             self.assertEqual(mock_send.call_count, 2)
-            mock_send.assert_any_call("swarm", "w1", "hello all", enter=True)
-            mock_send.assert_any_call("swarm", "w2", "hello all", enter=True)
+            mock_send.assert_any_call("swarm", "w1", "hello all", enter=True, socket=None)
+            mock_send.assert_any_call("swarm", "w2", "hello all", enter=True, socket=None)
 
             output = mock_stdout.getvalue()
             self.assertIn("sent to w1", output)

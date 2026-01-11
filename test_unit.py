@@ -14,6 +14,43 @@ from unittest.mock import MagicMock, patch
 import swarm
 
 
+class TestTmuxCmdPrefix(unittest.TestCase):
+    """Test the tmux_cmd_prefix helper function."""
+
+    def test_no_socket(self):
+        """Test tmux_cmd_prefix with no socket returns default tmux command."""
+        result = swarm.tmux_cmd_prefix(None)
+        self.assertEqual(result, ["tmux"])
+
+    def test_with_socket(self):
+        """Test tmux_cmd_prefix with socket returns tmux with -L flag."""
+        result = swarm.tmux_cmd_prefix("test-socket")
+        self.assertEqual(result, ["tmux", "-L", "test-socket"])
+
+    def test_empty_socket(self):
+        """Test tmux_cmd_prefix with empty string returns default tmux command."""
+        result = swarm.tmux_cmd_prefix("")
+        self.assertEqual(result, ["tmux"])
+
+
+class TestTmuxInfoSocket(unittest.TestCase):
+    """Test TmuxInfo dataclass with socket field."""
+
+    def test_tmux_info_without_socket(self):
+        """Test TmuxInfo creation without socket (default None)."""
+        tmux_info = swarm.TmuxInfo(session="swarm", window="w1")
+        self.assertEqual(tmux_info.session, "swarm")
+        self.assertEqual(tmux_info.window, "w1")
+        self.assertIsNone(tmux_info.socket)
+
+    def test_tmux_info_with_socket(self):
+        """Test TmuxInfo creation with socket."""
+        tmux_info = swarm.TmuxInfo(session="swarm", window="w1", socket="test-socket")
+        self.assertEqual(tmux_info.session, "swarm")
+        self.assertEqual(tmux_info.window, "w1")
+        self.assertEqual(tmux_info.socket, "test-socket")
+
+
 class TestRelativeTime(unittest.TestCase):
     """Test the relative_time helper function."""
 

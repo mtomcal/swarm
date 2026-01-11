@@ -5,6 +5,7 @@ A minimal CLI tool for spawning, tracking, and controlling agent processes via t
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -29,6 +30,7 @@ class TmuxInfo:
     """Tmux window information."""
     session: str
     window: str
+    socket: Optional[str] = None
 
 
 @dataclass
@@ -144,6 +146,12 @@ def ensure_dirs() -> None:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_default_session_name() -> str:
+    """Generate default session name with hash suffix for isolation."""
+    h = hashlib.sha256(str(SWARM_DIR.resolve()).encode()).hexdigest()[:8]
+    return f"swarm-{h}"
+
+
 # =============================================================================
 # Git Operations
 # =============================================================================
@@ -199,32 +207,48 @@ def remove_worktree(path: Path) -> None:
 # Tmux Operations
 # =============================================================================
 
-def ensure_tmux_session(session: str) -> None:
+def tmux_cmd_prefix(socket: Optional[str] = None) -> list[str]:
+    """Build tmux command prefix with optional socket.
+
+    Args:
+        socket: Optional tmux socket name for isolated tmux servers
+
+    Returns:
+        List starting with ["tmux"] or ["tmux", "-L", socket]
+    """
+    if socket:
+        return ["tmux", "-L", socket]
+    return ["tmux"]
+
+
+def ensure_tmux_session(session: str, socket: Optional[str] = None) -> None:
     """Create tmux session if it doesn't exist."""
     # Check if session exists
+    cmd_prefix = tmux_cmd_prefix(socket)
     result = subprocess.run(
-        ["tmux", "has-session", "-t", shlex.quote(session)],
+        cmd_prefix + ["has-session", "-t", shlex.quote(session)],
         capture_output=True,
     )
     if result.returncode != 0:
         # Create detached session
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session],
+            cmd_prefix + ["new-session", "-d", "-s", session],
             capture_output=True,
             check=True,
         )
 
 
-def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str]) -> None:
+def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str], socket: Optional[str] = None) -> None:
     """Create a tmux window and run command."""
-    ensure_tmux_session(session)
+    ensure_tmux_session(session, socket)
 
     # Build the command string safely
     cmd_str = " ".join(shlex.quote(c) for c in cmd)
 
+    cmd_prefix = tmux_cmd_prefix(socket)
     subprocess.run(
-        [
-            "tmux", "new-window",
+        cmd_prefix + [
+            "new-window",
             "-a",  # Append after current window (avoids index conflicts with base-index)
             "-t", session,
             "-n", window,
@@ -236,45 +260,49 @@ def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str]) -> 
     )
 
 
-def tmux_send(session: str, window: str, text: str, enter: bool = True) -> None:
+def tmux_send(session: str, window: str, text: str, enter: bool = True, socket: Optional[str] = None) -> None:
     """Send text to a tmux window."""
     target = f"{session}:{window}"
 
     # Use send-keys with literal text
-    cmd = ["tmux", "send-keys", "-t", target, "-l", text]
+    cmd_prefix = tmux_cmd_prefix(socket)
+    cmd = cmd_prefix + ["send-keys", "-t", target, "-l", text]
     subprocess.run(cmd, capture_output=True, check=True)
 
     if enter:
         subprocess.run(
-            ["tmux", "send-keys", "-t", target, "Enter"],
+            cmd_prefix + ["send-keys", "-t", target, "Enter"],
             capture_output=True,
             check=True,
         )
 
 
-def tmux_window_exists(session: str, window: str) -> bool:
+def tmux_window_exists(session: str, window: str, socket: Optional[str] = None) -> bool:
     """Check if a tmux window exists."""
     target = f"{session}:{window}"
+    cmd_prefix = tmux_cmd_prefix(socket)
     result = subprocess.run(
-        ["tmux", "has-session", "-t", target],
+        cmd_prefix + ["has-session", "-t", target],
         capture_output=True,
     )
     return result.returncode == 0
 
 
-def tmux_capture_pane(session: str, window: str, history_lines: int = 0) -> str:
+def tmux_capture_pane(session: str, window: str, history_lines: int = 0, socket: Optional[str] = None) -> str:
     """Capture contents of a tmux pane.
 
     Args:
         session: Tmux session name
         window: Tmux window name
         history_lines: Number of scrollback lines to include (0 = visible only)
+        socket: Optional tmux socket name
 
     Returns:
         Captured pane content as string
     """
     target = f"{session}:{window}"
-    cmd = ["tmux", "capture-pane", "-t", target, "-p"]
+    cmd_prefix = tmux_cmd_prefix(socket)
+    cmd = cmd_prefix + ["capture-pane", "-t", target, "-p"]
 
     if history_lines > 0:
         # Include scrollback history
@@ -284,7 +312,7 @@ def tmux_capture_pane(session: str, window: str, history_lines: int = 0) -> str:
     return result.stdout
 
 
-def wait_for_agent_ready(session: str, window: str, timeout: int = 30) -> bool:
+def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: Optional[str] = None) -> bool:
     """Wait for an agent CLI to be ready for input.
 
     Detects readiness by looking for common prompt patterns:
@@ -295,6 +323,7 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30) -> bool:
         session: Tmux session name
         window: Tmux window name
         timeout: Maximum seconds to wait
+        socket: Optional tmux socket name
 
     Returns:
         True if agent became ready, False if timeout
@@ -303,16 +332,17 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30) -> bool:
 
     # Patterns that indicate the agent is ready for input
     ready_patterns = [
-        r"^> ",                          # Claude Code prompt
-        r"bypass permissions",           # Claude Code ready indicator
-        r"^\$ ",                          # Shell prompt
-        r"^>>> ",                         # Python REPL
+        r"(?:^|\x1b\[[0-9;]*m)> ",       # Claude Code prompt (ANSI-aware)
+        r"bypass\s+permissions\s+on",    # Explicit text
+        r"Claude Code v\d+\.\d+",        # Versioned banner (more specific)
+        r"(?:^|\x1b\[[0-9;]*m)\$ ",      # Shell prompt (ANSI-aware)
+        r"(?:^|\x1b\[[0-9;]*m)>>> ",     # Python REPL (ANSI-aware)
     ]
 
     start = time.time()
     while (time.time() - start) < timeout:
         try:
-            output = tmux_capture_pane(session, window)
+            output = tmux_capture_pane(session, window, socket=socket)
             # Check each line for ready patterns
             for line in output.split('\n'):
                 for pattern in ready_patterns:
@@ -387,7 +417,8 @@ def refresh_worker_status(worker: Worker) -> str:
     """
     if worker.tmux:
         # Check tmux window
-        if tmux_window_exists(worker.tmux.session, worker.tmux.window):
+        socket = worker.tmux.socket if worker.tmux else None
+        if tmux_window_exists(worker.tmux.session, worker.tmux.window, socket):
             return "running"
         else:
             return "stopped"
@@ -437,7 +468,8 @@ def main() -> None:
     spawn_p = subparsers.add_parser("spawn", help="Spawn a new worker")
     spawn_p.add_argument("--name", required=True, help="Unique identifier for this worker")
     spawn_p.add_argument("--tmux", action="store_true", help="Run in a tmux window")
-    spawn_p.add_argument("--session", default="swarm", help="Tmux session name (default: swarm)")
+    spawn_p.add_argument("--session", default=None, help="Tmux session name (default: hash-based isolation)")
+    spawn_p.add_argument("--tmux-socket", default=None, help="Tmux socket name (for testing/isolation)")
     spawn_p.add_argument("--worktree", action="store_true", help="Create a git worktree")
     spawn_p.add_argument("--branch", help="Branch name for worktree (default: same as --name)")
     spawn_p.add_argument("--worktree-dir", default="../swarm-worktrees",
@@ -626,9 +658,12 @@ def cmd_spawn(args) -> None:
 
     if args.tmux:
         # Spawn in tmux
+        # Determine session name (use hash-based default if not specified)
+        session = args.session if args.session else get_default_session_name()
+        socket = args.tmux_socket
         try:
-            create_tmux_window(args.session, args.name, cwd, cmd)
-            tmux_info = TmuxInfo(session=args.session, window=args.name)
+            create_tmux_window(session, args.name, cwd, cmd, socket)
+            tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
         except subprocess.CalledProcessError as e:
             print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
             sys.exit(1)
@@ -660,7 +695,8 @@ def cmd_spawn(args) -> None:
 
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:
-        if not wait_for_agent_ready(tmux_info.session, tmux_info.window, args.ready_timeout):
+        socket = tmux_info.socket if tmux_info else None
+        if not wait_for_agent_ready(tmux_info.session, tmux_info.window, args.ready_timeout, socket):
             print(f"swarm: warning: agent '{args.name}' did not become ready within {args.ready_timeout}s", file=sys.stderr)
 
     # Print success message
@@ -844,7 +880,8 @@ def cmd_send(args) -> None:
                 sys.exit(1)
 
         # Send text to tmux window
-        tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter)
+        socket = worker.tmux.socket if worker.tmux else None
+        tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter, socket=socket)
 
         # Print confirmation
         print(f"sent to {worker.name}")
@@ -892,8 +929,10 @@ def cmd_interrupt(args) -> None:
     for worker in workers_to_interrupt:
         session = worker.tmux.session
         window = worker.tmux.window
+        socket = worker.tmux.socket if worker.tmux else None
+        cmd_prefix = tmux_cmd_prefix(socket)
         subprocess.run(
-            ["tmux", "send-keys", "-t", f"{session}:{window}", "C-c"],
+            cmd_prefix + ["send-keys", "-t", f"{session}:{window}", "C-c"],
             capture_output=True
         )
         print(f"interrupted {worker.name}")
@@ -924,8 +963,10 @@ def cmd_eof(args) -> None:
     # Send Ctrl-D
     session = worker.tmux.session
     window = worker.tmux.window
+    socket = worker.tmux.socket if worker.tmux else None
+    cmd_prefix = tmux_cmd_prefix(socket)
     subprocess.run(
-        ["tmux", "send-keys", "-t", f"{session}:{window}", "C-d"],
+        cmd_prefix + ["send-keys", "-t", f"{session}:{window}", "C-d"],
         capture_output=True
     )
     print(f"sent eof to {worker.name}")
@@ -952,10 +993,15 @@ def cmd_attach(args) -> None:
     # Select the window first
     session = worker.tmux.session
     window = worker.tmux.window
-    subprocess.run(["tmux", "select-window", "-t", f"{session}:{window}"], check=True)
+    socket = worker.tmux.socket if worker.tmux else None
+    cmd_prefix = tmux_cmd_prefix(socket)
+    subprocess.run(cmd_prefix + ["select-window", "-t", f"{session}:{window}"], check=True)
 
     # Then attach to session (this replaces current process)
-    os.execvp("tmux", ["tmux", "attach-session", "-t", session])
+    if socket:
+        os.execvp("tmux", ["tmux", "-L", socket, "attach-session", "-t", session])
+    else:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", session])
 
 
 def cmd_logs(args) -> None:
@@ -971,12 +1017,13 @@ def cmd_logs(args) -> None:
 
     # Handle tmux workers
     if worker.tmux:
+        socket = worker.tmux.socket if worker.tmux else None
         if args.follow:
             # Follow mode: poll every 1s, clear screen, show last 30 lines
             try:
                 while True:
                     history = args.lines if args.history else 0
-                    output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history)
+                    output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history, socket=socket)
 
                     # Clear screen and print last 30 lines
                     print("\033[2J\033[H", end="")  # ANSI clear
@@ -990,7 +1037,7 @@ def cmd_logs(args) -> None:
         else:
             # Default or history mode
             history = args.lines if args.history else 0
-            output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history)
+            output = tmux_capture_pane(worker.tmux.session, worker.tmux.window, history_lines=history, socket=socket)
             print(output, end="")
 
     # Handle non-tmux workers
@@ -1035,8 +1082,10 @@ def cmd_kill(args) -> None:
     for worker in workers_to_kill:
         # Handle tmux workers
         if worker.tmux:
+            socket = worker.tmux.socket if worker.tmux else None
+            cmd_prefix = tmux_cmd_prefix(socket)
             subprocess.run(
-                ["tmux", "kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                cmd_prefix + ["kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
                 capture_output=True
             )
 
@@ -1117,6 +1166,10 @@ def cmd_clean(args) -> None:
     workers_to_clean = []
 
     if args.all:
+        # Refresh actual status before filtering
+        for w in state.workers:
+            w.status = refresh_worker_status(w)
+        state.save()
         # Get all workers with status "stopped"
         workers_to_clean = [w for w in state.workers if w.status == "stopped"]
     else:
@@ -1190,8 +1243,10 @@ def cmd_respawn(args) -> None:
     # Kill if still running
     if current_status == "running":
         if worker.tmux:
+            socket = worker.tmux.socket if worker.tmux else None
+            cmd_prefix = tmux_cmd_prefix(socket)
             subprocess.run(
-                ["tmux", "kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                cmd_prefix + ["kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
                 capture_output=True
             )
         elif worker.pid:
@@ -1257,9 +1312,10 @@ def cmd_respawn(args) -> None:
 
     if original_tmux:
         # Spawn in tmux
+        socket = original_tmux.socket if original_tmux else None
         try:
-            create_tmux_window(original_tmux.session, args.name, cwd, original_cmd)
-            tmux_info = TmuxInfo(session=original_tmux.session, window=args.name)
+            create_tmux_window(original_tmux.session, args.name, cwd, original_cmd, socket)
+            tmux_info = TmuxInfo(session=original_tmux.session, window=args.name, socket=socket)
         except subprocess.CalledProcessError as e:
             print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
             sys.exit(1)

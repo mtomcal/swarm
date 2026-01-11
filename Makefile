@@ -11,7 +11,7 @@ lint:
 
 # Run type check (using Python's built-in compile)
 typecheck:
-	python3 -m py_compile swarm.py test_cmd_clean.py test_swarm.py
+	python3 -m py_compile swarm.py test_cmd_clean.py test_swarm.py test_state_file_recovery.py
 	@echo "Type check passed"
 
 # Run all quality checks
