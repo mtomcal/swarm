@@ -580,6 +580,10 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: O
         # Claude Code prompt patterns (ANSI-aware)
         r"(?:^|\x1b\[[0-9;]*m)>\s",       # "> " prompt with optional ANSI
         r"❯\s",                            # Unicode prompt character
+        # OpenCode CLI ready patterns
+        r"opencode\s+v\d+",               # "opencode v1.0.115" version banner
+        r"tab\s+switch\s+agent",          # UI hint at bottom
+        r"ctrl\+p\s+commands",            # UI hint at bottom
         # Generic CLI prompts (ANSI-aware)
         r"(?:^|\x1b\[[0-9;]*m)\$\s",      # Shell "$ " prompt
         r"(?:^|\x1b\[[0-9;]*m)>>>\s",     # Python REPL ">>> "
