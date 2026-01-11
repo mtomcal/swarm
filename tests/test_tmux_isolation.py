@@ -1048,7 +1048,6 @@ class TestConcurrentOperations(TmuxIsolatedTestCase):
     """
 
     @skip_if_no_tmux
-    @unittest.expectedFailure  # Known issue swarm-1ry: state file locking not implemented
     def test_concurrent_operations(self):
         """Verify concurrent swarm operations don't corrupt state file.
 

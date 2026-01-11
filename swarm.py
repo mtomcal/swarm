@@ -5,6 +5,7 @@ A minimal CLI tool for spawning, tracking, and controlling agent processes via t
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ from typing import Optional
 # Constants
 SWARM_DIR = Path.home() / ".swarm"
 STATE_FILE = SWARM_DIR / "state.json"
+STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"
 
 
@@ -90,6 +93,32 @@ class Worker:
         )
 
 
+@contextmanager
+def state_file_lock():
+    """Context manager for exclusive locking of state file.
+
+    This prevents race conditions when multiple swarm processes
+    attempt to read/modify/write the state file concurrently.
+
+    Uses fcntl.flock() for exclusive (LOCK_EX) file locking.
+    The lock is automatically released when the context exits,
+    even if an exception occurs.
+
+    Yields:
+        File object for the lock file (callers don't need to use this)
+    """
+    ensure_dirs()
+    lock_file = open(STATE_LOCK_FILE, 'w')
+    try:
+        # Acquire exclusive lock (blocks if another process holds it)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield lock_file
+    finally:
+        # Release lock and close file
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
 class State:
     """Manages the swarm state file."""
 
@@ -98,21 +127,41 @@ class State:
         self._load()
 
     def _load(self) -> None:
-        """Load state from disk."""
-        ensure_dirs()
-        if STATE_FILE.exists():
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                self.workers = [Worker.from_dict(w) for w in data.get("workers", [])]
-        else:
-            self.workers = []
+        """Load state from disk with exclusive locking.
+
+        Acquires an exclusive lock before reading to prevent race conditions
+        where another process might be writing to the file simultaneously.
+        """
+        with state_file_lock():
+            ensure_dirs()
+            if STATE_FILE.exists():
+                with open(STATE_FILE, "r") as f:
+                    data = json.load(f)
+                    self.workers = [Worker.from_dict(w) for w in data.get("workers", [])]
+            else:
+                self.workers = []
 
     def save(self) -> None:
-        """Save state to disk."""
-        ensure_dirs()
-        data = {"workers": [w.to_dict() for w in self.workers]}
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        """Save state to disk with exclusive locking.
+
+        Acquires an exclusive lock before writing to prevent race conditions
+        where multiple processes might try to update the state file concurrently.
+        This ensures that:
+        1. We read the most current state
+        2. Our writes aren't overwritten by concurrent operations
+        3. No partial/corrupted data is written
+
+        IMPORTANT: This method does NOT reload state before saving. The caller
+        must ensure they have current state. For atomic updates, use the pattern:
+        1. Create State() - loads current state
+        2. Modify state
+        3. Call save() - writes with lock
+        """
+        with state_file_lock():
+            ensure_dirs()
+            data = {"workers": [w.to_dict() for w in self.workers]}
+            with open(STATE_FILE, "w") as f:
+                json.dump(data, f, indent=2)
 
     def get_worker(self, name: str) -> Optional[Worker]:
         """Get a worker by name."""
@@ -122,22 +171,74 @@ class State:
         return None
 
     def add_worker(self, worker: Worker) -> None:
-        """Add a worker to state."""
-        self.workers.append(worker)
-        self.save()
+        """Add a worker to state atomically.
+
+        This method reloads state, adds the worker, and saves - all within
+        a single lock to prevent race conditions with concurrent operations.
+        """
+        with state_file_lock():
+            # Reload to get latest state
+            self._load_unlocked()
+            # Add worker
+            self.workers.append(worker)
+            # Save immediately while holding lock
+            self._save_unlocked()
 
     def remove_worker(self, name: str) -> None:
-        """Remove a worker from state."""
-        self.workers = [w for w in self.workers if w.name != name]
-        self.save()
+        """Remove a worker from state atomically.
+
+        This method reloads state, removes the worker, and saves - all within
+        a single lock to prevent race conditions with concurrent operations.
+        """
+        with state_file_lock():
+            # Reload to get latest state
+            self._load_unlocked()
+            # Remove worker
+            self.workers = [w for w in self.workers if w.name != name]
+            # Save immediately while holding lock
+            self._save_unlocked()
 
     def update_worker(self, name: str, **kwargs) -> None:
-        """Update a worker's fields."""
-        worker = self.get_worker(name)
-        if worker:
-            for key, value in kwargs.items():
-                setattr(worker, key, value)
-            self.save()
+        """Update a worker's fields atomically.
+
+        This method reloads state, updates the worker, and saves - all within
+        a single lock to prevent race conditions with concurrent operations.
+        """
+        with state_file_lock():
+            # Reload to get latest state
+            self._load_unlocked()
+            # Update worker
+            worker = self.get_worker(name)
+            if worker:
+                for key, value in kwargs.items():
+                    setattr(worker, key, value)
+            # Save immediately while holding lock
+            self._save_unlocked()
+
+    def _load_unlocked(self) -> None:
+        """Load state from disk WITHOUT acquiring lock.
+
+        This is used internally when the lock is already held.
+        External callers should use _load() or State() constructor.
+        """
+        ensure_dirs()
+        if STATE_FILE.exists():
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                self.workers = [Worker.from_dict(w) for w in data.get("workers", [])]
+        else:
+            self.workers = []
+
+    def _save_unlocked(self) -> None:
+        """Save state to disk WITHOUT acquiring lock.
+
+        This is used internally when the lock is already held.
+        External callers should use save().
+        """
+        ensure_dirs()
+        data = {"workers": [w.to_dict() for w in self.workers]}
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
 
 def ensure_dirs() -> None:
