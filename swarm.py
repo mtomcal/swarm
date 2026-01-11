@@ -27,6 +27,41 @@ STATE_FILE = SWARM_DIR / "state.json"
 STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"
 
+# Agent instructions template for AGENTS.md/CLAUDE.md injection
+# Marker string 'Process Management (swarm)' used for idempotent detection
+SWARM_INSTRUCTIONS = """
+## Process Management (swarm)
+
+Swarm manages parallel agent workers in isolated git worktrees via tmux.
+
+### Quick Reference
+```bash
+swarm spawn --name <id> --tmux --worktree -- claude  # Start agent in isolated worktree
+swarm ls                          # List all workers
+swarm status <name>               # Check worker status
+swarm send <name> "prompt"        # Send prompt to worker
+swarm logs <name>                 # View worker output
+swarm attach <name>               # Attach to tmux window
+swarm kill <name> --rm-worktree   # Stop and cleanup
+```
+
+### Worktree Isolation
+Each `--worktree` worker gets its own git branch and directory:
+```bash
+swarm spawn --name feature-auth --tmux --worktree -- claude
+# Creates: <repo>-worktrees/feature-auth on branch 'feature-auth'
+```
+
+### Power User Tips
+- `--ready-wait`: Block until agent is ready for input
+- `--tag team-a`: Tag workers for filtering (`swarm ls --tag team-a`)
+- `--env KEY=VAL`: Pass environment variables to worker
+- `swarm send --all "msg"`: Broadcast to all running workers
+- `swarm wait --all`: Wait for all workers to complete
+
+State stored in `~/.swarm/state.json`. Logs in `~/.swarm/logs/`.
+""".strip()
+
 
 @dataclass
 class TmuxInfo:
