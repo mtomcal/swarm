@@ -729,6 +729,15 @@ def main() -> None:
     respawn_p.add_argument("--force-dirty", action="store_true",
                           help="Force removal of worktree even with uncommitted changes")
 
+    # init
+    init_p = subparsers.add_parser("init", help="Initialize swarm in project")
+    init_p.add_argument("--dry-run", action="store_true",
+                        help="Show what would be done without making changes")
+    init_p.add_argument("--file", choices=["AGENTS.md", "CLAUDE.md"], default="AGENTS.md",
+                        help="Output file name (default: AGENTS.md)")
+    init_p.add_argument("--force", action="store_true",
+                        help="Overwrite existing file")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -756,6 +765,8 @@ def main() -> None:
         cmd_clean(args)
     elif args.command == "respawn":
         cmd_respawn(args)
+    elif args.command == "init":
+        cmd_init(args)
 
 
 # Command stubs - to be implemented in subsequent tasks
@@ -1544,6 +1555,68 @@ def cmd_respawn(args) -> None:
         print(f"respawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
     else:
         print(f"respawned {args.name} (pid: {pid})")
+
+
+def cmd_init(args) -> None:
+    """Initialize swarm in a project by creating agent instructions file."""
+    target_file = Path(args.file)
+
+    # Check if file already exists
+    if target_file.exists() and not args.force:
+        print(f"swarm: error: {args.file} already exists (use --force to overwrite)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Agent instructions template
+    template = '''# Swarm Agent Instructions
+
+This project uses **swarm** for worker orchestration.
+
+## Quick Reference
+
+```bash
+swarm spawn --name <name> -- <command>  # Start a new worker
+swarm ls                                 # List all workers
+swarm status <name>                      # Check worker status
+swarm logs <name>                        # View worker output
+swarm send <name> "text"                 # Send input to worker
+swarm kill <name>                        # Stop a worker
+swarm clean --all                        # Clean up stopped workers
+```
+
+## Common Workflows
+
+**Starting a worker:**
+```bash
+swarm spawn --name my-worker -- python script.py
+```
+
+**Starting a tmux worker with worktree:**
+```bash
+swarm spawn --name feature-1 --worktree -- claude
+```
+
+**Monitoring workers:**
+```bash
+swarm ls                    # List all workers
+swarm logs my-worker        # View output
+swarm attach my-worker      # Attach to tmux session
+```
+
+**Cleanup:**
+```bash
+swarm kill my-worker        # Stop specific worker
+swarm clean --all           # Remove all stopped workers
+```
+'''
+
+    if args.dry_run:
+        print(f"Would create {args.file} with swarm agent instructions")
+        return
+
+    # Write the file
+    target_file.write_text(template)
+    print(f"Created {args.file}")
 
 
 if __name__ == "__main__":
