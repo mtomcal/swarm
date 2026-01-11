@@ -519,7 +519,6 @@ class TestSpawnFromInsideTmux(TmuxIsolatedTestCase):
             if swarm_sessions:
                 break
 
-        time.sleep(2)
 
         # Verify: "my-dev-session" has only 1 window (the original shell)
         # This confirms swarm didn't add a window to the user's session
@@ -556,8 +555,12 @@ class TestCleanWithExternallyKilledWorker(TmuxIsolatedTestCase):
         show the worker as 'running' (stale state), but 'clean --all' should
         detect that the window is actually dead and clean it from state.
         """
+        # Use unique worker name based on test's tmux socket to avoid collisions
+        # with global state from other tests
+        worker_name = f"state1-{self.tmux_socket[-8:]}"
+
         # Spawn a worker with a long-running command
-        result = self.run_swarm('spawn', '--name', 'test-worker', '--tmux', '--', 'sleep', '300')
+        result = self.run_swarm('spawn', '--name', worker_name, '--tmux', '--', 'sleep', '300')
         self.assertEqual(
             result.returncode,
             0,
@@ -567,8 +570,8 @@ class TestCleanWithExternallyKilledWorker(TmuxIsolatedTestCase):
         worker_id = self.parse_worker_id(result.stdout)
         self.assertEqual(
             worker_id,
-            'test-worker',
-            f"Expected worker_id to be 'test-worker', got: {worker_id!r}"
+            worker_name,
+            f"Expected worker_id to be '{worker_name}', got: {worker_id!r}"
         )
 
         # Verify worker is running using get_workers helper
