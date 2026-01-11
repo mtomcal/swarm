@@ -620,7 +620,7 @@ class TestCleanWithExternallyKilledWorker(TmuxIsolatedTestCase):
 
 
 class TestMultipleSwarmInstances(TmuxIsolatedTestCase):
-    """Test isolation between multiple swarm instances with different SWARM_DIRs."""
+    """Test isolation between multiple swarm instances with different sessions."""
 
     @skip_if_no_tmux
     def test_multiple_swarm_instances_isolation(self):
@@ -728,9 +728,6 @@ class TestSessionNameCollision(TmuxIsolatedTestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestCleanupOnlyAffectsSwarmSessions(TmuxIsolatedTestCase):
     """Test that swarm kill --all only affects swarm-managed sessions."""
@@ -756,7 +753,9 @@ class TestCleanupOnlyAffectsSwarmSessions(TmuxIsolatedTestCase):
         )
 
         # Setup: spawn swarm workers
-        spawn_result1 = self.run_swarm('spawn', '--tmux', 'sleep', '60')
+        spawn_result1 = self.run_swarm(
+            'spawn', '--name', 'worker-1', '--tmux', '--', 'sleep', '60'
+        )
         self.assertEqual(
             spawn_result1.returncode,
             0,
@@ -764,7 +763,9 @@ class TestCleanupOnlyAffectsSwarmSessions(TmuxIsolatedTestCase):
             f"stderr: {spawn_result1.stderr!r}"
         )
 
-        spawn_result2 = self.run_swarm('spawn', '--tmux', 'sleep', '60')
+        spawn_result2 = self.run_swarm(
+            'spawn', '--name', 'worker-2', '--tmux', '--', 'sleep', '60'
+        )
         self.assertEqual(
             spawn_result2.returncode,
             0,
@@ -819,7 +820,9 @@ class TestCleanAllSkipsRunningWorkers(TmuxIsolatedTestCase):
         """
         # Spawn 3 workers
         for i in range(3):
-            result = self.run_swarm('spawn', '--tmux', 'sleep', '300')
+            result = self.run_swarm(
+                'spawn', '--name', f'test-worker-{i}', '--tmux', '--', 'sleep', '300'
+            )
             self.assertEqual(
                 result.returncode,
                 0,
