@@ -803,5 +803,105 @@ class TestCleanupOnlyAffectsSwarmSessions(TmuxIsolatedTestCase):
         )
 
 
+
+class TestCleanAllSkipsRunningWorkers(TmuxIsolatedTestCase):
+    """Integration test for 'swarm clean --all' behavior with running workers."""
+
+    @skip_if_no_tmux
+    def test_clean_all_skips_still_running_workers(self):
+        """Verify that 'clean --all' only cleans stopped workers, not running ones.
+
+        This test ensures that:
+        1. Multiple workers can be spawned
+        2. Killing one worker marks it as stopped
+        3. 'clean --all' only removes stopped workers
+        4. Running workers remain untouched
+        """
+        # Spawn 3 workers
+        for i in range(3):
+            result = self.run_swarm('spawn', '--tmux', 'sleep', '300')
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Expected spawn command #{i+1} to succeed, "
+                f"got returncode {result.returncode}. "
+                f"Stdout: {result.stdout!r}, Stderr: {result.stderr!r}"
+            )
+
+        # Allow time for workers to start
+        time.sleep(0.5)
+
+        # Verify 3 workers exist
+        workers = self.get_workers()
+        self.assertEqual(
+            len(workers),
+            3,
+            f"Expected 3 workers after spawning, got {len(workers)}. "
+            f"Workers: {[w['name'] for w in workers]!r}"
+        )
+
+        # Stop one worker via swarm kill
+        first_worker_name = workers[0]['name']
+        kill_result = self.run_swarm('kill', first_worker_name)
+        self.assertEqual(
+            kill_result.returncode,
+            0,
+            f"Expected kill command to succeed for worker '{first_worker_name}', "
+            f"got returncode {kill_result.returncode}. "
+            f"Stdout: {kill_result.stdout!r}, Stderr: {kill_result.stderr!r}"
+        )
+
+        # Allow time for status to update
+        time.sleep(0.5)
+
+        # Verify: 1 stopped, 2 running
+        workers_after_kill = self.get_workers()
+        stopped = [w for w in workers_after_kill if w['status'] == 'stopped']
+        running = [w for w in workers_after_kill if w['status'] == 'running']
+        self.assertEqual(
+            len(stopped),
+            1,
+            f"Expected 1 stopped worker after kill, got {len(stopped)}. "
+            f"Stopped workers: {[w['name'] for w in stopped]!r}, "
+            f"All workers: {[(w['name'], w['status']) for w in workers_after_kill]!r}"
+        )
+        self.assertEqual(
+            len(running),
+            2,
+            f"Expected 2 running workers after kill, got {len(running)}. "
+            f"Running workers: {[w['name'] for w in running]!r}, "
+            f"All workers: {[(w['name'], w['status']) for w in workers_after_kill]!r}"
+        )
+
+        # Clean all (should only clean stopped workers)
+        clean_result = self.run_swarm('clean', '--all')
+        self.assertEqual(
+            clean_result.returncode,
+            0,
+            f"Expected 'clean --all' to succeed, got returncode {clean_result.returncode}. "
+            f"Stdout: {clean_result.stdout!r}, Stderr: {clean_result.stderr!r}"
+        )
+
+        # Verify: 2 running workers still exist
+        workers_final = self.get_workers()
+        self.assertEqual(
+            len(workers_final),
+            2,
+            f"Expected 2 workers remaining after 'clean --all', got {len(workers_final)}. "
+            f"Expected the stopped worker to be cleaned and running workers to remain. "
+            f"Remaining workers: {[(w['name'], w['status']) for w in workers_final]!r}"
+        )
+
+        # All remaining workers should be running
+        for w in workers_final:
+            self.assertEqual(
+                w['status'],
+                'running',
+                f"Expected all remaining workers to have status 'running', "
+                f"but worker '{w['name']}' has status '{w['status']}'. "
+                f"All workers: {[(w['name'], w['status']) for w in workers_final]!r}"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
