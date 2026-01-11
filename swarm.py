@@ -432,12 +432,23 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: O
     import re
 
     # Patterns that indicate the agent is ready for input
+    # Designed to be resilient to Claude Code version changes:
+    # - Match permission mode indicators (most reliable)
+    # - Match version banners (catches startup completion)
+    # - Match common prompt patterns
     ready_patterns = [
-        r"(?:^|\x1b\[[0-9;]*m)> ",       # Claude Code prompt (ANSI-aware)
-        r"bypass\s+permissions\s+on",    # Explicit text
-        r"Claude Code v\d+\.\d+",        # Versioned banner (more specific)
-        r"(?:^|\x1b\[[0-9;]*m)\$ ",      # Shell prompt (ANSI-aware)
-        r"(?:^|\x1b\[[0-9;]*m)>>> ",     # Python REPL (ANSI-aware)
+        # Claude Code permission mode indicators (most reliable, version-independent)
+        r"bypass\s+permissions",          # "bypass permissions on" or similar
+        r"permissions?\s+mode",           # "permission mode" variants
+        r"shift\+tab\s+to\s+cycle",       # UI hint in permission line
+        # Claude Code version banner (catches startup completion)
+        r"Claude\s+Code\s+v\d+",          # "Claude Code v2.1.4" etc
+        # Claude Code prompt patterns (ANSI-aware)
+        r"(?:^|\x1b\[[0-9;]*m)>\s",       # "> " prompt with optional ANSI
+        r"❯\s",                            # Unicode prompt character
+        # Generic CLI prompts (ANSI-aware)
+        r"(?:^|\x1b\[[0-9;]*m)\$\s",      # Shell "$ " prompt
+        r"(?:^|\x1b\[[0-9;]*m)>>>\s",     # Python REPL ">>> "
     ]
 
     start = time.time()
@@ -582,8 +593,8 @@ def main() -> None:
     spawn_p.add_argument("--cwd", help="Working directory")
     spawn_p.add_argument("--ready-wait", action="store_true",
                         help="Wait for agent to be ready before returning (tmux only)")
-    spawn_p.add_argument("--ready-timeout", type=int, default=30,
-                        help="Timeout in seconds for --ready-wait (default: 30)")
+    spawn_p.add_argument("--ready-timeout", type=int, default=120,
+                        help="Timeout in seconds for --ready-wait (default: 120, suitable for Claude Code startup)")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to run (after --)")
 
