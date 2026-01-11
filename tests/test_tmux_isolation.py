@@ -493,7 +493,7 @@ class TestSpawnFromInsideTmux(TmuxIsolatedTestCase):
 
         # Action: run swarm spawn FROM INSIDE the tmux session
         # This simulates: user has tmux attached -> runs swarm spawn
-        spawn_cmd = f"python3 {swarm_path} spawn --tmux --tmux-socket {self.tmux_socket} sleep 60"
+        spawn_cmd = f"python3 {swarm_path} spawn --name inside-worker --tmux --tmux-socket {self.tmux_socket} -- sleep 60"
         result = self.tmux_cmd(
             "send-keys", "-t", user_session,
             spawn_cmd,
