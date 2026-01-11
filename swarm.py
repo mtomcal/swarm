@@ -470,6 +470,48 @@ def tmux_capture_pane(session: str, window: str, history_lines: int = 0, socket:
     return result.stdout
 
 
+def session_has_other_workers(state: "State", session: str, exclude_worker: str, socket: Optional[str] = None) -> bool:
+    """Check if other workers are using the same tmux session.
+
+    Args:
+        state: Current swarm state
+        session: Tmux session name to check
+        exclude_worker: Worker name to exclude from the check
+        socket: Optional tmux socket name (workers must match both session and socket)
+
+    Returns:
+        True if other workers exist in the same session (and socket), False otherwise
+    """
+    for worker in state.workers:
+        if worker.name == exclude_worker:
+            continue
+        if not worker.tmux:
+            continue
+        if worker.tmux.session != session:
+            continue
+        # Check socket matches (both None or both same value)
+        worker_socket = worker.tmux.socket
+        if worker_socket != socket:
+            continue
+        # Found another worker in the same session/socket
+        return True
+    return False
+
+
+def kill_tmux_session(session: str, socket: Optional[str] = None) -> None:
+    """Kill a tmux session.
+
+    Args:
+        session: Tmux session name to kill
+        socket: Optional tmux socket name
+    """
+    cmd_prefix = tmux_cmd_prefix(socket)
+    subprocess.run(
+        cmd_prefix + ["kill-session", "-t", session],
+        capture_output=True
+    )
+
+
 def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: Optional[str] = None) -> bool:
     """Wait for an agent CLI to be ready for input.
 
@@ -1257,16 +1299,34 @@ def cmd_kill(args) -> None:
             sys.exit(1)
         workers_to_kill = [worker]
 
+    # Track sessions to clean up (session, socket) tuples
+    sessions_to_cleanup: set[tuple[str, Optional[str]]] = set()
+
     # Kill each worker
     for worker in workers_to_kill:
         # Handle tmux workers
         if worker.tmux:
             socket = worker.tmux.socket if worker.tmux else None
+            session = worker.tmux.session
             cmd_prefix = tmux_cmd_prefix(socket)
             subprocess.run(
-                cmd_prefix + ["kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                cmd_prefix + ["kill-window", "-t", f"{session}:{worker.tmux.window}"],
                 capture_output=True
             )
+
+            # Check if we should clean up the session after killing this worker
+            # We need to check against remaining workers (excluding those being killed)
+            workers_being_killed = {w.name for w in workers_to_kill}
+            has_other = any(
+                w.name != worker.name and
+                w.name not in workers_being_killed and
+                w.tmux and
+                w.tmux.session == session and
+                w.tmux.socket == socket
+                for w in state.workers
+            )
+            if not has_other:
+                sessions_to_cleanup.add((session, socket))
 
         # Handle non-tmux workers with PID
         elif worker.pid:
@@ -1299,6 +1359,10 @@ def cmd_kill(args) -> None:
                 print(f"swarm: use --force-dirty to remove anyway", file=sys.stderr)
 
         print(f"killed {worker.name}")
+
+    # Clean up empty tmux sessions
+    for session, socket in sessions_to_cleanup:
+        kill_tmux_session(session, socket=socket)
 
     # Save updated state
     state.save()
@@ -1368,6 +1432,9 @@ def cmd_clean(args) -> None:
 
         workers_to_clean = [worker]
 
+    # Track sessions to clean up (session, socket) tuples
+    sessions_to_cleanup: set[tuple[str, Optional[str]]] = set()
+
     # Clean each worker
     for worker in workers_to_clean:
         # Refresh status first to confirm stopped
@@ -1382,6 +1449,23 @@ def cmd_clean(args) -> None:
                 # For single worker, error and exit
                 print(f"swarm: error: cannot clean running worker '{worker.name}'", file=sys.stderr)
                 sys.exit(1)
+
+        # Check if we need to clean up the tmux session after removing this worker
+        if worker.tmux:
+            session = worker.tmux.session
+            socket = worker.tmux.socket
+            # Check against workers not being cleaned
+            workers_being_cleaned = {w.name for w in workers_to_clean}
+            has_other = any(
+                w.name != worker.name and
+                w.name not in workers_being_cleaned and
+                w.tmux and
+                w.tmux.session == session and
+                w.tmux.socket == socket
+                for w in state.workers
+            )
+            if not has_other:
+                sessions_to_cleanup.add((session, socket))
 
         # Remove worktree if it exists and args.rm_worktree is True
         if worker.worktree and args.rm_worktree:
@@ -1408,6 +1492,10 @@ def cmd_clean(args) -> None:
 
         # Print success message
         print(f"cleaned {worker.name}")
+
+    # Clean up empty tmux sessions
+    for session, socket in sessions_to_cleanup:
+        kill_tmux_session(session, socket=socket)
 
 
 def cmd_respawn(args) -> None:
