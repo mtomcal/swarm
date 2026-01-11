@@ -810,8 +810,8 @@ def main() -> None:
     init_p = subparsers.add_parser("init", help="Initialize swarm in project")
     init_p.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without making changes")
-    init_p.add_argument("--file", choices=["AGENTS.md", "CLAUDE.md"], default="AGENTS.md",
-                        help="Output file name (default: AGENTS.md)")
+    init_p.add_argument("--file", choices=["AGENTS.md", "CLAUDE.md"], default=None,
+                        help="Output file name (default: auto-detect AGENTS.md or CLAUDE.md)")
     init_p.add_argument("--force", action="store_true",
                         help="Overwrite existing file")
 
@@ -1681,65 +1681,91 @@ def cmd_respawn(args) -> None:
 
 
 def cmd_init(args) -> None:
-    """Initialize swarm in a project by creating agent instructions file."""
-    target_file = Path(args.file)
+    """Initialize swarm in a project by creating agent instructions file.
 
-    # Check if file already exists
-    if target_file.exists() and not args.force:
-        print(f"swarm: error: {args.file} already exists (use --force to overwrite)",
-              file=sys.stderr)
-        sys.exit(1)
+    Implements the following logic:
+    1. If --file is specified, use that file directly
+    2. Otherwise, auto-discover: check AGENTS.md first, then CLAUDE.md
+    3. If marker 'Process Management (swarm)' found, report already exists (idempotent)
+    4. If file exists but no marker, append SWARM_INSTRUCTIONS
+    5. If neither file exists, create AGENTS.md with SWARM_INSTRUCTIONS
 
-    # Agent instructions template
-    template = '''# Swarm Agent Instructions
+    Args:
+        args: Namespace with dry_run, file, force attributes
+    """
+    # Marker string for idempotent detection
+    marker = "Process Management (swarm)"
 
-This project uses **swarm** for worker orchestration.
+    # Determine target file
+    if args.file:
+        # Explicit file choice overrides auto-discovery
+        target_file = Path(args.file)
+        file_exists = target_file.exists()
+    else:
+        # Auto-discover: check AGENTS.md first, then CLAUDE.md
+        agents_path = Path("AGENTS.md")
+        claude_path = Path("CLAUDE.md")
 
-## Quick Reference
+        if agents_path.exists():
+            target_file = agents_path
+            file_exists = True
+        elif claude_path.exists():
+            target_file = claude_path
+            file_exists = True
+        else:
+            # Neither exists, default to AGENTS.md
+            target_file = agents_path
+            file_exists = False
 
-```bash
-swarm spawn --name <name> -- <command>  # Start a new worker
-swarm ls                                 # List all workers
-swarm status <name>                      # Check worker status
-swarm logs <name>                        # View worker output
-swarm send <name> "text"                 # Send input to worker
-swarm kill <name>                        # Stop a worker
-swarm clean --all                        # Clean up stopped workers
-```
+    # Check for existing marker in the target file (or in both files for auto-discovery)
+    if not args.force:
+        # Check target file
+        if file_exists:
+            existing_content = target_file.read_text()
+            if marker in existing_content:
+                print(f"swarm: {target_file} already contains swarm instructions")
+                return
 
-## Common Workflows
+        # For auto-discovery, also check CLAUDE.md even if AGENTS.md was selected
+        if not args.file:
+            for check_path in [Path("AGENTS.md"), Path("CLAUDE.md")]:
+                if check_path.exists() and check_path != target_file:
+                    check_content = check_path.read_text()
+                    if marker in check_content:
+                        print(f"swarm: {check_path} already contains swarm instructions")
+                        return
 
-**Starting a worker:**
-```bash
-swarm spawn --name my-worker -- python script.py
-```
-
-**Starting a tmux worker with worktree:**
-```bash
-swarm spawn --name feature-1 --worktree -- claude
-```
-
-**Monitoring workers:**
-```bash
-swarm ls                    # List all workers
-swarm logs my-worker        # View output
-swarm attach my-worker      # Attach to tmux session
-```
-
-**Cleanup:**
-```bash
-swarm kill my-worker        # Stop specific worker
-swarm clean --all           # Remove all stopped workers
-```
-'''
-
+    # Handle --dry-run
     if args.dry_run:
-        print(f"Would create {args.file} with swarm agent instructions")
+        if file_exists:
+            print(f"Would append swarm instructions to {target_file}")
+        else:
+            print(f"Would create {target_file} with swarm agent instructions")
         return
 
-    # Write the file
-    target_file.write_text(template)
-    print(f"Created {args.file}")
+    # Prepare content with SWARM_INSTRUCTIONS
+    if file_exists:
+        existing_content = target_file.read_text()
+
+        if args.force and marker in existing_content:
+            # Replace existing section with new SWARM_INSTRUCTIONS
+            # Find the marker and remove everything after it until the next ## heading or EOF
+            import re
+            pattern = r'(## Process Management \(swarm\).*?)(?=\n## |\Z)'
+            new_content = re.sub(pattern, SWARM_INSTRUCTIONS, existing_content, flags=re.DOTALL)
+            target_file.write_text(new_content)
+            print(f"Updated swarm instructions in {target_file}")
+        else:
+            # Append to existing file
+            # Normalize trailing newlines: strip and add exactly two newlines
+            normalized = existing_content.rstrip('\n')
+            new_content = normalized + "\n\n" + SWARM_INSTRUCTIONS + "\n"
+            target_file.write_text(new_content)
+            print(f"Added swarm instructions to {target_file}")
+    else:
+        # Create new file
+        target_file.write_text(SWARM_INSTRUCTIONS + "\n")
+        print(f"Created {target_file}")
 
 
 if __name__ == "__main__":
