@@ -1040,5 +1040,282 @@ class TestLsReflectsActualStatus(TmuxIsolatedTestCase):
         )
 
 
+class TestConcurrentOperations(TmuxIsolatedTestCase):
+    """Test LIFE-4: Multiple swarm commands running simultaneously don't corrupt state.
+
+    This test exposes a race condition in concurrent state file updates.
+    See issue swarm-1ry: Implement state file locking to prevent concurrent operation race conditions
+    """
+
+    @skip_if_no_tmux
+    @unittest.expectedFailure  # Known issue swarm-1ry: state file locking not implemented
+    def test_concurrent_operations(self):
+        """Verify concurrent swarm operations don't corrupt state file.
+
+        This test runs multiple swarm commands in parallel to ensure that:
+        1. All commands succeed or fail gracefully (no crashes)
+        2. The state file remains valid JSON (no corruption)
+        3. The final worker count is correct (no lost workers)
+        4. All workers can be parsed (state integrity maintained)
+
+        This may expose the need for state file locking if concurrent writes
+        cause corruption or lost updates.
+        """
+        import concurrent.futures
+
+        # Spawn initial workers (5 total)
+        worker_prefix = self.tmux_socket.replace('swarm-test-', 'init')
+        for i in range(5):
+            result = self.run_swarm(
+                'spawn', '--name', f'{worker_prefix}-{i}', '--tmux', '--', 'sleep', '60'
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Failed to spawn initial worker {i}. "
+                f"stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+            )
+
+        # Give workers time to start
+        time.sleep(0.5)
+
+        # Verify initial state
+        workers_before = self.get_workers()
+        self.assertEqual(
+            len(workers_before),
+            5,
+            f"Expected 5 workers before concurrent operations, "
+            f"got {len(workers_before)}: {[w['name'] for w in workers_before]!r}"
+        )
+
+        # Run concurrent operations (mix of spawn, ls, ls --json)
+        # Use unique names to avoid conflicts
+        concurrent_prefix = self.tmux_socket.replace('swarm-test-', 'conc')
+        operations = [
+            ('spawn', '--name', f'{concurrent_prefix}-0', '--tmux', '--', 'sleep', '60'),
+            ('ls',),
+            ('ls', '--format', 'json'),
+            ('spawn', '--name', f'{concurrent_prefix}-1', '--tmux', '--', 'sleep', '60'),
+            ('ls',),
+        ]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(self.run_swarm, *op)
+                for op in operations
+            ]
+            results = [f.result() for f in futures]
+
+        # All should succeed (or fail gracefully, no crashes)
+        for i, result in enumerate(results):
+            self.assertIn(
+                result.returncode,
+                [0, 1],
+                f"Operation {i} ({operations[i]}) returned unexpected code {result.returncode}. "
+                f"stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+            )
+
+        # State should be consistent - verify we can parse it
+        ls_result = self.run_swarm('ls', '--format', 'json')
+        self.assertEqual(
+            ls_result.returncode,
+            0,
+            f"ls --format json failed after concurrent operations. "
+            f"stdout: {ls_result.stdout!r}, stderr: {ls_result.stderr!r}"
+        )
+
+        # State file should be valid JSON
+        try:
+            workers = self.get_workers()
+        except (json.JSONDecodeError, ValueError) as e:
+            self.fail(
+                f"State file corrupted after concurrent operations. "
+                f"Failed to parse JSON: {e}. "
+                f"This indicates a need for state file locking. "
+                f"Raw output: {ls_result.stdout!r}"
+            )
+
+        # Should have 7 workers (5 initial + 2 spawned concurrently)
+        # NOTE: This test MAY fail due to race conditions in state file updates.
+        # If it fails with 6 workers instead of 7, this indicates that concurrent
+        # writes to state.json are causing lost updates, which means state file
+        # locking is needed.
+        expected_workers = 7
+        if len(workers) != expected_workers:
+            # Document the race condition for debugging
+            missing_workers = []
+            for i in range(2):
+                worker_name = f'{concurrent_prefix}-{i}'
+                if not any(w['name'] == worker_name for w in workers):
+                    missing_workers.append(worker_name)
+
+            # Check if this is the known race condition
+            if len(workers) == expected_workers - 1 and missing_workers:
+                self.fail(
+                    f"RACE CONDITION DETECTED: Expected {expected_workers} workers "
+                    f"(5 initial + 2 concurrent spawns), got {len(workers)}. "
+                    f"Missing workers: {missing_workers!r}. "
+                    f"Present workers: {[w['name'] for w in workers]!r}. "
+                    f"\n\nThis failure indicates that concurrent swarm operations are "
+                    f"causing lost updates to state.json. The state file needs locking "
+                    f"to prevent race conditions during concurrent reads and writes. "
+                    f"\n\nRecommended fix: Implement file locking using fcntl.flock() "
+                    f"or similar mechanism in load_state() and save_state() functions."
+                )
+
+        self.assertEqual(
+            len(workers),
+            expected_workers,
+            f"Expected {expected_workers} workers (5 initial + 2 concurrent spawns), "
+            f"got {len(workers)}. "
+            f"Workers: {[w['name'] for w in workers]!r}. "
+            f"If count is wrong, this may indicate lost updates due to race conditions."
+        )
+
+        # All workers should be parseable (no corruption)
+        for w in workers:
+            self.assertIn(
+                'name',
+                w,
+                f"Worker missing 'name' field, indicates corruption: {w!r}"
+            )
+            self.assertIn(
+                'status',
+                w,
+                f"Worker missing 'status' field, indicates corruption: {w!r}"
+            )
+            # Verify name is one of our expected workers
+            self.assertTrue(
+                w['name'].startswith(worker_prefix) or w['name'].startswith(concurrent_prefix),
+                f"Unexpected worker name '{w['name']}', expected prefix "
+                f"'{worker_prefix}' or '{concurrent_prefix}'. Full worker: {w!r}"
+            )
+
+
+
+
+class TestStatusRefreshAccuracy(TmuxIsolatedTestCase):
+    """Integration test STATE-4: Comprehensive test of refresh_worker_status().
+
+    This test verifies that the refresh_worker_status() function correctly
+    detects worker status across various scenarios including normal operation,
+    process exit, external tmux window kill, and session termination.
+    """
+
+    def spawn_worker(self, *cmd, session=None, name=None):
+        """Helper to spawn a worker and return its ID.
+
+        Args:
+            *cmd: Command and arguments to run (e.g., 'sleep', '300')
+            session: Optional session name (default: use swarm's auto-generated name)
+            name: Optional worker name (default: auto-generate unique name)
+
+        Returns:
+            Worker ID (name) that was spawned
+        """
+        if name is None:
+            # Generate unique name based on test socket
+            name = f"worker-{uuid.uuid4().hex[:8]}"
+
+        args = ['spawn', '--name', name, '--tmux']
+        if session:
+            args.extend(['--session', session])
+        args.extend(['--'] + list(cmd))
+
+        result = self.run_swarm(*args)
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"spawn command failed. stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+        )
+
+        worker_id = self.parse_worker_id(result.stdout)
+        self.assertEqual(
+            worker_id,
+            name,
+            f"Expected worker ID to match name '{name}', got: {worker_id!r}"
+        )
+
+        return worker_id
+
+    def kill_tmux_window(self, worker_id):
+        """Kill a tmux window externally (not via swarm kill).
+
+        Args:
+            worker_id: Worker ID (window name) to kill
+
+        This simulates a user manually killing a tmux window, which should
+        cause refresh_worker_status() to detect it as stopped.
+        """
+        session = self.get_swarm_session()
+        result = self.tmux_cmd('kill-window', '-t', f'{session}:{worker_id}')
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Failed to kill tmux window '{session}:{worker_id}'. stderr: {result.stderr!r}"
+        )
+
+    @skip_if_no_tmux
+    def test_status_refresh_accuracy(self):
+        """Verify refresh_worker_status() correctly detects status in all scenarios.
+
+        This comprehensive test verifies that swarm ls (which calls
+        refresh_worker_status()) correctly reports worker status across:
+        1. Worker running normally
+        2. Worker process exited naturally
+        3. Tmux window killed externally
+        4. Entire session killed
+
+        All scenarios are tested in a single test to ensure proper isolation
+        and verify that ls can handle multiple workers with different states.
+        """
+        scenarios = []
+
+        # Scenario 1: Worker running normally
+        w1 = self.spawn_worker('sleep', '300')
+        scenarios.append(('running_normal', w1, 'running'))
+
+        # Scenario 2: Worker process exited (sleep finished)
+        w2 = self.spawn_worker('sleep', '0.1')
+        time.sleep(0.5)  # Wait for process to exit
+        scenarios.append(('process_exited', w2, 'stopped'))
+
+        # Scenario 3: Tmux window killed externally
+        w3 = self.spawn_worker('sleep', '300')
+        self.kill_tmux_window(w3)
+        scenarios.append(('window_killed', w3, 'stopped'))
+
+        # Scenario 4: Session killed entirely
+        # Create a temporary session for this test
+        temp_session = f'temp-session-{uuid.uuid4().hex[:8]}'
+        w4 = self.spawn_worker('sleep', '300', session=temp_session)
+        self.tmux_cmd('kill-session', '-t', temp_session)
+        scenarios.append(('session_killed', w4, 'stopped'))
+
+        # Refresh and verify all workers via swarm ls
+        workers = self.get_workers()
+
+        # Build a map of worker_id -> worker for easy lookup
+        workers_map = {w['name']: w for w in workers}
+
+        # Verify each scenario
+        for name, worker_id, expected_status in scenarios:
+            self.assertIn(
+                worker_id,
+                workers_map,
+                f"Scenario '{name}': Worker '{worker_id}' not found in swarm ls output. "
+                f"Available workers: {list(workers_map.keys())!r}"
+            )
+
+            actual_status = workers_map[worker_id]['status']
+            self.assertEqual(
+                actual_status,
+                expected_status,
+                f"Scenario '{name}' failed: Worker '{worker_id}' expected status '{expected_status}', "
+                f"but got '{actual_status}'. This indicates refresh_worker_status() did not "
+                f"correctly detect the worker's actual state. Full worker: {workers_map[worker_id]!r}"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
