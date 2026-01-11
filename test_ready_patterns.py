@@ -273,5 +273,92 @@ Initializing...
         )
 
 
+    # =========================================================================
+    # OpenCode Ready Pattern Tests
+    # =========================================================================
+
+    def test_pattern_opencode_version_banner(self):
+        """OPENCODE-1: OpenCode version banner detected."""
+        output = "opencode v1.0.115"
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected 'opencode v1.0.115' banner to be detected. Output: {output!r}"
+        )
+
+    def test_pattern_opencode_version_banner_variants(self):
+        """OPENCODE-2: OpenCode version banner with different versions detected."""
+        # Single digit version
+        output1 = "opencode v1"
+        result1 = self._wait_for_ready_with_output(output1)
+        self.assertTrue(
+            result1,
+            f"Expected 'opencode v1' (single digit) to be detected. Output: {output1!r}"
+        )
+
+        # Multi-digit version
+        output2 = "opencode v2.5.123"
+        result2 = self._wait_for_ready_with_output(output2)
+        self.assertTrue(
+            result2,
+            f"Expected 'opencode v2.5.123' to be detected. Output: {output2!r}"
+        )
+
+    def test_pattern_opencode_tab_switch_agent(self):
+        """OPENCODE-3: OpenCode 'tab switch agent' UI hint detected."""
+        output = "tab switch agent"
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected 'tab switch agent' UI hint to be detected. Output: {output!r}"
+        )
+
+    def test_pattern_opencode_ctrl_p_commands(self):
+        """OPENCODE-4: OpenCode 'ctrl+p commands' UI hint detected."""
+        output = "ctrl+p commands"
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected 'ctrl+p commands' UI hint to be detected. Output: {output!r}"
+        )
+
+    def test_pattern_opencode_actual_startup_screen(self):
+        """OPENCODE-5: Actual OpenCode startup screen detected."""
+        # Based on the issue screenshot description
+        output = """
+ ████████████████████████████████
+        opencode
+ ████████████████████████████████
+
+Build Google Gemini Flash Latest
+tab switch agent                ctrl+p commands
+opencode v1.0.115
+"""
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected actual OpenCode startup screen to be detected. "
+            f"Should match version banner or UI hints. Output length: {len(output)} chars"
+        )
+
+    def test_pattern_opencode_no_false_positives(self):
+        """OPENCODE-6: OpenCode patterns should not match unrelated text."""
+        # 'tab' alone should not match
+        output1 = "press tab to continue"
+        result1 = self._wait_for_ready_with_output(output1, timeout=1)
+        self.assertFalse(
+            result1,
+            f"Expected 'press tab to continue' to NOT match opencode patterns. Output: {output1!r}"
+        )
+
+        # 'opencode' without version should not match
+        output2 = "opencode is running"
+        result2 = self._wait_for_ready_with_output(output2, timeout=1)
+        self.assertFalse(
+            result2,
+            f"Expected 'opencode is running' without version to NOT match. Output: {output2!r}"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
