@@ -641,8 +641,8 @@ def main() -> None:
     spawn_p.add_argument("--tmux-socket", default=None, help="Tmux socket name (for testing/isolation)")
     spawn_p.add_argument("--worktree", action="store_true", help="Create a git worktree")
     spawn_p.add_argument("--branch", help="Branch name for worktree (default: same as --name)")
-    spawn_p.add_argument("--worktree-dir", default="../swarm-worktrees",
-                        help="Parent dir for worktrees (default: ../swarm-worktrees)")
+    spawn_p.add_argument("--worktree-dir", default=None,
+                        help="Parent dir for worktrees (default: <repo>-worktrees, sibling to repo)")
     spawn_p.add_argument("--tag", action="append", default=[], dest="tags",
                         help="Tag for filtering (repeatable)")
     spawn_p.add_argument("--env", action="append", default=[],
@@ -790,9 +790,13 @@ def cmd_spawn(args) -> None:
             sys.exit(1)
 
         # Compute worktree path relative to git root
-        worktree_dir = Path(args.worktree_dir)
-        if not worktree_dir.is_absolute():
-            worktree_dir = git_root.parent / worktree_dir
+        if args.worktree_dir is None:
+            # Default: <repo-name>-worktrees as sibling to repo
+            worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
+        else:
+            worktree_dir = Path(args.worktree_dir)
+            if not worktree_dir.is_absolute():
+                worktree_dir = git_root.parent / worktree_dir
 
         worktree_path = worktree_dir / args.name
 
