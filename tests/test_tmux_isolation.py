@@ -818,10 +818,12 @@ class TestCleanAllSkipsRunningWorkers(TmuxIsolatedTestCase):
         3. 'clean --all' only removes stopped workers
         4. Running workers remain untouched
         """
-        # Spawn 3 workers
+        # Spawn 3 workers with unique names based on tmux socket
+        # This ensures test isolation even with shared global state
+        worker_prefix = self.tmux_socket.replace('swarm-test-', 'w')
         for i in range(3):
             result = self.run_swarm(
-                'spawn', '--name', f'test-worker-{i}', '--tmux', '--', 'sleep', '300'
+                'spawn', '--name', f'{worker_prefix}-{i}', '--tmux', '--', 'sleep', '300'
             )
             self.assertEqual(
                 result.returncode,
@@ -904,6 +906,119 @@ class TestCleanAllSkipsRunningWorkers(TmuxIsolatedTestCase):
                 f"but worker '{w['name']}' has status '{w['status']}'. "
                 f"All workers: {[(w['name'], w['status']) for w in workers_final]!r}"
             )
+
+
+
+class TestLsReflectsActualStatus(TmuxIsolatedTestCase):
+    """Integration test STATE-3: Verify swarm ls reflects actual worker status.
+
+    This test verifies that when a tmux window is killed externally (not via
+    swarm kill), swarm ls correctly detects and reports the worker as stopped.
+    This exercises the refresh_worker_status() function in swarm.py.
+    """
+
+    @skip_if_no_tmux
+    def test_ls_reflects_actual_status(self):
+        """Verify swarm ls shows correct status after external tmux window kill.
+
+        This test:
+        1. Spawns a worker in tmux
+        2. Verifies ls shows 'running' status
+        3. Kills the tmux window externally (bypassing swarm kill)
+        4. Verifies ls shows 'stopped' status (not stale 'running')
+        """
+        # Spawn worker with unique name
+        worker_name = f"test-state-{uuid.uuid4().hex[:8]}"
+        result = self.run_swarm(
+            'spawn', '--name', worker_name, '--tmux', '--', 'sleep', '300'
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"spawn command failed. stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+        )
+
+        worker_id = self.parse_worker_id(result.stdout)
+        self.assertEqual(
+            worker_id,
+            worker_name,
+            f"Expected worker ID to match name '{worker_name}', got: {worker_id!r}"
+        )
+
+        # Verify running status via ls --format json
+        ls1 = self.run_swarm('ls', '--format', 'json')
+        self.assertEqual(
+            ls1.returncode,
+            0,
+            f"ls command failed. stdout: {ls1.stdout!r}, stderr: {ls1.stderr!r}"
+        )
+
+        workers1 = json.loads(ls1.stdout)
+        # Filter to workers in our isolated socket
+        our_workers1 = [
+            w for w in workers1
+            if w.get('tmux') and w['tmux'].get('socket') == self.tmux_socket
+        ]
+        self.assertEqual(
+            len(our_workers1),
+            1,
+            f"Expected exactly 1 worker in our socket after spawn, "
+            f"got {len(our_workers1)}. All workers: {workers1!r}"
+        )
+        self.assertEqual(
+            our_workers1[0]['status'],
+            'running',
+            f"Expected worker status 'running' after spawn, "
+            f"got: {our_workers1[0]['status']!r}. Full worker: {our_workers1[0]!r}"
+        )
+
+        # Kill tmux window externally (bypass swarm kill)
+        session = self.get_swarm_session()
+        kill_result = self.tmux_cmd('kill-window', '-t', f'{session}:{worker_id}')
+        self.assertEqual(
+            kill_result.returncode,
+            0,
+            f"Failed to kill tmux window '{session}:{worker_id}'. "
+            f"stderr: {kill_result.stderr!r}"
+        )
+
+        # Verify: ls now shows stopped status (not stale "running")
+        ls2 = self.run_swarm('ls', '--format', 'json')
+        self.assertEqual(
+            ls2.returncode,
+            0,
+            f"ls command failed after kill. stdout: {ls2.stdout!r}, stderr: {ls2.stderr!r}"
+        )
+
+        workers2 = json.loads(ls2.stdout)
+        # Filter to workers in our isolated socket
+        our_workers2 = [
+            w for w in workers2
+            if w.get('tmux') and w['tmux'].get('socket') == self.tmux_socket
+        ]
+        self.assertEqual(
+            len(our_workers2),
+            1,
+            f"Expected worker to still exist in state after external kill, "
+            f"got {len(our_workers2)} workers. All workers: {workers2!r}"
+        )
+
+        worker = our_workers2[0]
+        self.assertEqual(
+            worker['name'],
+            worker_name,
+            f"Expected worker name '{worker_name}', got: {worker['name']!r}"
+        )
+        self.assertEqual(
+            worker['status'],
+            'stopped',
+            f"Expected worker status 'stopped' after external tmux kill, "
+            f"but got '{worker['status']}'. This indicates swarm ls is not "
+            f"correctly detecting that the tmux window was killed externally. "
+            f"The refresh_worker_status() function should detect that the tmux "
+            f"window no longer exists and update the status accordingly. "
+            f"Full worker state: {worker!r}"
+        )
 
 
 if __name__ == "__main__":
