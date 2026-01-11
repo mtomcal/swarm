@@ -631,11 +631,15 @@ class TestMultipleSwarmInstances(TmuxIsolatedTestCase):
 
             # Spawn worker in first swarm instance
             env1 = {**os.environ, 'SWARM_DIR': dir1}
-            result1 = self.run_swarm('spawn', '--tmux', 'sleep', '60', env=env1)
+            result1 = self.run_swarm(
+                'spawn', '--name', 'worker1', '--tmux', '--', 'sleep', '60', env=env1
+            )
 
             # Spawn worker in second swarm instance
             env2 = {**os.environ, 'SWARM_DIR': dir2}
-            result2 = self.run_swarm('spawn', '--tmux', 'sleep', '60', env=env2)
+            result2 = self.run_swarm(
+                'spawn', '--name', 'worker2', '--tmux', '--', 'sleep', '60', env=env2
+            )
 
             # Both should succeed
             self.assertEqual(
