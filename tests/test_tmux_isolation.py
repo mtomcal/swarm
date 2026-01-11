@@ -128,28 +128,60 @@ class TestTmuxIsolation(TmuxIsolatedTestCase):
     def test_unique_socket_per_test(self):
         """Verify each test gets a unique tmux socket."""
         # Socket name should be unique per test
-        self.assertTrue(self.tmux_socket.startswith("swarm-test-"))
-        self.assertEqual(len(self.tmux_socket), len("swarm-test-") + 8)
+        self.assertTrue(
+            self.tmux_socket.startswith("swarm-test-"),
+            f"Expected socket to start with 'swarm-test-', got: {self.tmux_socket!r}"
+        )
+
+        expected_length = len("swarm-test-") + 8
+        actual_length = len(self.tmux_socket)
+        self.assertEqual(
+            actual_length,
+            expected_length,
+            f"Expected socket length {expected_length} (prefix + 8 hex chars), "
+            f"got {actual_length}. Socket: {self.tmux_socket!r}"
+        )
 
     @skip_if_no_tmux
     def test_isolated_session_creation(self):
         """Verify sessions are created in isolated tmux server."""
         # Initially no sessions
-        self.assertEqual(self.list_sessions(), [])
+        initial_sessions = self.list_sessions()
+        self.assertEqual(
+            initial_sessions,
+            [],
+            f"Expected no sessions initially in isolated tmux server, "
+            f"but found: {initial_sessions!r}"
+        )
 
         # Create a test session
         result = self.tmux_cmd("new-session", "-d", "-s", "test-session")
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected tmux new-session to succeed (returncode 0), "
+            f"got {result.returncode}. Stderr: {result.stderr!r}"
+        )
 
         # Session should exist in isolated server
         sessions = self.list_sessions()
-        self.assertEqual(sessions, ["test-session"])
+        self.assertEqual(
+            sessions,
+            ["test-session"],
+            f"Expected exactly one session 'test-session', got: {sessions!r}"
+        )
 
     @skip_if_no_tmux
     def test_isolation_from_user_sessions(self):
         """Verify test sessions don't appear in default tmux server."""
         # Create session in isolated server
-        self.tmux_cmd("new-session", "-d", "-s", "isolated-session")
+        session_name = "isolated-session"
+        create_result = self.tmux_cmd("new-session", "-d", "-s", session_name)
+        self.assertEqual(
+            create_result.returncode,
+            0,
+            f"Failed to create isolated session. Stderr: {create_result.stderr!r}"
+        )
 
         # Check default tmux server (no -L flag)
         result = subprocess.run(
@@ -161,7 +193,13 @@ class TestTmuxIsolation(TmuxIsolatedTestCase):
         # If default tmux server exists, isolated session should NOT be there
         if result.returncode == 0:
             default_sessions = [s for s in result.stdout.strip().split('\n') if s]
-            self.assertNotIn("isolated-session", default_sessions)
+            self.assertNotIn(
+                session_name,
+                default_sessions,
+                f"Session '{session_name}' created in isolated socket '{self.tmux_socket}' "
+                f"should NOT appear in default tmux server. "
+                f"Default server sessions: {default_sessions!r}"
+            )
 
     @skip_if_no_tmux
     def test_cleanup_kills_all_sessions(self):
@@ -170,17 +208,26 @@ class TestTmuxIsolation(TmuxIsolatedTestCase):
         self.tmux_cmd("new-session", "-d", "-s", "session1")
         self.tmux_cmd("new-session", "-d", "-s", "session2")
 
-        sessions = self.list_sessions()
-        self.assertEqual(len(sessions), 2)
+        sessions_before = self.list_sessions()
+        self.assertEqual(
+            len(sessions_before),
+            2,
+            f"Expected 2 sessions before cleanup, got {len(sessions_before)}: {sessions_before!r}"
+        )
 
         # Manually trigger cleanup (normally done in tearDown)
-        subprocess.run(
+        kill_result = subprocess.run(
             ["tmux", "-L", self.tmux_socket, "kill-server"],
             capture_output=True
         )
 
         # All sessions should be gone
-        self.assertEqual(self.list_sessions(), [])
+        sessions_after = self.list_sessions()
+        self.assertEqual(
+            sessions_after,
+            [],
+            f"Expected 0 sessions after kill-server, got {len(sessions_after)}: {sessions_after!r}"
+        )
 
     @skip_if_no_tmux
     def test_run_swarm_with_socket_injection(self):
@@ -190,11 +237,20 @@ class TestTmuxIsolation(TmuxIsolatedTestCase):
         # verify the command is constructed correctly
 
         # Create a mock scenario - just verify the socket is available
-        result = self.tmux_cmd("new-session", "-d", "-s", "test")
-        self.assertEqual(result.returncode, 0)
+        session_name = "test"
+        result = self.tmux_cmd("new-session", "-d", "-s", session_name)
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Failed to create session '{session_name}'. Stderr: {result.stderr!r}"
+        )
 
         sessions = self.list_sessions()
-        self.assertIn("test", sessions)
+        self.assertIn(
+            session_name,
+            sessions,
+            f"Expected session '{session_name}' in sessions list, got: {sessions!r}"
+        )
 
 
 if __name__ == "__main__":

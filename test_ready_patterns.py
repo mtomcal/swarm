@@ -36,68 +36,124 @@ class TestReadyPatterns(unittest.TestCase):
     def test_pattern_claude_code_prompt_basic(self):
         """PATTERN-1: Output '> ' at line start detected."""
         output = "> "
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected Claude Code prompt '> ' to be detected as ready. Output: {output!r}"
+        )
 
     def test_pattern_claude_code_prompt_with_text(self):
         """PATTERN-2: '> some text' is detected."""
         output = "> some text here"
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected Claude Code prompt with text '> some text' to be detected. Output: {output!r}"
+        )
 
     def test_pattern_bypass_permissions(self):
         """PATTERN-3: 'bypass permissions' text detected."""
         output = "bypass permissions on"
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected 'bypass permissions on' to be detected as ready. Output: {output!r}"
+        )
 
     def test_pattern_bypass_permissions_variants(self):
         """PATTERN-4: Test 'bypass permissions' with different whitespace."""
         # Test with single space separator
         output1 = "bypass permissions on"
-        self.assertTrue(self._wait_for_ready_with_output(output1))
+        result1 = self._wait_for_ready_with_output(output1)
+        self.assertTrue(
+            result1,
+            f"Expected 'bypass permissions on' (single space) to match. Output: {output1!r}"
+        )
 
         # Test with multiple spaces
         output2 = "bypass   permissions   on"
-        self.assertTrue(self._wait_for_ready_with_output(output2))
+        result2 = self._wait_for_ready_with_output(output2)
+        self.assertTrue(
+            result2,
+            f"Expected 'bypass   permissions   on' (multiple spaces) to match. Output: {output2!r}"
+        )
 
         # Test with tab separator
         output3 = "bypass\tpermissions\ton"
-        self.assertTrue(self._wait_for_ready_with_output(output3))
+        result3 = self._wait_for_ready_with_output(output3)
+        self.assertTrue(
+            result3,
+            f"Expected 'bypass\\tpermissions\\ton' (tabs) to match. Output: {output3!r}"
+        )
 
         # Test with mixed whitespace
         output4 = "bypass \t permissions  \t on"
-        self.assertTrue(self._wait_for_ready_with_output(output4))
+        result4 = self._wait_for_ready_with_output(output4)
+        self.assertTrue(
+            result4,
+            f"Expected mixed whitespace variant to match. Output: {output4!r}"
+        )
 
         # Test that dot separator does NOT match (not whitespace)
         output5 = "bypass.permissions on"
-        self.assertFalse(self._wait_for_ready_with_output(output5, timeout=1))
+        result5 = self._wait_for_ready_with_output(output5, timeout=1)
+        self.assertFalse(
+            result5,
+            f"Expected 'bypass.permissions on' (dot separator) to NOT match - dot is not whitespace. Output: {output5!r}"
+        )
 
     def test_pattern_claude_code_banner(self):
         """PATTERN-5: 'Claude Code' banner detected."""
         output = "Claude Code v2.0.76"
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected 'Claude Code v2.0.76' banner to be detected. Output: {output!r}"
+        )
 
     def test_pattern_shell_prompt(self):
         """PATTERN-6: '$ ' at line start detected."""
         output = "$ "
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected shell prompt '$ ' to be detected as ready. Output: {output!r}"
+        )
 
     def test_pattern_python_repl(self):
         """PATTERN-7: '>>> ' at line start detected."""
         output = ">>> "
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected Python REPL prompt '>>> ' to be detected as ready. Output: {output!r}"
+        )
 
     def test_pattern_no_false_positives(self):
         """PATTERN-8: 'echo > file' should NOT match '^> '."""
         # Mid-line > should not match
-        output = "echo > file.txt"
-        self.assertFalse(self._wait_for_ready_with_output(output, timeout=1))
+        output1 = "echo > file.txt"
+        result1 = self._wait_for_ready_with_output(output1, timeout=1)
+        self.assertFalse(
+            result1,
+            f"Expected mid-line '>' in redirect to NOT match prompt pattern. Output: {output1!r}"
+        )
 
         # Redirect operators should not match
         output2 = "cat file.txt >> output.log"
-        self.assertFalse(self._wait_for_ready_with_output(output2, timeout=1))
+        result2 = self._wait_for_ready_with_output(output2, timeout=1)
+        self.assertFalse(
+            result2,
+            f"Expected '>>' redirect operator to NOT match prompt pattern. Output: {output2!r}"
+        )
 
         # Dollar sign in middle of line should not match
         output3 = "price is $100"
-        self.assertFalse(self._wait_for_ready_with_output(output3, timeout=1))
+        result3 = self._wait_for_ready_with_output(output3, timeout=1)
+        self.assertFalse(
+            result3,
+            f"Expected mid-line '$' in 'price is $100' to NOT match shell prompt. Output: {output3!r}"
+        )
 
     def test_pattern_multiple_patterns_first_wins(self):
         """PATTERN-9: Multiple patterns, first match returns True."""
@@ -105,13 +161,20 @@ class TestReadyPatterns(unittest.TestCase):
         output = """$ echo test
 >>> print('hello')
 > """
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected at least one pattern to match in multi-pattern output. Output: {output!r}"
+        )
 
     def test_pattern_empty_output(self):
         """PATTERN-10: Empty string handled gracefully."""
         output = ""
-        # Should return False after timeout
-        self.assertFalse(self._wait_for_ready_with_output(output, timeout=1))
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected empty output to NOT match any pattern (should timeout). Output: {output!r}"
+        )
 
     def test_pattern_claude_code_actual_startup(self):
         """PATTERN-11: Actual Claude Code v2.0.76 startup screen detected."""
@@ -127,31 +190,56 @@ class TestReadyPatterns(unittest.TestCase):
   [Opus 4.5] v2.0.76 ⎇ main ● ⏱ 1s
   ⏵⏵ bypass permissions on (shift+tab to cycle)
 """
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected actual Claude Code v2.0.76 startup screen to be detected. "
+            f"Should match banner, prompt '> ', or 'bypass permissions on'. Output length: {len(output)} chars"
+        )
 
     def test_pattern_bypass_with_unicode_prefix(self):
         """PATTERN-12: '⏵⏵ bypass permissions on' detected."""
         output = "⏵⏵ bypass permissions on (shift+tab to cycle)"
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected '⏵⏵ bypass permissions on' with Unicode prefix to be detected. Output: {output!r}"
+        )
 
     def test_pattern_prompt_with_hint_text(self):
         """PATTERN-13: '> Try "refactor..."' format detected."""
         output = '> Try "refactor <filepath>"'
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected prompt with hint text '> Try \"refactor...\"' to be detected. Output: {output!r}"
+        )
 
     def test_pattern_with_ansi_before_prompt(self):
         """Additional test: ANSI codes before prompt detected."""
         # ANSI color codes before >
-        output = "\x1b[32m> \x1b[0m"
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        output1 = "\x1b[32m> \x1b[0m"
+        result1 = self._wait_for_ready_with_output(output1)
+        self.assertTrue(
+            result1,
+            f"Expected ANSI green color code before '> ' to be detected. Output: {output1!r}"
+        )
 
         # ANSI codes before $
         output2 = "\x1b[1;34m$ \x1b[0m"
-        self.assertTrue(self._wait_for_ready_with_output(output2))
+        result2 = self._wait_for_ready_with_output(output2)
+        self.assertTrue(
+            result2,
+            f"Expected ANSI bold blue before '$ ' to be detected. Output: {output2!r}"
+        )
 
         # ANSI codes before >>>
         output3 = "\x1b[0m>>> "
-        self.assertTrue(self._wait_for_ready_with_output(output3))
+        result3 = self._wait_for_ready_with_output(output3)
+        self.assertTrue(
+            result3,
+            f"Expected ANSI reset before '>>> ' to be detected. Output: {output3!r}"
+        )
 
     def test_pattern_multiline_output(self):
         """Additional test: Pattern found on line N of multi-line output."""
@@ -160,17 +248,29 @@ Loading configuration...
 Initializing...
 > Ready for input
 """
-        self.assertTrue(self._wait_for_ready_with_output(output))
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected '> ' on line 4 of multi-line output to be detected. Output: {output!r}"
+        )
 
     def test_pattern_with_leading_whitespace(self):
         """Additional test: '> ' with leading whitespace should NOT match '^> '."""
         # Leading spaces before > should not match
-        output = "   > prompt"
-        self.assertFalse(self._wait_for_ready_with_output(output, timeout=1))
+        output1 = "   > prompt"
+        result1 = self._wait_for_ready_with_output(output1, timeout=1)
+        self.assertFalse(
+            result1,
+            f"Expected '> ' with leading spaces to NOT match (not at line start). Output: {output1!r}"
+        )
 
         # Tab before > should not match
         output2 = "\t> prompt"
-        self.assertFalse(self._wait_for_ready_with_output(output2, timeout=1))
+        result2 = self._wait_for_ready_with_output(output2, timeout=1)
+        self.assertFalse(
+            result2,
+            f"Expected '> ' with leading tab to NOT match (not at line start). Output: {output2!r}"
+        )
 
 
 if __name__ == "__main__":
