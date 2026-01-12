@@ -582,6 +582,7 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: O
         r"❯\s",                            # Unicode prompt character
         # OpenCode CLI ready patterns
         r"opencode\s+v\d+",               # "opencode v1.0.115" version banner
+        r"v\d+\.\d+\.\d+",                # "v1.0.115" version line (multiline banner)
         r"tab\s+switch\s+agent",          # UI hint at bottom
         r"ctrl\+p\s+commands",            # UI hint at bottom
         # Generic CLI prompts (ANSI-aware)

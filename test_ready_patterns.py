@@ -341,6 +341,20 @@ opencode v1.0.115
             f"Should match version banner or UI hints. Output length: {len(output)} chars"
         )
 
+    def test_pattern_opencode_multiline_version_banner(self):
+        """OPENCODE-7: OpenCode multiline version banner detected."""
+        # Issue: OpenCode TUI renders version banner across multiple lines
+        output = """
+open
+code
+v1.0.115
+"""
+        result = self._wait_for_ready_with_output(output)
+        self.assertTrue(
+            result,
+            f"Expected multiline version banner 'v1.0.115' to be detected. Output: {output!r}"
+        )
+
     def test_pattern_opencode_no_false_positives(self):
         """OPENCODE-6: OpenCode patterns should not match unrelated text."""
         # 'tab' alone should not match
