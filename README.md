@@ -81,8 +81,10 @@ swarm spawn --name security-review --tmux --tag review -- claude 'Review for sec
 swarm spawn --name perf-review --tmux --tag review -- claude 'Review for performance bottlenecks and optimization opportunities'
 swarm spawn --name style-review --tmux --tag review -- claude 'Review code style, naming conventions, and readability'
 
-# Send the code to review
-swarm send --tag review "Review this code: $(cat feature.py)"
+# Send the code to all reviewers
+for reviewer in $(swarm ls --tag review --format names); do
+    swarm send "$reviewer" "Review this code: $(cat feature.py)"
+done
 
 # Collect results
 swarm ls --tag review
@@ -135,12 +137,12 @@ Automate issue processing from beads:
 
 ```bash
 # Get next task from beads and spawn dedicated worker
-TASK=$(bd ready --format json | jq -r '.[0].id')
+TASK=$(bd ready --json | jq -r '.[0].id')
 swarm spawn --name "bd-$TASK" --worktree --tmux --ready-wait -- claude
 swarm send "bd-$TASK" "bd show $TASK && /beads:full-cycle $TASK"
 
 # Or process multiple issues in parallel
-for id in $(bd ready --format=ids | head -5); do
+for id in $(bd ready --json | jq -r '.[].id' | head -5); do
     swarm spawn --name "worker-$id" --worktree --tmux --ready-wait -- claude
     swarm send "worker-$id" "/beads:implement-task $id"
 done
@@ -159,9 +161,11 @@ swarm spawn --name test-unit --tmux --tag ci -- claude 'Run unit tests continuou
 swarm spawn --name test-integration --tmux --tag ci -- claude 'Run integration tests'
 swarm spawn --name deploy-staging --tmux --tag deploy -- claude 'Deploy to staging on green tests'
 
-# Trigger on git push
-swarm send --tag ci "Run tests for commit: $(git rev-parse HEAD)"
-swarm wait --tag ci  # Wait for tests to pass
+# Trigger on git push - send to all CI workers
+for worker in $(swarm ls --tag ci --format names); do
+    swarm send "$worker" "Run tests for commit: $(git rev-parse HEAD)"
+done
+swarm wait --all  # Wait for tests to pass
 swarm send deploy-staging "Deploy if tests passed"
 ```
 
