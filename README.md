@@ -112,7 +112,7 @@ Script that pulls ready issues from beads and spawns workers automatically:
 ```bash
 #!/bin/bash
 # Process up to 3 ready issues in parallel
-for id in $(bd ready --format=ids | head -3); do
+for id in $(bd ready --json | jq -r '.[].id' | head -3); do
     echo "Starting worker for issue $id"
     swarm spawn --name "bd-$id" --tmux --worktree --ready-wait -- claude
     swarm send "bd-$id" "/beads:full-cycle $id"
@@ -122,7 +122,7 @@ done
 swarm wait --all
 
 # Clean up completed workers and their worktrees
-swarm clean --all --rm-worktree
+swarm clean --all
 ```
 
 #### Session Completion Integration
@@ -145,14 +145,15 @@ Multiple workers can review the same work simultaneously:
 
 ```bash
 # Start parallel reviewers for a PR/issue
-for reviewer in security performance style; do
-    swarm spawn --name "review-$reviewer" --tmux --ready-wait -- claude
-    swarm send "review-$reviewer" "/beads:review swarm-mlm.3 --focus $reviewer"
+ISSUE="swarm-mlm.3"
+for aspect in security performance style; do
+    swarm spawn --name "review-$aspect" --tmux --ready-wait -- claude
+    swarm send "review-$aspect" "Review $ISSUE focusing on $aspect aspects. Run: bd show $ISSUE"
 done
 
 # Collect results
-for reviewer in security performance style; do
-    swarm logs "review-$reviewer" > review-$reviewer.log
+for aspect in security performance style; do
+    swarm logs "review-$aspect" > "review-$aspect.log"
 done
 ```
 
