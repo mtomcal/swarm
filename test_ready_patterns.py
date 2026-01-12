@@ -341,6 +341,8 @@ opencode v1.0.115
             f"Should match version banner or UI hints. Output length: {len(output)} chars"
         )
 
+
+
     def test_pattern_opencode_no_false_positives(self):
         """OPENCODE-6: OpenCode patterns should not match unrelated text."""
         # 'tab' alone should not match
@@ -357,6 +359,36 @@ opencode v1.0.115
         self.assertFalse(
             result2,
             f"Expected 'opencode is running' without version to NOT match. Output: {output2!r}"
+        )
+
+        # Version strings in installation/error messages should NOT match (false positives)
+        # These were problematic with the broad r"v\d+\.\d+\.\d+" pattern
+        output3 = "Installing package v2.3.4..."
+        result3 = self._wait_for_ready_with_output(output3, timeout=1)
+        self.assertFalse(
+            result3,
+            f"Expected 'Installing package v2.3.4...' to NOT match (version in install message). Output: {output3!r}"
+        )
+
+        output4 = "Downloading node v18.0.0"
+        result4 = self._wait_for_ready_with_output(output4, timeout=1)
+        self.assertFalse(
+            result4,
+            f"Expected 'Downloading node v18.0.0' to NOT match (version in download message). Output: {output4!r}"
+        )
+
+        output5 = "Python v3.11.0 is required"
+        result5 = self._wait_for_ready_with_output(output5, timeout=1)
+        self.assertFalse(
+            result5,
+            f"Expected 'Python v3.11.0 is required' to NOT match (version in requirement message). Output: {output5!r}"
+        )
+
+        output6 = "Error in v1.2.3: something failed"
+        result6 = self._wait_for_ready_with_output(output6, timeout=1)
+        self.assertFalse(
+            result6,
+            f"Expected 'Error in v1.2.3: something failed' to NOT match (version in error message). Output: {output6!r}"
         )
 
 
