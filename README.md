@@ -90,11 +90,69 @@ swarm ls --tag team-a  # Filter workers by tag
 
 ### With Beads (Issue Tracking)
 
+Swarm integrates seamlessly with [beads](https://github.com/steveyegge/beads) for issue-driven development workflows.
+
+#### Issue-Per-Worker Pattern
+
+Each beads issue gets its own swarm worker with isolated worktree:
+- Worker name matches issue ID for easy tracking
+- Branch name matches issue ID
+- Automatic worktree cleanup when work completes
+
 ```bash
-# Process ready issues in parallel
-for id in $(bd ready --format=ids); do
+# Start worker for specific issue
+swarm spawn --name "bd-swarm-mlm.3" --tmux --worktree --ready-wait -- claude
+swarm send "bd-swarm-mlm.3" "/beads:full-cycle swarm-mlm.3"
+```
+
+#### Automated Task Assignment
+
+Script that pulls ready issues from beads and spawns workers automatically:
+
+```bash
+#!/bin/bash
+# Process up to 3 ready issues in parallel
+for id in $(bd ready --format=ids | head -3); do
+    echo "Starting worker for issue $id"
     swarm spawn --name "bd-$id" --tmux --worktree --ready-wait -- claude
     swarm send "bd-$id" "/beads:full-cycle $id"
+done
+
+# Wait for all to complete
+swarm wait --all
+
+# Clean up completed workers and their worktrees
+swarm clean --all --rm-worktree
+```
+
+#### Session Completion Integration
+
+Swarm workers should complete the full beads workflow before exit:
+
+```bash
+# Inside worker session - complete the cycle
+/beads:full-cycle swarm-mlm.3
+
+# Then land the plane (commit, push, close issue)
+/commit "Document swarm + beads integration patterns"
+/push
+bd close swarm-mlm.3
+```
+
+#### Parallel Review Pattern
+
+Multiple workers can review the same work simultaneously:
+
+```bash
+# Start parallel reviewers for a PR/issue
+for reviewer in security performance style; do
+    swarm spawn --name "review-$reviewer" --tmux --ready-wait -- claude
+    swarm send "review-$reviewer" "/beads:review swarm-mlm.3 --focus $reviewer"
+done
+
+# Collect results
+for reviewer in security performance style; do
+    swarm logs "review-$reviewer" > review-$reviewer.log
 done
 ```
 
