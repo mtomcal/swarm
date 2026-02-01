@@ -283,6 +283,36 @@ All 16 behavioral specifications have been validated against the source code (`s
 - Session cleanup logic after worker termination (lines 508-548)
 - Init command idempotency with marker detection (lines 1687-1773)
 
+### Full Test Suite Coverage
+
+All 22 test files were analyzed during specification generation:
+
+**Explicitly Analyzed** (listed in source files):
+- test_worktree_protection.py, test_ready_patterns.py, test_ready_wait_integration.py
+- test_state_file_locking.py, test_cmd_spawn.py, test_cmd_send.py
+- test_cmd_clean.py, test_cmd_respawn.py, test_cmd_init.py
+- test_respawn_config.py, test_kill_cmd.py, test_kill_integration.py
+- tests/test_tmux_isolation.py, test_status_integration.py
+
+**Additional Coverage** (integration and edge case tests):
+- test_swarm.py, test_unit.py - General unit tests
+- test_state_file_recovery.py - Corrupted state handling (covered in state-management.md)
+- test_lifecycle_pid.py, test_lifecycle_tmux.py - End-to-end lifecycle tests
+- test_pattern_edge_cases.py - ANSI/whitespace handling (covered in ready-detection.md)
+- test_session_cleanup.py - Session cleanup logic (covered in kill.md, clean.md)
+- test_swarm_instructions.py - Init command (covered in init.md)
+
+### Function-to-Spec Mapping Verified
+
+All 34 functions in swarm.py have been mapped to specifications:
+- State management (6 functions) → state-management.md
+- Git operations (4 functions) → worktree-isolation.md
+- Tmux operations (8 functions) → tmux-integration.md
+- Ready detection (1 function) → ready-detection.md
+- Process operations (2 functions) → spawn.md, environment.md
+- Status/time utilities (3 functions) → ls.md, status.md, data-structures.md
+- Command handlers (13 functions) → Individual command specs
+
 ## Notes
 
 - P0 and P1 specs form the core behavioral contracts covering lifecycle operations
