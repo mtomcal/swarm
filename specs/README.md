@@ -109,10 +109,10 @@ Generate specs in this order:
 
 | Spec File | Description | Source Files | Status |
 |-----------|-------------|--------------|--------|
-| `spawn.md` | Worker creation in tmux/process modes, worktree integration | `swarm.py:854-978`, `test_cmd_spawn.py` | Pending |
-| `kill.md` | Worker termination, worktree cleanup, force options | `swarm.py:1330-1419`, `test_cmd_clean.py` | Pending |
-| `send.md` | Sending text input to tmux workers, broadcast | `swarm.py:1107-1159` | Pending |
-| `tmux-integration.md` | Session/window management, socket isolation, capture | `swarm.py:403-549`, `tests/test_tmux_isolation.py` | Pending |
+| `spawn.md` | Worker creation in tmux/process modes, worktree integration | `swarm.py:854-978`, `test_cmd_spawn.py` | Complete |
+| `kill.md` | Worker termination, worktree cleanup, force options | `swarm.py:1330-1419`, `test_cmd_clean.py` | Complete |
+| `send.md` | Sending text input to tmux workers, broadcast | `swarm.py:1107-1159` | Complete |
+| `tmux-integration.md` | Session/window management, socket isolation, capture | `swarm.py:403-549`, `tests/test_tmux_isolation.py` | Complete |
 
 ### P2 - Standard
 

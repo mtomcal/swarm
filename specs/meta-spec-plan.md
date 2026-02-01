@@ -6,6 +6,40 @@ This document tracks the progress of generating behavioral specifications for th
 
 ## Completed Work
 
+### 2026-02-01: P1 Important Specs Generated
+
+Generated all four P1 (Important) specification files:
+
+1. **`spawn.md`** - Complete
+   - Worker creation in tmux/process modes
+   - Worktree integration
+   - Environment variable parsing
+   - Tag assignment
+   - Ready-wait integration
+   - CLI argument documentation
+
+2. **`kill.md`** - Complete
+   - Tmux worker termination (kill-window)
+   - Process worker termination (SIGTERM/SIGKILL)
+   - Graceful shutdown with 5-second timeout
+   - Worktree removal with dirty protection
+   - Session cleanup logic
+   - --all flag for batch operations
+
+3. **`send.md`** - Complete
+   - Text transmission to tmux workers
+   - Broadcast to all workers (--all)
+   - --no-enter option
+   - Status validation before send
+
+4. **`tmux-integration.md`** - Complete
+   - Session management (create, ensure, kill)
+   - Window management (create, check exists)
+   - Hash-based session naming for user isolation
+   - Socket isolation for testing
+   - Pane capture for ready detection
+   - Send-keys with literal mode
+
 ### 2026-02-01: P0 Critical Specs Generated
 
 Generated all three P0 (Critical) specification files:
@@ -32,21 +66,19 @@ Generated all three P0 (Critical) specification files:
    - --force-dirty override behavior
 
 ### Source Files Analyzed
-- `swarm.py` (lines 66-607, 854-1773)
+- `swarm.py` (lines 66-978, 1107-1419)
 - `test_worktree_protection.py`
 - `test_ready_patterns.py`
 - `test_ready_wait_integration.py`
 - `test_state_file_locking.py`
+- `test_cmd_spawn.py`
+- `test_kill_cmd.py`
+- `test_kill_integration.py`
+- `tests/test_tmux_isolation.py`
 
 ## Remaining Work
 
-### P1 - Important (Next Priority)
-- [ ] `spawn.md` - Worker creation in tmux/process modes
-- [ ] `kill.md` - Worker termination, worktree cleanup
-- [ ] `send.md` - Sending text input to tmux workers
-- [ ] `tmux-integration.md` - Session/window management
-
-### P2 - Standard
+### P2 - Standard (Next Priority)
 - [ ] `ls.md` - List workers with filters
 - [ ] `status.md` - Check worker status
 - [ ] `logs.md` - View worker output
@@ -74,10 +106,22 @@ All P0 specs have been validated against the checklist:
 | ready-detection.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | worktree-isolation.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+### P1 Specs Validation
+
+All P1 specs have been validated against the checklist:
+
+| Spec | Overview | Inputs | Outputs | Errors | Scenarios | Recovery | Dependencies |
+|------|----------|--------|---------|--------|-----------|----------|--------------|
+| spawn.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| kill.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| send.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| tmux-integration.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
 ## Notes
 
-- The P0 specs form the foundational behavioral contracts that other specs will reference
+- P0 and P1 specs form the core behavioral contracts covering lifecycle operations
 - `state-management.md` is the foundational spec with no internal dependencies
-- `ready-detection.md` depends on tmux-integration (to be created)
+- `tmux-integration.md` is referenced by spawn, kill, send, and ready-detection
 - `worktree-isolation.md` depends on state-management for WorktreeInfo storage
+- `spawn.md` is the most heavily cross-referenced spec (creates workers using all other P0/P1 features)
 - Cross-references between specs are noted in Dependencies sections
