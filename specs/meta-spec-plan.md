@@ -6,6 +6,18 @@ This document tracks the progress of generating behavioral specifications for th
 
 ## Completed Work
 
+### 2026-02-01: P2 Standard Specs Started
+
+Generated the first P2 (Standard) specification file:
+
+1. **`ls.md`** - Complete
+   - List workers with filters (status, tags)
+   - Output formats: table, json, names
+   - Status refresh via tmux/process checks
+   - Table column formatting with relative time
+   - JSON schema documentation
+   - 11 scenarios covering filters and edge cases
+
 ### 2026-02-01: P1 Important Specs Generated
 
 Generated all four P1 (Important) specification files:
@@ -79,7 +91,7 @@ Generated all three P0 (Critical) specification files:
 ## Remaining Work
 
 ### P2 - Standard (Next Priority)
-- [ ] `ls.md` - List workers with filters
+- [x] `ls.md` - List workers with filters
 - [ ] `status.md` - Check worker status
 - [ ] `logs.md` - View worker output
 - [ ] `wait.md` - Block until worker exits
@@ -116,6 +128,12 @@ All P1 specs have been validated against the checklist:
 | kill.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | send.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | tmux-integration.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+### P2 Specs Validation
+
+| Spec | Overview | Inputs | Outputs | Errors | Scenarios | Recovery | Dependencies |
+|------|----------|--------|---------|--------|-----------|----------|--------------|
+| ls.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Notes
 
