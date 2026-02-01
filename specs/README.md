@@ -101,9 +101,9 @@ Generate specs in this order:
 
 | Spec File | Description | Source Files | Status |
 |-----------|-------------|--------------|--------|
-| `worktree-isolation.md` | Git worktree creation, branch isolation, dirty state detection, cleanup | `swarm.py:295-397`, `test_worktree_protection.py` | Pending |
-| `ready-detection.md` | Agent CLI readiness patterns, wait behavior, timeout handling | `swarm.py:550-607`, `test_ready_patterns.py`, `test_ready_wait_integration.py` | Pending |
-| `state-management.md` | Worker registry, JSON persistence, fcntl locking, atomic operations | `swarm.py:157-277`, `test_state_file_locking.py` | Pending |
+| `worktree-isolation.md` | Git worktree creation, branch isolation, dirty state detection, cleanup | `swarm.py:295-397`, `test_worktree_protection.py` | Complete |
+| `ready-detection.md` | Agent CLI readiness patterns, wait behavior, timeout handling | `swarm.py:550-607`, `test_ready_patterns.py`, `test_ready_wait_integration.py` | Complete |
+| `state-management.md` | Worker registry, JSON persistence, fcntl locking, atomic operations | `swarm.py:157-277`, `test_state_file_locking.py` | Complete |
 
 ### P1 - Important
 
