@@ -132,9 +132,9 @@ Generate specs in this order:
 
 | Spec File | Description | Source Files | Status |
 |-----------|-------------|--------------|--------|
-| `data-structures.md` | Worker, TmuxInfo, WorktreeInfo dataclass schemas | `swarm.py:66-129` | Pending |
-| `environment.md` | Python 3.10+, tmux, git, fcntl, directory structure | `setup.sh`, `Makefile` | Pending |
-| `cli-interface.md` | Argument parsing, exit codes, output formats | `swarm.py:709-851` | Pending |
+| `data-structures.md` | Worker, TmuxInfo, WorktreeInfo dataclass schemas | `swarm.py:66-129` | Complete |
+| `environment.md` | Python 3.10+, tmux, git, fcntl, directory structure | `setup.sh`, `Makefile` | Complete |
+| `cli-interface.md` | Argument parsing, exit codes, output formats | `swarm.py:709-851` | Complete |
 
 ---
 

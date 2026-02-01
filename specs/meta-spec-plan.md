@@ -1,10 +1,41 @@
 # Swarm Spec Generation Plan
 
-## Status: P0, P1, P2 Complete - Supporting Remaining
+## Status: ALL SPECS COMPLETE
 
 This document tracks the progress of generating behavioral specifications for the Swarm project.
 
 ## Completed Work
+
+### 2026-02-01: Supporting Specs Completed - ALL SPECS DONE
+
+Generated all three Supporting specification files:
+
+1. **`data-structures.md`** - Complete
+   - Worker, TmuxInfo, WorktreeInfo dataclass schemas
+   - JSON serialization/deserialization behavior
+   - Field constraints and defaults
+   - to_dict() and from_dict() methods
+   - 7 scenarios covering serialization edge cases
+
+2. **`environment.md`** - Complete
+   - Python 3.10+ requirements and standard library modules
+   - tmux command requirements and features used
+   - git worktree command requirements
+   - Unix fcntl locking requirements
+   - Directory structure (~/.swarm/)
+   - Installation script behavior
+   - 7 scenarios covering platform and installation cases
+
+3. **`cli-interface.md`** - Complete
+   - All 13 subcommands documented
+   - Exit code semantics (0/1/2) per command
+   - Error message format
+   - Argument parsing rules and validation
+   - Output formats (table, json, names)
+   - Filtering options
+   - 10 scenarios covering CLI edge cases
+
+**All 16 behavioral specifications are now complete.**
 
 ### 2026-02-01: P2 Standard Specs Completed
 
@@ -173,10 +204,10 @@ Generated all three P0 (Critical) specification files:
 - [x] `attach.md` - Interactive tmux attachment
 - [x] `init.md` - Inject swarm docs into projects
 
-### Supporting (Next Priority)
-- [ ] `data-structures.md` - Worker, TmuxInfo, WorktreeInfo schemas
-- [ ] `environment.md` - Python 3.10+, tmux, git requirements
-- [ ] `cli-interface.md` - Argument parsing, exit codes
+### Supporting (Complete)
+- [x] `data-structures.md` - Worker, TmuxInfo, WorktreeInfo schemas
+- [x] `environment.md` - Python 3.10+, tmux, git requirements
+- [x] `cli-interface.md` - Argument parsing, exit codes
 
 ## Validation Status
 
@@ -216,6 +247,16 @@ All P2 specs have been validated against the checklist:
 | interrupt-eof.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | attach.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | init.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+### Supporting Specs Validation
+
+All Supporting specs have been validated against the checklist:
+
+| Spec | Overview | Inputs | Outputs | Errors | Scenarios | Recovery | Dependencies |
+|------|----------|--------|---------|--------|-----------|----------|--------------|
+| data-structures.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| environment.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| cli-interface.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Notes
 
