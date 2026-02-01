@@ -1,10 +1,64 @@
 # Swarm Spec Generation Plan
 
-## Status: In Progress
+## Status: P0, P1, P2 Complete - Supporting Remaining
 
 This document tracks the progress of generating behavioral specifications for the Swarm project.
 
 ## Completed Work
+
+### 2026-02-01: P2 Standard Specs Completed
+
+Generated all remaining P2 (Standard) specification files:
+
+3. **`logs.md`** - Complete
+   - View worker output from tmux pane or log files
+   - History mode with scrollback buffer
+   - Follow mode with 1-second polling
+   - Non-tmux workers use `~/.swarm/logs/<name>.stdout.log`
+   - 8 scenarios covering tmux, non-tmux, follow, and error cases
+
+4. **`wait.md`** - Complete
+   - Block until worker(s) exit
+   - Support for single worker or --all
+   - Timeout handling with exit code 1
+   - 1-second polling interval
+   - 9 scenarios covering single, all, timeout, and edge cases
+
+5. **`clean.md`** - Complete
+   - Remove stopped workers from state
+   - Delete log files and optionally worktrees
+   - Dirty worktree protection (--force-dirty override)
+   - Tmux session cleanup when no remaining windows
+   - Status refresh before filtering in --all mode
+   - 11 scenarios covering various cleanup scenarios
+
+6. **`respawn.md`** - Complete
+   - Restart dead workers with original configuration
+   - Preserves cmd, env, tags, cwd, worktree settings
+   - --clean-first option to remove worktree before respawn
+   - Kills running workers if still active
+   - 10 scenarios covering process, tmux, worktree cases
+
+7. **`interrupt-eof.md`** - Complete
+   - Send Ctrl-C (interrupt) to tmux workers
+   - Send Ctrl-D (eof) to tmux workers
+   - --all flag for interrupt (broadcast)
+   - Status validation before sending
+   - 10 scenarios covering both commands
+
+8. **`attach.md`** - Complete
+   - Interactive tmux attachment via execvp
+   - Window selection before attach
+   - Socket handling for isolated sessions
+   - 6 scenarios covering attach behavior
+
+9. **`init.md`** - Complete
+   - Initialize project with swarm instructions
+   - Auto-discovery of AGENTS.md or CLAUDE.md
+   - Idempotent marker detection
+   - --force to replace existing section
+   - --dry-run preview
+   - 13 scenarios covering file discovery and edge cases
 
 ### 2026-02-01: P2 Standard Specs Continued
 
@@ -90,12 +144,17 @@ Generated all three P0 (Critical) specification files:
    - --force-dirty override behavior
 
 ### Source Files Analyzed
-- `swarm.py` (lines 66-978, 1065-1419)
+- `swarm.py` (full file: lines 66-1777)
 - `test_worktree_protection.py`
 - `test_ready_patterns.py`
 - `test_ready_wait_integration.py`
 - `test_state_file_locking.py`
 - `test_cmd_spawn.py`
+- `test_cmd_send.py`
+- `test_cmd_clean.py`
+- `test_cmd_respawn.py`
+- `test_cmd_init.py`
+- `test_respawn_config.py`
 - `test_kill_cmd.py`
 - `test_kill_integration.py`
 - `tests/test_tmux_isolation.py`
@@ -103,18 +162,18 @@ Generated all three P0 (Critical) specification files:
 
 ## Remaining Work
 
-### P2 - Standard (Next Priority)
+### P2 - Standard (Complete)
 - [x] `ls.md` - List workers with filters
 - [x] `status.md` - Check worker status
-- [ ] `logs.md` - View worker output
-- [ ] `wait.md` - Block until worker exits
-- [ ] `clean.md` - Remove stopped workers
-- [ ] `respawn.md` - Restart dead workers
-- [ ] `interrupt-eof.md` - Send Ctrl-C/Ctrl-D
-- [ ] `attach.md` - Interactive tmux attachment
-- [ ] `init.md` - Inject swarm docs into projects
+- [x] `logs.md` - View worker output
+- [x] `wait.md` - Block until worker exits
+- [x] `clean.md` - Remove stopped workers
+- [x] `respawn.md` - Restart dead workers
+- [x] `interrupt-eof.md` - Send Ctrl-C/Ctrl-D
+- [x] `attach.md` - Interactive tmux attachment
+- [x] `init.md` - Inject swarm docs into projects
 
-### Supporting
+### Supporting (Next Priority)
 - [ ] `data-structures.md` - Worker, TmuxInfo, WorktreeInfo schemas
 - [ ] `environment.md` - Python 3.10+, tmux, git requirements
 - [ ] `cli-interface.md` - Argument parsing, exit codes
@@ -144,10 +203,19 @@ All P1 specs have been validated against the checklist:
 
 ### P2 Specs Validation
 
+All P2 specs have been validated against the checklist:
+
 | Spec | Overview | Inputs | Outputs | Errors | Scenarios | Recovery | Dependencies |
 |------|----------|--------|---------|--------|-----------|----------|--------------|
 | ls.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | status.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| logs.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| wait.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| clean.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| respawn.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| interrupt-eof.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| attach.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| init.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Notes
 
