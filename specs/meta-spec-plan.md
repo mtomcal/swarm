@@ -304,14 +304,34 @@ All 22 test files were analyzed during specification generation:
 
 ### Function-to-Spec Mapping Verified
 
-All 34 functions in swarm.py have been mapped to specifications:
-- State management (6 functions) → state-management.md
+All 33 standalone functions and 11 class methods in swarm.py have been mapped to specifications:
+- State management (6 functions + 9 class methods) → state-management.md
 - Git operations (4 functions) → worktree-isolation.md
 - Tmux operations (8 functions) → tmux-integration.md
 - Ready detection (1 function) → ready-detection.md
 - Process operations (2 functions) → spawn.md, environment.md
 - Status/time utilities (3 functions) → ls.md, status.md, data-structures.md
 - Command handlers (13 functions) → Individual command specs
+- Data structure methods (2 Worker class methods) → data-structures.md
+
+### Independent Validation (2026-02-01)
+
+A second validation pass confirmed all behavioral contracts are captured:
+
+**Spec File Verification:**
+- 19 spec files exist (16 behavioral + 2 meta docs + README)
+- All 19 files contain required sections: Overview, Dependencies, Behavior, Scenarios, Edge Cases, Recovery Procedures
+
+**Source Code Coverage:**
+- 4 classes: TmuxInfo, WorktreeInfo, Worker, State → data-structures.md, state-management.md
+- 33 standalone functions: all mapped to appropriate specs
+- 11 class methods: all documented in state-management.md and data-structures.md
+- 5 constants: SWARM_DIR, STATE_FILE, STATE_LOCK_FILE, LOGS_DIR, SWARM_INSTRUCTIONS → environment.md, state-management.md, init.md
+- 13 CLI commands: all have dedicated specs or are documented in cli-interface.md
+
+**Test Suite Mapping:**
+- 22 test files verified present (21 root + 1 tests/)
+- Test behaviors converted to Given/When/Then scenarios in specs
 
 ## Notes
 
