@@ -119,7 +119,7 @@ Generate specs in this order:
 | Spec File | Description | Source Files | Status |
 |-----------|-------------|--------------|--------|
 | `ls.md` | List workers with filters (status, tags, format) | `swarm.py:980-1063` | Complete |
-| `status.md` | Check single worker status, exit codes | `swarm.py:1065-1105` | Pending |
+| `status.md` | Check single worker status, exit codes | `swarm.py:1065-1105` | Complete |
 | `logs.md` | View worker output, history, follow mode | `swarm.py:1218-1288` | Pending |
 | `wait.md` | Block until worker exits, timeout, exit code propagation | `swarm.py:1290-1328` | Pending |
 | `clean.md` | Remove stopped workers, log cleanup | `swarm.py:1458-1549`, `test_cmd_clean.py` | Pending |

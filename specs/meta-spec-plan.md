@@ -6,6 +6,18 @@ This document tracks the progress of generating behavioral specifications for th
 
 ## Completed Work
 
+### 2026-02-01: P2 Standard Specs Continued
+
+Generated the second P2 (Standard) specification file:
+
+2. **`status.md`** - Complete
+   - Check single worker status with name lookup
+   - Exit code semantics: 0=running, 1=stopped, 2=not found
+   - Status line format with tmux/pid details
+   - Worktree information inclusion
+   - Uptime display with relative time
+   - 8 scenarios covering running, stopped, not found, and edge cases
+
 ### 2026-02-01: P2 Standard Specs Started
 
 Generated the first P2 (Standard) specification file:
@@ -78,7 +90,7 @@ Generated all three P0 (Critical) specification files:
    - --force-dirty override behavior
 
 ### Source Files Analyzed
-- `swarm.py` (lines 66-978, 1107-1419)
+- `swarm.py` (lines 66-978, 1065-1419)
 - `test_worktree_protection.py`
 - `test_ready_patterns.py`
 - `test_ready_wait_integration.py`
@@ -87,12 +99,13 @@ Generated all three P0 (Critical) specification files:
 - `test_kill_cmd.py`
 - `test_kill_integration.py`
 - `tests/test_tmux_isolation.py`
+- `test_status_integration.py`
 
 ## Remaining Work
 
 ### P2 - Standard (Next Priority)
 - [x] `ls.md` - List workers with filters
-- [ ] `status.md` - Check worker status
+- [x] `status.md` - Check worker status
 - [ ] `logs.md` - View worker output
 - [ ] `wait.md` - Block until worker exits
 - [ ] `clean.md` - Remove stopped workers
@@ -134,6 +147,7 @@ All P1 specs have been validated against the checklist:
 | Spec | Overview | Inputs | Outputs | Errors | Scenarios | Recovery | Dependencies |
 |------|----------|--------|---------|--------|-----------|----------|--------------|
 | ls.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| status.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Notes
 
