@@ -258,6 +258,31 @@ All Supporting specs have been validated against the checklist:
 | environment.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | cli-interface.md | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+## Final Validation Summary
+
+### Validation Date: 2026-02-01
+
+All 16 behavioral specifications have been validated against the source code (`swarm.py` lines 1-1777) and test suite (22 test files). The validation confirms:
+
+1. **All commands documented**: spawn, ls, status, send, interrupt, eof, attach, logs, kill, wait, clean, respawn, init
+2. **All data structures documented**: Worker, TmuxInfo, WorktreeInfo with complete field specifications
+3. **All behaviors captured**: Including edge cases, error conditions, and recovery procedures
+4. **Test coverage mapped**: Key test scenarios from test files converted to Given/When/Then format
+5. **Cross-references validated**: All internal dependencies between specs verified
+
+### Source Files Validated
+- `swarm.py` (1777 lines) - Primary implementation
+- 22 test files covering unit tests, integration tests, and edge cases
+
+### Key Behavioral Contracts Verified
+- State management with fcntl locking (lines 131-277)
+- Worktree isolation and dirty detection (lines 295-397)
+- Ready detection patterns for Claude Code, OpenCode (lines 550-607)
+- Tmux session/window management (lines 403-549)
+- Process spawning with SIGTERM/SIGKILL handling (lines 614-684)
+- Session cleanup logic after worker termination (lines 508-548)
+- Init command idempotency with marker detection (lines 1687-1773)
+
 ## Notes
 
 - P0 and P1 specs form the core behavioral contracts covering lifecycle operations
