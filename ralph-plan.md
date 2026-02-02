@@ -192,19 +192,48 @@ Test file: `test_cmd_ralph.py`
 | TestRalphStatusShowsInactivityMode | 1 | Passing |
 | TestDetectInactivityErrorHandling | 1 | Passing |
 | TestDetectInactivityReadyPatterns | 3 | Passing |
-| **Total** | **185** | **All Passing** |
+| TestRalphRunSigterm | 5 | Passing |
+| TestRalphRunLoopInternal | 2 | Passing |
+| **Total** | **192** | **All Passing** |
 
 **Coverage**: Ralph-specific code coverage is **95%+** (all ralph functions well tested)
 
 ## Next Steps
 
-All phases are now COMPLETE. The ralph loop feature is fully implemented including the `--inactivity-mode` flag.
+All phases are now COMPLETE. The ralph loop feature is fully implemented including:
+- `--inactivity-mode` flag
+- Graceful shutdown on SIGTERM
 
 Possible future enhancements:
 - Add integration tests with real tmux sessions
-- Add graceful shutdown on SIGTERM
 
 ## Recent Changes
+
+### 2026-02-02: Added Graceful Shutdown on SIGTERM
+
+- Added SIGTERM signal handler to `cmd_ralph_run()` for graceful shutdown
+- On SIGTERM, the loop is paused and the current agent is allowed to complete
+- Ralph state is set to "paused" with a PAUSE log event (reason=sigterm)
+- Signal handler is properly restored on exit or exception
+- Added `_run_ralph_loop()` internal function to separate signal handling from loop logic
+- Added PAUSE event support to `log_ralph_iteration()` function
+- Added 7 new tests for SIGTERM handling (total: 192 tests)
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 2601-2643 (cmd_ralph_run with signal handling), lines 2645+ (_run_ralph_loop)
+- **Log Format**: `[PAUSE] loop paused reason=sigterm`
+- **Tests**: `test_cmd_ralph.py` with 2 new test classes:
+  - `TestRalphRunSigterm`: 5 tests for SIGTERM signal handling
+  - `TestRalphRunLoopInternal`: 2 tests for internal loop function
+
+#### Behavior
+
+When SIGTERM is received during `swarm ralph run`:
+1. Print message: `[ralph] <name>: received SIGTERM, pausing loop (current agent will complete)`
+2. Set ralph state status to "paused"
+3. Log PAUSE event with reason=sigterm
+4. Exit the loop gracefully (current agent continues running)
 
 ### 2026-02-02: Added `--inactivity-mode` Flag
 

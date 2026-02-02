@@ -279,6 +279,9 @@ def log_ralph_iteration(worker_name: str, event: str, **kwargs) -> None:
         total_iterations = kwargs.get('total_iterations', 0)
         reason = kwargs.get('reason', 'max_iterations')
         message = f"loop complete after {total_iterations} iterations reason={reason}"
+    elif event == "PAUSE":
+        reason = kwargs.get('reason', 'manual')
+        message = f"loop paused reason={reason}"
     else:
         message = kwargs.get('message', '')
 
@@ -2606,6 +2609,45 @@ def cmd_ralph_run(args) -> None:
     2. Checks for done pattern
     3. Restarts the worker with fresh prompt
     4. Handles failures with exponential backoff
+
+    Graceful shutdown: On SIGTERM, the loop is paused and the current
+    agent is allowed to complete before exiting.
+
+    Args:
+        args: Namespace with name attribute
+    """
+    import re
+
+    # Track if we received SIGTERM for graceful shutdown
+    sigterm_received = False
+
+    def sigterm_handler(signum, frame):
+        """Handle SIGTERM by pausing the ralph loop gracefully."""
+        nonlocal sigterm_received
+        sigterm_received = True
+        print(f"\n[ralph] {args.name}: received SIGTERM, pausing loop (current agent will complete)")
+        # Pause the ralph state so the loop exits gracefully
+        ralph_state = load_ralph_state(args.name)
+        if ralph_state and ralph_state.status == "running":
+            ralph_state.status = "paused"
+            save_ralph_state(ralph_state)
+            log_ralph_iteration(args.name, "PAUSE", reason="sigterm")
+
+    # Install signal handler for graceful shutdown
+    old_sigterm_handler = signal.signal(signal.SIGTERM, sigterm_handler)
+
+    try:
+        _run_ralph_loop(args)
+    finally:
+        # Restore original signal handler
+        signal.signal(signal.SIGTERM, old_sigterm_handler)
+
+
+def _run_ralph_loop(args) -> None:
+    """Internal implementation of the ralph loop.
+
+    This is the actual loop logic, separated from cmd_ralph_run to allow
+    for signal handler setup and cleanup.
 
     Args:
         args: Namespace with name attribute

@@ -4766,5 +4766,320 @@ class TestDetectInactivityReadyPatterns(unittest.TestCase):
         self.assertTrue(result)
 
 
+class TestRalphRunSigterm(unittest.TestCase):
+    """Test SIGTERM graceful shutdown for ralph run."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create prompt file
+        self.prompt_file = Path(self.temp_dir) / "PROMPT.md"
+        self.prompt_file.write_text("test prompt")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm._run_ralph_loop')
+    def test_cmd_ralph_run_installs_sigterm_handler(self, mock_run_loop):
+        """Test that cmd_ralph_run installs a SIGTERM handler."""
+        import signal as sig
+
+        # Track if signal handler was installed
+        original_handler = sig.getsignal(sig.SIGTERM)
+
+        # Create a worker and ralph state
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            current_iteration=1,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='test-worker')
+        swarm.cmd_ralph_run(args)
+
+        # The loop should have been called
+        mock_run_loop.assert_called_once_with(args)
+
+        # Signal handler should be restored after
+        self.assertEqual(sig.getsignal(sig.SIGTERM), original_handler)
+
+    @patch('swarm._run_ralph_loop')
+    def test_sigterm_handler_pauses_ralph_state(self, mock_run_loop):
+        """Test that SIGTERM handler pauses the ralph state."""
+        import signal as sig
+
+        # Create a worker and ralph state
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            current_iteration=1,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00',
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Simulate what happens when SIGTERM is received during the loop
+        def simulate_sigterm(*a, **kw):
+            # Get the current signal handler (which should be the custom one)
+            handler = sig.getsignal(sig.SIGTERM)
+            # Call it with dummy args to simulate SIGTERM
+            if callable(handler) and handler != sig.SIG_DFL:
+                with patch('builtins.print'):
+                    handler(sig.SIGTERM, None)
+
+        mock_run_loop.side_effect = simulate_sigterm
+
+        args = Namespace(name='test-worker')
+        with patch('builtins.print'):
+            swarm.cmd_ralph_run(args)
+
+        # Check that ralph state was paused
+        ralph_state = swarm.load_ralph_state('test-worker')
+        self.assertEqual(ralph_state.status, 'paused')
+
+    @patch('swarm._run_ralph_loop')
+    def test_sigterm_logs_pause_event(self, mock_run_loop):
+        """Test that SIGTERM logs a PAUSE event."""
+        import signal as sig
+
+        # Create a worker and ralph state
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            current_iteration=1,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00',
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Simulate what happens when SIGTERM is received during the loop
+        def simulate_sigterm(*a, **kw):
+            handler = sig.getsignal(sig.SIGTERM)
+            if callable(handler) and handler != sig.SIG_DFL:
+                with patch('builtins.print'):
+                    handler(sig.SIGTERM, None)
+
+        mock_run_loop.side_effect = simulate_sigterm
+
+        args = Namespace(name='test-worker')
+        with patch('builtins.print'):
+            swarm.cmd_ralph_run(args)
+
+        # Check that PAUSE event was logged
+        log_path = swarm.get_ralph_iterations_log_path('test-worker')
+        log_content = log_path.read_text()
+        self.assertIn('[PAUSE]', log_content)
+        self.assertIn('reason=sigterm', log_content)
+
+    @patch('swarm._run_ralph_loop')
+    def test_sigterm_does_not_pause_already_paused(self, mock_run_loop):
+        """Test that SIGTERM does not change already paused state."""
+        import signal as sig
+
+        # Create a worker and ralph state (already paused)
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            current_iteration=5,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00',
+            status='paused'  # Already paused
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Simulate what happens when SIGTERM is received
+        def simulate_sigterm(*a, **kw):
+            handler = sig.getsignal(sig.SIGTERM)
+            if callable(handler) and handler != sig.SIG_DFL:
+                with patch('builtins.print'):
+                    handler(sig.SIGTERM, None)
+
+        mock_run_loop.side_effect = simulate_sigterm
+
+        args = Namespace(name='test-worker')
+        with patch('builtins.print'):
+            swarm.cmd_ralph_run(args)
+
+        # Check that ralph state is still paused with same iteration
+        ralph_state = swarm.load_ralph_state('test-worker')
+        self.assertEqual(ralph_state.status, 'paused')
+        self.assertEqual(ralph_state.current_iteration, 5)
+
+    @patch('swarm._run_ralph_loop')
+    def test_signal_handler_restored_on_exception(self, mock_run_loop):
+        """Test that signal handler is restored even if loop raises exception."""
+        import signal as sig
+
+        original_handler = sig.getsignal(sig.SIGTERM)
+
+        # Create a worker and ralph state
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            current_iteration=1,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        mock_run_loop.side_effect = RuntimeError("Test exception")
+
+        args = Namespace(name='test-worker')
+        with self.assertRaises(RuntimeError):
+            swarm.cmd_ralph_run(args)
+
+        # Signal handler should be restored even after exception
+        self.assertEqual(sig.getsignal(sig.SIGTERM), original_handler)
+
+
+class TestRalphRunLoopInternal(unittest.TestCase):
+    """Test _run_ralph_loop internal function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create prompt file
+        self.prompt_file = Path(self.temp_dir) / "PROMPT.md"
+        self.prompt_file.write_text("test prompt")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_run_ralph_loop_worker_not_found(self):
+        """Test _run_ralph_loop exits when worker not found."""
+        args = Namespace(name='nonexistent-worker')
+
+        with self.assertRaises(SystemExit) as cm:
+            swarm._run_ralph_loop(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_run_ralph_loop_not_ralph_worker(self):
+        """Test _run_ralph_loop exits when not a ralph worker."""
+        # Create a regular worker (no ralph state)
+        worker = swarm.Worker(
+            name='regular-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        args = Namespace(name='regular-worker')
+
+        with self.assertRaises(SystemExit) as cm:
+            swarm._run_ralph_loop(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
