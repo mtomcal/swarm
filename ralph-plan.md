@@ -55,18 +55,33 @@ Add `--ralph` flag to spawn command with required dependencies.
 - **Tests**: `test_cmd_ralph.py` with 92 comprehensive tests (8 new tests for spawn state creation)
 - **Coverage**: All ralph-specific executable code is tested
 
-### Phase 3: Outer Loop Execution (NOT STARTED)
+### Phase 3: Outer Loop Execution (COMPLETE)
 
 The main ralph loop that manages agent lifecycle.
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Loop initialization | Not Started | Create ralph state file, set iteration to 0 |
-| Iteration management | Not Started | Increment counter, read prompt, spawn agent |
-| Inactivity detection | Not Started | Detect when agent becomes stuck |
-| Agent restart | Not Started | Kill current worker, spawn fresh agent |
-| Done pattern matching | Not Started | Stop loop when pattern matched |
-| Max iterations check | Not Started | Stop loop when limit reached |
+| `swarm ralph run <name>` | Complete | Command to run the ralph loop for a worker |
+| Loop initialization | Complete | Create ralph state file, set iteration to 0 |
+| Iteration management | Complete | Increment counter, read prompt, spawn agent |
+| Inactivity detection | Complete | Detect when agent becomes stuck (output-based) |
+| Agent restart | Complete | Kill current worker, spawn fresh agent |
+| Done pattern matching | Complete | Stop loop when pattern matched in output |
+| Max iterations check | Complete | Stop loop when limit reached |
+| Prompt file re-reading | Complete | Fresh read every iteration (allows editing mid-loop) |
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 2213-2444 (helper functions), 2445-2689 (cmd_ralph_run)
+- **Tests**: `test_cmd_ralph.py` with 22 new tests for Phase 3 (total: 133 tests)
+- **Helper functions**:
+  - `wait_for_worker_exit()`: Monitor worker for exit or timeout
+  - `detect_inactivity()`: Output-based inactivity detection
+  - `check_done_pattern()`: Regex pattern matching on output
+  - `format_duration()`: Human-readable duration formatting
+  - `kill_worker_for_ralph()`: Kill worker without removing from state
+  - `spawn_worker_for_ralph()`: Spawn fresh worker for iteration
+  - `send_prompt_to_worker()`: Send prompt content to agent
 
 ### Phase 4: Ralph State Management (COMPLETE)
 
@@ -109,14 +124,21 @@ Persist ralph loop state between iterations.
 - **ralph pause**: Sets status to "paused", warns if already paused
 - **ralph resume**: Sets status to "running", warns if not paused
 
-### Phase 6: Failure Handling (NOT STARTED)
+### Phase 6: Failure Handling (COMPLETE)
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Consecutive failure tracking | Not Started | Track non-zero exit codes |
-| Exponential backoff | Not Started | Wait before retry |
-| Stop after 5 failures | Not Started | Exit loop with code 1 |
-| Backoff formula | Not Started | `min(2^(n-1), 300)` seconds |
+| Consecutive failure tracking | Complete | Track non-zero exit codes in ralph state |
+| Exponential backoff | Complete | Wait before retry using `min(2^(n-1), 300)` seconds |
+| Stop after 5 failures | Complete | Exit loop with code 1 after 5 consecutive failures |
+| Backoff formula | Complete | `min(2^(n-1), 300)` seconds implemented |
+
+#### Implementation Details
+
+- **Location**: Integrated into `cmd_ralph_run()` in `swarm.py`
+- **Failure tracking**: Uses `consecutive_failures` and `total_failures` in RalphState
+- **Backoff calculation**: `backoff = min(2 ** (consecutive_failures - 1), 300)`
+- **Reset on success**: Consecutive failures reset to 0 when iteration succeeds
 
 ## Testing
 
@@ -147,17 +169,48 @@ Test file: `test_cmd_ralph.py`
 | TestRalphIterationLogging | 10 | Passing |
 | TestWorkerMetadata | 5 | Passing |
 | TestRalphSpawnMetadata | 5 | Passing |
-| **Total** | **111** | **All Passing** |
+| TestRalphRunSubparser | 2 | Passing |
+| TestRalphHelperFunctions | 4 | Passing |
+| TestCmdRalphRun | 8 | Passing |
+| TestRalphRunDispatch | 1 | Passing |
+| TestCheckDonePattern | 2 | Passing |
+| TestDetectInactivity | 1 | Passing |
+| TestKillWorkerForRalph | 2 | Passing |
+| TestSpawnWorkerForRalph | 1 | Passing |
+| TestSendPromptToWorker | 2 | Passing |
+| **Total** | **133** | **All Passing** |
 
 ## Next Steps
 
-1. ~~Phase 2: Add `--ralph` flag to spawn with validation~~ (COMPLETE)
-2. Phase 3: Implement outer loop execution (main ralph loop logic)
-3. ~~Phase 4: Add ralph state management~~ (COMPLETE - RalphState dataclass and persistence)
-4. ~~Phase 5: Implement pause/resume commands~~ (COMPLETE)
-5. Phase 6: Add failure handling with backoff
+All phases are now COMPLETE. The ralph loop feature is fully implemented.
+
+Possible future enhancements:
+- Add `--inactivity-mode` flag to select detection method (output|ready|both)
+- Add integration tests with real tmux sessions
+- Add `swarm ralph list` to show all ralph workers
+- Add graceful shutdown on SIGTERM
 
 ## Recent Changes
+
+### 2026-02-02: Completed Phase 3 - Outer Loop Execution
+
+- Added `swarm ralph run <name>` command to run the ralph loop
+- Added helper functions for loop execution:
+  - `wait_for_worker_exit()`: Monitor worker for exit or timeout
+  - `detect_inactivity()`: Output-based inactivity detection
+  - `check_done_pattern()`: Regex pattern matching on output
+  - `format_duration()`: Human-readable duration formatting
+  - `kill_worker_for_ralph()`: Kill worker without removing from state
+  - `spawn_worker_for_ralph()`: Spawn fresh worker for iteration
+  - `send_prompt_to_worker()`: Send prompt content to agent
+- Added `cmd_ralph_run()` with main loop logic:
+  - Iteration management with prompt file re-reading
+  - Worker monitoring and restart
+  - Done pattern detection
+  - Max iterations check
+  - Pause detection during loop
+- Added 22 new tests for Phase 3 functionality (total: 133 tests)
+- Phase 6 (Failure Handling) integrated into `cmd_ralph_run()`
 
 ### 2026-02-02: Completed Phase 4 - Ralph State Management
 

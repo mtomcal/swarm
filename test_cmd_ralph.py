@@ -2607,5 +2607,929 @@ class TestRalphSpawnMetadata(unittest.TestCase):
         self.assertNotEqual(ralph_state.last_iteration_started, '')
 
 
+class TestRalphRunSubparser(unittest.TestCase):
+    """Test that ralph run subparser is correctly configured."""
+
+    def test_ralph_run_subcommand_exists(self):
+        """Test that 'ralph run' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('run', result.stdout.lower())
+
+    def test_ralph_run_requires_name(self):
+        """Test ralph run requires worker name."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'run'],
+            capture_output=True,
+            text=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('name', result.stderr.lower())
+
+
+class TestRalphHelperFunctions(unittest.TestCase):
+    """Test ralph helper functions."""
+
+    def test_format_duration_seconds(self):
+        """Test format_duration with seconds."""
+        self.assertEqual(swarm.format_duration(30), "30s")
+        self.assertEqual(swarm.format_duration(5), "5s")
+
+    def test_format_duration_minutes(self):
+        """Test format_duration with minutes."""
+        self.assertEqual(swarm.format_duration(90), "1m 30s")
+        self.assertEqual(swarm.format_duration(300), "5m 0s")
+
+    def test_format_duration_hours(self):
+        """Test format_duration with hours."""
+        self.assertEqual(swarm.format_duration(3660), "1h 1m")
+        self.assertEqual(swarm.format_duration(7200), "2h 0m")
+
+    def test_wait_for_worker_exit_returns_exit(self):
+        """Test wait_for_worker_exit returns exit when worker stopped."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=99999  # Non-existent PID
+        )
+
+        exited, reason = swarm.wait_for_worker_exit(worker, timeout=1)
+        self.assertTrue(exited)
+        self.assertEqual(reason, "exit")
+
+
+class TestCmdRalphRun(unittest.TestCase):
+    """Test cmd_ralph_run function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_run_worker_not_found(self):
+        """Test ralph run for nonexistent worker."""
+        args = Namespace(name='nonexistent')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('not found' in call for call in error_calls))
+
+    def test_run_not_ralph_worker(self):
+        """Test ralph run for non-ralph worker."""
+        # Create a worker without ralph state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='normal-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        args = Namespace(name='normal-worker')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('not a ralph worker' in call for call in error_calls))
+
+    def test_run_paused_worker_errors(self):
+        """Test ralph run for paused worker errors."""
+        # Create worker and ralph state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            status='paused'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('paused' in call for call in error_calls))
+
+    def test_run_stopped_worker_errors(self):
+        """Test ralph run for stopped (completed) worker errors."""
+        # Create worker and ralph state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            status='stopped'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('stopped' in call for call in error_calls))
+
+    def test_run_requires_tmux(self):
+        """Test ralph run requires tmux mode worker."""
+        # Create a prompt file
+        prompt_path = Path(self.temp_dir) / "prompt.md"
+        prompt_path.write_text("test prompt")
+
+        # Create worker without tmux info
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345  # Process mode, not tmux
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(prompt_path),
+            max_iterations=10,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('tmux' in call.lower() for call in error_calls))
+
+    def test_run_max_iterations_reached_exits(self):
+        """Test ralph run exits when max iterations reached."""
+        # Create a prompt file
+        prompt_path = Path(self.temp_dir) / "prompt.md"
+        prompt_path.write_text("test prompt")
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at max iterations
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(prompt_path),
+            max_iterations=10,
+            current_iteration=10,  # Already at max
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_run(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('loop complete', output)
+
+        # Verify ralph state is now stopped
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'stopped')
+
+    def test_run_prompt_file_not_found_exits(self):
+        """Test ralph run exits when prompt file not found."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state pointing to nonexistent prompt file
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/nonexistent/prompt.md',
+            max_iterations=10,
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('prompt file not found' in call for call in error_calls))
+
+        # Verify ralph state is now failed
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'failed')
+
+
+class TestRalphRunDispatch(unittest.TestCase):
+    """Test ralph run dispatch from cmd_ralph."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_dispatch_run(self):
+        """Test cmd_ralph dispatches to run."""
+        args = Namespace(ralph_command='run', name='nonexistent')
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit):
+                swarm.cmd_ralph(args)
+
+        # If it reached cmd_ralph_run, it will error with 'not found'
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('not found' in call for call in error_calls))
+
+
+class TestCheckDonePattern(unittest.TestCase):
+    """Test check_done_pattern function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_check_done_pattern_no_tmux(self):
+        """Test check_done_pattern returns False for non-tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        result = swarm.check_done_pattern(worker, "test pattern")
+        self.assertFalse(result)
+
+    def test_check_done_pattern_subprocess_error(self):
+        """Test check_done_pattern handles subprocess errors."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='nonexistent', window='test')
+        )
+
+        # Should return False when window doesn't exist
+        result = swarm.check_done_pattern(worker, "test pattern")
+        self.assertFalse(result)
+
+
+class TestDetectInactivity(unittest.TestCase):
+    """Test detect_inactivity function."""
+
+    def test_detect_inactivity_no_tmux(self):
+        """Test detect_inactivity returns False for non-tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+        result = swarm.detect_inactivity(worker, timeout=1)
+        self.assertFalse(result)
+
+
+class TestKillWorkerForRalph(unittest.TestCase):
+    """Test kill_worker_for_ralph function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_kill_tmux_worker(self):
+        """Test kill_worker_for_ralph calls tmux kill-window."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
+        )
+
+        with patch('subprocess.run') as mock_run:
+            swarm.kill_worker_for_ralph(worker, state)
+
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        self.assertIn('kill-window', call_args)
+
+    def test_kill_non_tmux_worker(self):
+        """Test kill_worker_for_ralph does nothing for non-tmux worker."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+
+        with patch('subprocess.run') as mock_run:
+            swarm.kill_worker_for_ralph(worker, state)
+
+        mock_run.assert_not_called()
+
+
+class TestSpawnWorkerForRalph(unittest.TestCase):
+    """Test spawn_worker_for_ralph function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_creates_worker(self):
+        """Test spawn_worker_for_ralph creates a worker."""
+        with patch('swarm.create_tmux_window') as mock_create:
+            worker = swarm.spawn_worker_for_ralph(
+                name='test-worker',
+                cmd=['echo', 'test'],
+                cwd=Path(self.temp_dir),
+                env={'TEST': 'value'},
+                tags=['tag1'],
+                session='swarm',
+                socket=None,
+                worktree_info=None,
+                metadata={'ralph': True}
+            )
+
+        mock_create.assert_called_once()
+        self.assertEqual(worker.name, 'test-worker')
+        self.assertEqual(worker.cmd, ['echo', 'test'])
+        self.assertEqual(worker.status, 'running')
+        self.assertIsNotNone(worker.tmux)
+        self.assertEqual(worker.tmux.session, 'swarm')
+        self.assertEqual(worker.tmux.window, 'test-worker')
+        self.assertEqual(worker.metadata, {'ralph': True})
+
+
+class TestSendPromptToWorker(unittest.TestCase):
+    """Test send_prompt_to_worker function."""
+
+    def test_send_prompt_no_tmux(self):
+        """Test send_prompt_to_worker does nothing for non-tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+
+        # Should not raise
+        with patch('swarm.wait_for_agent_ready') as mock_wait:
+            with patch('swarm.tmux_send') as mock_send:
+                swarm.send_prompt_to_worker(worker, "test prompt")
+
+        mock_wait.assert_not_called()
+        mock_send.assert_not_called()
+
+    def test_send_prompt_to_tmux_worker(self):
+        """Test send_prompt_to_worker sends to tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
+        )
+
+        with patch('swarm.wait_for_agent_ready') as mock_wait:
+            with patch('swarm.tmux_send') as mock_send:
+                swarm.send_prompt_to_worker(worker, "test prompt content")
+
+        mock_wait.assert_called_once()
+        mock_send.assert_called_once()
+        # Check prompt was passed
+        call_args = mock_send.call_args
+        self.assertEqual(call_args[0][2], "test prompt content")
+
+
+class TestRalphRunMainLoop(unittest.TestCase):
+    """Test the main loop execution path of cmd_ralph_run with mocking."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_path.write_text("test prompt content")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_loop_spawns_worker_when_stopped(self):
+        """Test loop spawns new worker when current one has stopped."""
+        # Create worker (stopped status simulated via refresh)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0 (so it will start iteration 1)
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=1,  # Only 1 iteration so it stops after
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock the loop to exit after first check
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch('builtins.print'):
+                            # Mock spawn to return a valid worker
+                            mock_worker = swarm.Worker(
+                                name='ralph-worker',
+                                status='running',
+                                cmd=['echo', 'test'],
+                                started='2024-01-15T10:30:00',
+                                cwd=self.temp_dir,
+                                tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                            )
+                            mock_spawn.return_value = mock_worker
+
+                            swarm.cmd_ralph_run(args)
+
+        # Verify spawn was called
+        mock_spawn.assert_called()
+
+    def test_loop_handles_done_pattern_match(self):
+        """Test loop stops when done pattern matches."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with done pattern
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=10,
+            current_iteration=1,
+            status='running',
+            done_pattern='All.*complete'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock worker to be stopped and done pattern to match
+        call_count = [0]
+        def mock_refresh(w):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return 'running'
+            return 'stopped'
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.check_done_pattern', return_value=True):
+                with patch('builtins.print') as mock_print:
+                    swarm.cmd_ralph_run(args)
+
+        # Check that done pattern message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('done pattern matched', output)
+
+        # Check state is stopped
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'stopped')
+
+    def test_loop_handles_inactivity_timeout(self):
+        """Test loop handles inactivity timeout."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with short timeout
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=1  # Very short
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock to simulate inactivity then stopped
+        call_count = [0]
+        def mock_refresh(w):
+            call_count[0] += 1
+            # First few calls show running, then stopped
+            if call_count[0] <= 3:
+                return 'running'
+            return 'stopped'
+
+        inactivity_count = [0]
+        def mock_inactivity(w, t):
+            inactivity_count[0] += 1
+            if inactivity_count[0] == 1:
+                return True  # First check shows inactivity
+            return False
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('builtins.print') as mock_print:
+                                        # Mock spawn to return a worker
+                                        mock_worker = swarm.Worker(
+                                            name='ralph-worker',
+                                            status='running',
+                                            cmd=['echo', 'test'],
+                                            started='2024-01-15T10:30:00',
+                                            cwd=self.temp_dir,
+                                            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                        )
+                                        mock_spawn.return_value = mock_worker
+
+                                        swarm.cmd_ralph_run(args)
+
+        # Check that inactivity message was logged
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('inactivity timeout', output)
+
+    def test_loop_handles_spawn_failure(self):
+        """Test loop handles spawn failure with backoff."""
+        # Create worker (stopped)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=10,
+            current_iteration=0,
+            status='running',
+            consecutive_failures=4  # Already at 4 failures
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock spawn to fail
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.spawn_worker_for_ralph', side_effect=Exception("Spawn failed")):
+                with patch('builtins.print') as mock_print:
+                    with self.assertRaises(SystemExit) as ctx:
+                        swarm.cmd_ralph_run(args)
+
+        # Should exit with code 1 after 5 consecutive failures
+        self.assertEqual(ctx.exception.code, 1)
+
+        # Check state is failed
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'failed')
+
+    def test_loop_resets_failures_on_success(self):
+        """Test loop resets consecutive failures on successful iteration."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with some failures - current_iteration=0 so it will spawn
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=1,
+            current_iteration=0,  # Will do iteration 1 then hit max
+            status='running',
+            consecutive_failures=3,  # Had some failures
+            total_failures=5
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock to simulate: worker initially running, then stopped after one check
+        call_count = [0]
+        def mock_refresh(w):
+            call_count[0] += 1
+            # First call: stopped (to trigger spawn), second: running, third+: stopped
+            if call_count[0] == 1:
+                return 'stopped'
+            elif call_count[0] == 2:
+                return 'running'
+            return 'stopped'
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch.object(swarm.State, 'remove_worker'):
+                            with patch('swarm.detect_inactivity', return_value=False):
+                                with patch('swarm.check_done_pattern', return_value=False):
+                                    with patch('builtins.print'):
+                                        # Mock spawn to return a worker
+                                        mock_worker = swarm.Worker(
+                                            name='ralph-worker',
+                                            status='running',
+                                            cmd=['echo', 'test'],
+                                            started='2024-01-15T10:30:00',
+                                            cwd=self.temp_dir,
+                                            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                        )
+                                        mock_spawn.return_value = mock_worker
+
+                                        swarm.cmd_ralph_run(args)
+
+        # Check consecutive failures is reset
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.consecutive_failures, 0)
+
+    def test_loop_exits_when_paused_externally(self):
+        """Test loop exits when status changed to paused externally."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Mock to simulate external pause
+        load_count = [0]
+        original_load = swarm.load_ralph_state
+        def mock_load(name):
+            load_count[0] += 1
+            state = original_load(name)
+            if state and load_count[0] >= 3:
+                # Simulate external pause
+                state.status = 'paused'
+            return state
+
+        with patch('swarm.load_ralph_state', side_effect=mock_load):
+            with patch('swarm.refresh_worker_status', return_value='running'):
+                with patch('swarm.detect_inactivity', return_value=False):
+                    with patch('builtins.print') as mock_print:
+                        with patch('time.sleep'):  # Speed up the test
+                            swarm.cmd_ralph_run(args)
+
+        # Check that paused message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('paused', output)
+
+
+class TestWaitForWorkerExit(unittest.TestCase):
+    """Test wait_for_worker_exit function."""
+
+    def test_returns_timeout_when_still_running(self):
+        """Test returns timeout when worker still running."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('time.sleep'):  # Speed up the test
+                exited, reason = swarm.wait_for_worker_exit(worker, timeout=0)
+
+        self.assertFalse(exited)
+        self.assertEqual(reason, "timeout")
+
+
 if __name__ == "__main__":
     unittest.main()

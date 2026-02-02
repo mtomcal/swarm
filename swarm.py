@@ -1011,6 +1011,10 @@ def main() -> None:
     ralph_resume_p = ralph_subparsers.add_parser("resume", help="Resume ralph loop for a worker")
     ralph_resume_p.add_argument("name", help="Worker name")
 
+    # ralph run - run the ralph loop (main outer loop execution)
+    ralph_run_p = ralph_subparsers.add_parser("run", help="Run the ralph loop for a worker")
+    ralph_run_p.add_argument("name", help="Worker name")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -2035,6 +2039,7 @@ def cmd_ralph(args) -> None:
     - status: Show ralph loop status for a worker
     - pause: Pause ralph loop for a worker
     - resume: Resume ralph loop for a worker
+    - run: Run the ralph loop (main outer loop execution)
     """
     if args.ralph_command == "init":
         cmd_ralph_init(args)
@@ -2046,6 +2051,8 @@ def cmd_ralph(args) -> None:
         cmd_ralph_pause(args)
     elif args.ralph_command == "resume":
         cmd_ralph_resume(args)
+    elif args.ralph_command == "run":
+        cmd_ralph_run(args)
 
 
 def cmd_ralph_init(args) -> None:
@@ -2202,6 +2209,480 @@ def cmd_ralph_resume(args) -> None:
     save_ralph_state(ralph_state)
 
     print(f"resumed ralph loop for {args.name}")
+
+
+def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple[bool, str]:
+    """Wait for a worker to exit.
+
+    Monitors the worker and returns when it exits or times out.
+
+    Args:
+        worker: The worker to monitor
+        timeout: Optional timeout in seconds (None = no timeout)
+
+    Returns:
+        Tuple of (exited: bool, reason: str)
+        - (True, "exit") if worker exited normally
+        - (False, "timeout") if timeout was reached
+        - (False, "running") if still running (shouldn't happen with blocking)
+    """
+    start = time.time()
+
+    while True:
+        # Check if worker has stopped
+        status = refresh_worker_status(worker)
+        if status == "stopped":
+            return (True, "exit")
+
+        # Check timeout
+        if timeout is not None and (time.time() - start) >= timeout:
+            return (False, "timeout")
+
+        # Poll every second
+        time.sleep(1)
+
+
+def detect_inactivity(worker: Worker, timeout: int) -> bool:
+    """Detect if a worker has become inactive.
+
+    Uses ready-based detection: monitors for the agent returning to
+    ready state (prompt visible) and staying there.
+
+    Args:
+        worker: The worker to monitor
+        timeout: Inactivity timeout in seconds
+
+    Returns:
+        True if inactivity detected, False otherwise (worker exited or still active)
+    """
+    if not worker.tmux:
+        return False
+
+    socket = worker.tmux.socket
+    last_output = ""
+    inactive_start = None
+
+    while True:
+        # Check if worker is still running
+        if refresh_worker_status(worker) == "stopped":
+            return False
+
+        try:
+            # Capture current output
+            current_output = tmux_capture_pane(
+                worker.tmux.session,
+                worker.tmux.window,
+                socket=socket
+            )
+
+            # If output changed, reset inactivity timer
+            if current_output != last_output:
+                last_output = current_output
+                inactive_start = None
+            else:
+                # Output unchanged, start or continue inactivity timer
+                if inactive_start is None:
+                    inactive_start = time.time()
+                elif (time.time() - inactive_start) >= timeout:
+                    return True
+
+        except subprocess.CalledProcessError:
+            # Window might have closed
+            return False
+
+        time.sleep(1)
+
+
+def check_done_pattern(worker: Worker, pattern: str) -> bool:
+    """Check if output matches done pattern.
+
+    Args:
+        worker: The worker to check
+        pattern: Regex pattern to match
+
+    Returns:
+        True if pattern matched in output, False otherwise
+    """
+    import re
+
+    if not worker.tmux:
+        return False
+
+    socket = worker.tmux.socket
+
+    try:
+        output = tmux_capture_pane(
+            worker.tmux.session,
+            worker.tmux.window,
+            history_lines=1000,  # Include scrollback
+            socket=socket
+        )
+        return bool(re.search(pattern, output))
+    except subprocess.CalledProcessError:
+        return False
+
+
+def format_duration(seconds: float) -> str:
+    """Format a duration in seconds to human-readable string.
+
+    Args:
+        seconds: Duration in seconds
+
+    Returns:
+        Human-readable string like "5m 30s" or "1h 15m"
+    """
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
+
+
+def kill_worker_for_ralph(worker: Worker, state: State) -> None:
+    """Kill a worker as part of ralph loop iteration.
+
+    Similar to cmd_kill but without removing from state.
+
+    Args:
+        worker: The worker to kill
+        state: The current state
+    """
+    if worker.tmux:
+        socket = worker.tmux.socket
+        cmd_prefix = tmux_cmd_prefix(socket)
+        subprocess.run(
+            cmd_prefix + ["kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+            capture_output=True
+        )
+
+
+def spawn_worker_for_ralph(
+    name: str,
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    tags: list[str],
+    session: str,
+    socket: Optional[str],
+    worktree_info: Optional[WorktreeInfo],
+    metadata: dict
+) -> Worker:
+    """Spawn a worker for a ralph loop iteration.
+
+    Creates a new tmux window for the worker.
+
+    Args:
+        name: Worker name
+        cmd: Command to run
+        cwd: Working directory
+        env: Environment variables
+        tags: Worker tags
+        session: Tmux session name
+        socket: Optional tmux socket
+        worktree_info: Optional worktree info
+        metadata: Worker metadata
+
+    Returns:
+        The created Worker object
+    """
+    # Create tmux window
+    create_tmux_window(session, name, cwd, cmd, socket)
+    tmux_info = TmuxInfo(session=session, window=name, socket=socket)
+
+    # Create worker object
+    worker = Worker(
+        name=name,
+        status="running",
+        cmd=cmd,
+        started=datetime.now().isoformat(),
+        cwd=str(cwd),
+        env=env,
+        tags=tags,
+        tmux=tmux_info,
+        worktree=worktree_info,
+        pid=None,
+        metadata=metadata,
+    )
+
+    return worker
+
+
+def send_prompt_to_worker(worker: Worker, prompt_content: str) -> None:
+    """Send prompt content to a worker.
+
+    Args:
+        worker: The worker to send to
+        prompt_content: The prompt content to send
+    """
+    if not worker.tmux:
+        return
+
+    socket = worker.tmux.socket
+
+    # Wait briefly for agent to be ready
+    wait_for_agent_ready(
+        worker.tmux.session,
+        worker.tmux.window,
+        timeout=30,
+        socket=socket
+    )
+
+    # Send the prompt content
+    tmux_send(
+        worker.tmux.session,
+        worker.tmux.window,
+        prompt_content,
+        enter=True,
+        socket=socket
+    )
+
+
+def cmd_ralph_run(args) -> None:
+    """Run the ralph loop for a worker.
+
+    This is the main outer loop execution that:
+    1. Monitors the worker for exit or inactivity
+    2. Checks for done pattern
+    3. Restarts the worker with fresh prompt
+    4. Handles failures with exponential backoff
+
+    Args:
+        args: Namespace with name attribute
+    """
+    import re
+
+    # Load swarm state to verify worker exists
+    state = State()
+    worker = state.get_worker(args.name)
+
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Load ralph state
+    ralph_state = load_ralph_state(args.name)
+
+    if not ralph_state:
+        print(f"swarm: error: worker '{args.name}' is not a ralph worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if ralph is in a runnable state
+    if ralph_state.status not in ("running", "paused"):
+        print(f"swarm: error: ralph loop for '{args.name}' has status '{ralph_state.status}'", file=sys.stderr)
+        sys.exit(1)
+
+    # If paused, just exit (user needs to resume first)
+    if ralph_state.status == "paused":
+        print(f"swarm: error: ralph loop for '{args.name}' is paused (use 'swarm ralph resume {args.name}' first)", file=sys.stderr)
+        sys.exit(1)
+
+    # Store worker configuration for respawning
+    original_cmd = worker.cmd
+    original_cwd = Path(worker.cwd)
+    original_env = worker.env
+    original_tags = worker.tags
+    original_tmux = worker.tmux
+    original_worktree = worker.worktree
+
+    if not original_tmux:
+        print(f"swarm: error: ralph requires tmux mode", file=sys.stderr)
+        sys.exit(1)
+
+    session = original_tmux.session
+    socket = original_tmux.socket
+
+    # Main ralph loop
+    while True:
+        # Reload ralph state (could have been paused externally)
+        ralph_state = load_ralph_state(args.name)
+        if not ralph_state:
+            break
+
+        # Check if paused
+        if ralph_state.status == "paused":
+            print(f"[ralph] {args.name}: paused, exiting loop")
+            break
+
+        # Check if we've hit max iterations
+        if ralph_state.current_iteration >= ralph_state.max_iterations:
+            print(f"[ralph] {args.name}: loop complete after {ralph_state.current_iteration} iterations")
+            log_ralph_iteration(
+                args.name,
+                "DONE",
+                total_iterations=ralph_state.current_iteration,
+                reason="max_iterations"
+            )
+            ralph_state.status = "stopped"
+            save_ralph_state(ralph_state)
+            break
+
+        # Read prompt file
+        prompt_path = Path(ralph_state.prompt_file)
+        if not prompt_path.exists():
+            print(f"swarm: error: prompt file not found: {ralph_state.prompt_file}", file=sys.stderr)
+            ralph_state.status = "failed"
+            save_ralph_state(ralph_state)
+            sys.exit(1)
+
+        try:
+            prompt_content = prompt_path.read_text()
+        except Exception as e:
+            print(f"swarm: error: cannot read prompt file: {ralph_state.prompt_file}", file=sys.stderr)
+            ralph_state.status = "failed"
+            save_ralph_state(ralph_state)
+            sys.exit(1)
+
+        # Get current worker status
+        state = State()
+        worker = state.get_worker(args.name)
+
+        # Track iteration timing
+        iteration_start = time.time()
+
+        # If worker is not running, spawn a new one
+        if not worker or refresh_worker_status(worker) == "stopped":
+            # Increment iteration counter
+            ralph_state.current_iteration += 1
+            ralph_state.last_iteration_started = datetime.now().isoformat()
+            save_ralph_state(ralph_state)
+
+            print(f"[ralph] {args.name}: starting iteration {ralph_state.current_iteration}/{ralph_state.max_iterations}")
+            log_ralph_iteration(
+                args.name,
+                "START",
+                iteration=ralph_state.current_iteration,
+                max_iterations=ralph_state.max_iterations
+            )
+
+            # Remove old worker from state if it exists
+            if worker:
+                state.remove_worker(args.name)
+
+            # Build metadata
+            metadata = {
+                "ralph": True,
+                "ralph_iteration": ralph_state.current_iteration,
+            }
+
+            # Spawn new worker
+            try:
+                worker = spawn_worker_for_ralph(
+                    name=args.name,
+                    cmd=original_cmd,
+                    cwd=original_cwd,
+                    env=original_env,
+                    tags=original_tags,
+                    session=session,
+                    socket=socket,
+                    worktree_info=original_worktree,
+                    metadata=metadata
+                )
+                state = State()
+                state.add_worker(worker)
+
+                # Send prompt to the worker
+                send_prompt_to_worker(worker, prompt_content)
+
+            except Exception as e:
+                print(f"swarm: error: failed to spawn worker: {e}", file=sys.stderr)
+                ralph_state.consecutive_failures += 1
+                ralph_state.total_failures += 1
+                save_ralph_state(ralph_state)
+
+                # Apply backoff
+                if ralph_state.consecutive_failures >= 5:
+                    print(f"[ralph] {args.name}: 5 consecutive failures, stopping loop")
+                    ralph_state.status = "failed"
+                    save_ralph_state(ralph_state)
+                    sys.exit(1)
+
+                backoff = min(2 ** (ralph_state.consecutive_failures - 1), 300)
+                print(f"[ralph] {args.name}: spawn failed, retrying in {backoff}s (attempt {ralph_state.consecutive_failures}/5)")
+                log_ralph_iteration(
+                    args.name,
+                    "FAIL",
+                    iteration=ralph_state.current_iteration,
+                    exit_code=1,
+                    attempt=ralph_state.consecutive_failures,
+                    backoff=backoff
+                )
+                time.sleep(backoff)
+                continue
+
+        # Monitor the worker
+        while True:
+            # Reload ralph state (could have been paused externally)
+            ralph_state = load_ralph_state(args.name)
+            if not ralph_state or ralph_state.status == "paused":
+                print(f"[ralph] {args.name}: paused, exiting loop")
+                break
+
+            # Check worker status
+            state = State()
+            worker = state.get_worker(args.name)
+            if not worker:
+                break
+
+            worker_status = refresh_worker_status(worker)
+
+            if worker_status == "stopped":
+                # Worker exited
+                duration = format_duration(time.time() - iteration_start)
+                print(f"[ralph] {args.name}: iteration {ralph_state.current_iteration} completed (exit: 0, duration: {duration})")
+                log_ralph_iteration(
+                    args.name,
+                    "END",
+                    iteration=ralph_state.current_iteration,
+                    exit_code=0,
+                    duration=duration
+                )
+
+                # Reset consecutive failures on success
+                ralph_state.consecutive_failures = 0
+                save_ralph_state(ralph_state)
+
+                # Check for done pattern
+                if ralph_state.done_pattern:
+                    if check_done_pattern(worker, ralph_state.done_pattern):
+                        print(f"[ralph] {args.name}: done pattern matched, stopping loop")
+                        log_ralph_iteration(
+                            args.name,
+                            "DONE",
+                            total_iterations=ralph_state.current_iteration,
+                            reason="done_pattern"
+                        )
+                        ralph_state.status = "stopped"
+                        save_ralph_state(ralph_state)
+                        return
+
+                break  # Continue to next iteration
+
+            # Check for inactivity
+            if detect_inactivity(worker, ralph_state.inactivity_timeout):
+                print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s), restarting")
+                log_ralph_iteration(
+                    args.name,
+                    "TIMEOUT",
+                    iteration=ralph_state.current_iteration,
+                    timeout=ralph_state.inactivity_timeout
+                )
+
+                # Kill the worker
+                kill_worker_for_ralph(worker, state)
+                break  # Continue to next iteration
+
+            # Brief sleep before next check
+            time.sleep(1)
+
+        # Check if we should exit (paused)
+        ralph_state = load_ralph_state(args.name)
+        if not ralph_state or ralph_state.status == "paused":
+            break
 
 
 if __name__ == "__main__":
