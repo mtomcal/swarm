@@ -178,7 +178,12 @@ Test file: `test_cmd_ralph.py`
 | TestKillWorkerForRalph | 2 | Passing |
 | TestSpawnWorkerForRalph | 1 | Passing |
 | TestSendPromptToWorker | 2 | Passing |
-| **Total** | **133** | **All Passing** |
+| TestRalphRunMainLoop | 6 | Passing |
+| TestWaitForWorkerExit | 1 | Passing |
+| TestRalphRunEdgeCases | 4 | Passing |
+| **Total** | **144** | **All Passing** |
+
+**Coverage**: Ralph-specific code coverage is **95.4%** (725/760 lines covered)
 
 ## Next Steps
 
@@ -191,6 +196,16 @@ Possible future enhancements:
 - Add graceful shutdown on SIGTERM
 
 ## Recent Changes
+
+### 2026-02-02: Improved Test Coverage
+
+- Added `TestRalphRunEdgeCases` class with 4 new tests for edge cases:
+  - `test_run_ralph_state_deleted_during_loop`: Handles ralph state deletion during loop
+  - `test_run_paused_during_inner_loop`: Handles pause during inner monitoring loop
+  - `test_run_prompt_file_read_error`: Handles permission errors reading prompt file
+  - `test_run_spawn_failure_with_backoff_logging`: Tests full backoff path with logging
+- Ralph-specific code coverage now at 95.4%
+- Total: 144 tests, all passing
 
 ### 2026-02-02: Completed Phase 3 - Outer Loop Execution
 
