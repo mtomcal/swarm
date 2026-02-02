@@ -51,7 +51,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.spawn_process', return_value=12345) as mock_spawn:
@@ -92,7 +95,10 @@ class TestCmdSpawn(unittest.TestCase):
             worktree=False,
             cwd=None,
             env=[],
-            tags=[]
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.create_tmux_window') as mock_tmux:
@@ -132,7 +138,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('sys.stderr'):
@@ -153,7 +162,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.spawn_process', return_value=111):
@@ -171,7 +183,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('sys.stderr'):
@@ -191,7 +206,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.spawn_process', return_value=222) as mock_spawn:
@@ -223,7 +241,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=["important", "test"],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.spawn_process', return_value=333):
@@ -248,7 +269,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('swarm.spawn_process', return_value=444) as mock_spawn:
@@ -273,7 +297,10 @@ class TestCmdSpawn(unittest.TestCase):
             tags=[],
             session="swarm",
             tmux_socket=None,
-            ready_wait=False
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
         )
 
         with patch('sys.stderr'):

@@ -747,6 +747,13 @@ def main() -> None:
                         help="Wait for agent to be ready before returning (tmux only)")
     spawn_p.add_argument("--ready-timeout", type=int, default=120,
                         help="Timeout in seconds for --ready-wait (default: 120, suitable for Claude Code startup)")
+    # Ralph mode arguments
+    spawn_p.add_argument("--ralph", action="store_true",
+                        help="Enable ralph loop mode (autonomous agent looping)")
+    spawn_p.add_argument("--prompt-file", type=str, default=None,
+                        help="Path to prompt file for ralph mode (required with --ralph)")
+    spawn_p.add_argument("--max-iterations", type=int, default=None,
+                        help="Maximum loop iterations for ralph mode (required with --ralph)")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to run (after --)")
 
@@ -890,6 +897,31 @@ def cmd_spawn(args) -> None:
     if not cmd:
         print("swarm: error: no command provided (use -- command...)", file=sys.stderr)
         sys.exit(1)
+
+    # Ralph mode validation
+    if args.ralph:
+        # --ralph requires --prompt-file
+        if args.prompt_file is None:
+            print("swarm: error: --ralph requires --prompt-file", file=sys.stderr)
+            sys.exit(1)
+
+        # --ralph requires --max-iterations
+        if args.max_iterations is None:
+            print("swarm: error: --ralph requires --max-iterations", file=sys.stderr)
+            sys.exit(1)
+
+        # Validate prompt file exists
+        prompt_path = Path(args.prompt_file)
+        if not prompt_path.exists():
+            print(f"swarm: error: prompt file not found: {args.prompt_file}", file=sys.stderr)
+            sys.exit(1)
+
+        # Warn for high iteration count
+        if args.max_iterations > 50:
+            print("swarm: warning: high iteration count (>50) may consume significant resources", file=sys.stderr)
+
+        # Auto-enable tmux mode for ralph
+        args.tmux = True
 
     # Load state and check for duplicate name
     state = State()

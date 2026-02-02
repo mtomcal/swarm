@@ -473,5 +473,668 @@ class TestRalphScenarios(unittest.TestCase):
         self.assertEqual(len(files), 0)
 
 
+class TestRalphSpawnArguments(unittest.TestCase):
+    """Test ralph spawn arguments are correctly configured."""
+
+    def test_ralph_flag_exists(self):
+        """Test that --ralph flag is recognized by spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--help'],
+            capture_output=True,
+            text=True,
+            cwd=self.original_cwd if hasattr(self, 'original_cwd') else '.'
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--ralph', result.stdout)
+
+    def test_prompt_file_argument_exists(self):
+        """Test that --prompt-file argument is recognized by spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--prompt-file', result.stdout)
+
+    def test_max_iterations_argument_exists(self):
+        """Test that --max-iterations argument is recognized by spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--max-iterations', result.stdout)
+
+
+class TestRalphSpawnValidation(unittest.TestCase):
+    """Test ralph spawn validation logic."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Create a test prompt file
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_requires_prompt_file(self):
+        """Test --ralph without --prompt-file fails."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file=None,
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        # Check error message
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('--ralph requires --prompt-file' in call for call in error_calls))
+
+    def test_ralph_requires_max_iterations(self):
+        """Test --ralph without --max-iterations fails."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        # Check error message
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('--ralph requires --max-iterations' in call for call in error_calls))
+
+    def test_ralph_prompt_file_not_found(self):
+        """Test --ralph with non-existent prompt file fails."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='nonexistent.md',
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        # Check error message
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('prompt file not found' in call for call in error_calls))
+
+    def test_ralph_high_iteration_warning(self):
+        """Test --ralph with >50 iterations shows warning."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=100,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_spawn(args)
+
+        # Check warning was printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('high iteration count' in call for call in all_calls))
+
+    def test_ralph_auto_enables_tmux(self):
+        """Test --ralph automatically enables --tmux."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            tmux=False,  # Not explicitly set
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window') as mock_create_tmux:
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            swarm.cmd_spawn(args)
+
+        # Verify tmux window was created (indicating tmux was enabled)
+        mock_create_tmux.assert_called_once()
+
+    def test_ralph_valid_configuration_proceeds(self):
+        """Test valid ralph configuration proceeds to spawn."""
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker') as mock_add_worker:
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_spawn(args)
+
+        # Verify worker was added
+        mock_add_worker.assert_called_once()
+        # Verify success message
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('spawned' in call for call in all_calls))
+
+    def test_no_ralph_skips_validation(self):
+        """Test spawn without --ralph skips ralph validation."""
+        args = Namespace(
+            name='test-worker',
+            ralph=False,
+            prompt_file=None,  # Would fail if ralph validation ran
+            max_iterations=None,  # Would fail if ralph validation ran
+            tmux=True,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            # Should not raise - ralph validation is skipped
+                            swarm.cmd_spawn(args)
+
+
+class TestRalphSpawnScenarios(unittest.TestCase):
+    """Scenario-based tests for ralph spawn from ralph-loop.md spec."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Create a test prompt file
+        Path('PROMPT.md').write_text('study specs/README.md\n')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_scenario_ralph_without_prompt_file_error(self):
+        """Scenario: Ralph without prompt-file shows error.
+
+        Given: User specifies --ralph without --prompt-file
+        When: swarm spawn --name agent --ralph --max-iterations 10 -- claude
+        Then:
+          - Exit code 1
+          - Error: "swarm: error: --ralph requires --prompt-file"
+        """
+        args = Namespace(
+            name='agent',
+            ralph=True,
+            prompt_file=None,
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'claude']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('--ralph requires --prompt-file' in call for call in error_calls))
+
+    def test_scenario_ralph_without_max_iterations_error(self):
+        """Scenario: Ralph without max-iterations shows error.
+
+        Given: User specifies --ralph without --max-iterations
+        When: swarm spawn --name agent --ralph --prompt-file ./PROMPT.md -- claude
+        Then:
+          - Exit code 1
+          - Error: "swarm: error: --ralph requires --max-iterations"
+        """
+        args = Namespace(
+            name='agent',
+            ralph=True,
+            prompt_file='PROMPT.md',
+            max_iterations=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'claude']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('--ralph requires --max-iterations' in call for call in error_calls))
+
+    def test_scenario_missing_prompt_file_error(self):
+        """Scenario: Missing prompt file shows error.
+
+        Given: --prompt-file ./missing.md specified
+        When: swarm spawn --ralph --prompt-file ./missing.md --max-iterations 10 -- claude
+        Then:
+          - Exit code 1
+          - Error: "swarm: error: prompt file not found: ./missing.md"
+        """
+        args = Namespace(
+            name='agent',
+            ralph=True,
+            prompt_file='./missing.md',
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'claude']
+        )
+
+        with patch('builtins.print') as mock_print:
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_spawn(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        error_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('prompt file not found' in call for call in error_calls))
+
+    def test_scenario_high_iteration_warning(self):
+        """Scenario: High iteration warning.
+
+        Given: User spawns with --max-iterations 100
+        When: Command executed
+        Then:
+          - Warning: "swarm: warning: high iteration count (>50) may consume significant resources"
+          - Worker still spawns successfully
+        """
+        args = Namespace(
+            name='agent',
+            ralph=True,
+            prompt_file='PROMPT.md',
+            max_iterations=100,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'claude']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker') as mock_add:
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_spawn(args)
+
+        # Check warning was printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('high iteration count' in call for call in all_calls))
+
+        # Worker still spawns successfully
+        mock_add.assert_called_once()
+
+    def test_scenario_ralph_requires_tmux(self):
+        """Scenario: Ralph requires tmux.
+
+        Given: User attempts ralph without explicit tmux
+        When: swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+        Then:
+          - --tmux automatically enabled
+          - Worker created in tmux mode
+        """
+        args = Namespace(
+            name='agent',
+            ralph=True,
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            tmux=False,  # Not explicitly set
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'claude']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker') as mock_add:
+                with patch('swarm.create_tmux_window') as mock_tmux:
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            swarm.cmd_spawn(args)
+
+        # Verify tmux window was created
+        mock_tmux.assert_called_once()
+
+        # Verify worker was added with tmux info
+        call_args = mock_add.call_args[0][0]
+        self.assertIsNotNone(call_args.tmux)
+
+
+class TestRalphSpawnEdgeCases(unittest.TestCase):
+    """Edge case tests for ralph spawn."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_prompt_file_absolute_path(self):
+        """Test prompt file with absolute path works."""
+        # Create prompt file with absolute path
+        prompt_path = Path(self.temp_dir) / 'prompt.md'
+        prompt_path.write_text('test content')
+
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file=str(prompt_path),  # Absolute path
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            # Should not raise
+                            swarm.cmd_spawn(args)
+
+    def test_prompt_file_relative_path(self):
+        """Test prompt file with relative path works."""
+        # Create prompt file with relative path
+        Path('relative_prompt.md').write_text('test content')
+
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='relative_prompt.md',  # Relative path
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            # Should not raise
+                            swarm.cmd_spawn(args)
+
+    def test_empty_prompt_file_allowed(self):
+        """Test empty prompt file is allowed."""
+        Path('empty.md').write_text('')  # Empty file
+
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='empty.md',
+            max_iterations=10,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print'):
+                            # Should not raise - empty file is allowed
+                            swarm.cmd_spawn(args)
+
+    def test_max_iterations_exactly_50_no_warning(self):
+        """Test max-iterations of exactly 50 does not trigger warning."""
+        Path('prompt.md').write_text('test')
+
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='prompt.md',
+            max_iterations=50,  # Exactly 50, not > 50
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_spawn(args)
+
+        # No warning should be printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertFalse(any('high iteration count' in call for call in all_calls))
+
+    def test_max_iterations_51_triggers_warning(self):
+        """Test max-iterations of 51 triggers warning."""
+        Path('prompt.md').write_text('test')
+
+        args = Namespace(
+            name='test-worker',
+            ralph=True,
+            prompt_file='prompt.md',
+            max_iterations=51,  # Just above threshold
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_spawn(args)
+
+        # Warning should be printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('high iteration count' in call for call in all_calls))
+
+
 if __name__ == "__main__":
     unittest.main()
