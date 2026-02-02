@@ -62,6 +62,20 @@ swarm spawn --name feature-auth --tmux --worktree -- claude
 State stored in `~/.swarm/state.json`. Logs in `~/.swarm/logs/`.
 """.strip()
 
+# Ralph prompt template for autonomous agent looping
+# Intentionally minimal and direct - less prompt = more context for actual work
+RALPH_PROMPT_TEMPLATE = """study specs/README.md
+study CLAUDE.md and pick the most important incomplete task
+
+IMPORTANT:
+
+- do not assume anything is implemented - verify by reading code
+- update IMPLEMENTATION_PLAN.md when the task is done
+- if tests are missing, add them (choose unit/integration/property as appropriate, follow existing patterns)
+- run tests after changes
+- commit and push when you are done
+""".strip()
+
 
 @dataclass
 class TmuxInfo:
@@ -819,6 +833,18 @@ def main() -> None:
     init_p.add_argument("--force", action="store_true",
                         help="Overwrite existing file")
 
+    # ralph - autonomous agent looping (Ralph Wiggum pattern)
+    ralph_p = subparsers.add_parser("ralph", help="Ralph loop management (autonomous agent looping)")
+    ralph_subparsers = ralph_p.add_subparsers(dest="ralph_command", required=True)
+
+    # ralph init - create PROMPT.md
+    ralph_init_p = ralph_subparsers.add_parser("init", help="Create PROMPT.md with starter template")
+    ralph_init_p.add_argument("--force", action="store_true",
+                              help="Overwrite existing PROMPT.md")
+
+    # ralph template - output template to stdout
+    ralph_subparsers.add_parser("template", help="Output prompt template to stdout")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -848,6 +874,8 @@ def main() -> None:
         cmd_respawn(args)
     elif args.command == "init":
         cmd_init(args)
+    elif args.command == "ralph":
+        cmd_ralph(args)
 
 
 # Command stubs - to be implemented in subsequent tasks
@@ -1770,6 +1798,57 @@ def cmd_init(args) -> None:
         # Create new file
         target_file.write_text(SWARM_INSTRUCTIONS + "\n")
         print(f"Created {target_file}")
+
+
+def cmd_ralph(args) -> None:
+    """Ralph loop management commands.
+
+    Dispatches to ralph subcommands:
+    - init: Create PROMPT.md with starter template
+    - template: Output template to stdout
+    """
+    if args.ralph_command == "init":
+        cmd_ralph_init(args)
+    elif args.ralph_command == "template":
+        cmd_ralph_template(args)
+
+
+def cmd_ralph_init(args) -> None:
+    """Create PROMPT.md with starter template.
+
+    Creates a PROMPT.md file in the current directory with the ralph
+    prompt template. Fails if the file already exists unless --force
+    is specified.
+
+    Args:
+        args: Namespace with force attribute
+    """
+    target_file = Path("PROMPT.md")
+
+    # Check if file already exists
+    if target_file.exists() and not args.force:
+        print("swarm: error: PROMPT.md already exists (use --force to overwrite)", file=sys.stderr)
+        sys.exit(1)
+
+    # Write template to file
+    target_file.write_text(RALPH_PROMPT_TEMPLATE + "\n")
+
+    if args.force and target_file.exists():
+        print("created PROMPT.md (overwritten)")
+    else:
+        print("created PROMPT.md")
+
+
+def cmd_ralph_template(args) -> None:
+    """Output prompt template to stdout.
+
+    Prints the ralph prompt template to stdout for inspection or
+    piping to a custom file.
+
+    Args:
+        args: Namespace (unused, but required for consistency)
+    """
+    print(RALPH_PROMPT_TEMPLATE)
 
 
 if __name__ == "__main__":
