@@ -634,6 +634,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file=None,
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -666,6 +667,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=None,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -698,6 +700,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file='nonexistent.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -730,6 +733,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=100,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -765,6 +769,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,  # Not explicitly set
             worktree=False,
@@ -799,6 +804,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -836,6 +842,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             prompt_file=None,  # Would fail if ralph validation ran
             max_iterations=None,  # Would fail if ralph validation ran
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=True,
             worktree=False,
@@ -893,6 +900,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             prompt_file=None,
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -931,6 +939,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             prompt_file='PROMPT.md',
             max_iterations=None,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -969,6 +978,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             prompt_file='./missing.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1007,6 +1017,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             prompt_file='PROMPT.md',
             max_iterations=100,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1051,6 +1062,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             prompt_file='PROMPT.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,  # Not explicitly set
             worktree=False,
@@ -1108,6 +1120,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             prompt_file=str(prompt_path),  # Absolute path
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1142,6 +1155,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             prompt_file='relative_prompt.md',  # Relative path
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1175,6 +1189,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             prompt_file='empty.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1208,6 +1223,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             prompt_file='prompt.md',
             max_iterations=50,  # Exactly 50, not > 50
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1244,6 +1260,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             prompt_file='prompt.md',
             max_iterations=51,  # Just above threshold
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1342,6 +1359,7 @@ class TestRalphStateCreation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1377,6 +1395,7 @@ class TestRalphStateCreation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=50,
             inactivity_timeout=600,
+            inactivity_mode='ready',
             done_pattern='All tasks complete',
             tmux=False,
             worktree=False,
@@ -1412,6 +1431,7 @@ class TestRalphStateCreation(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=100,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1443,6 +1463,7 @@ class TestRalphStateCreation(unittest.TestCase):
             prompt_file=None,
             max_iterations=None,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=True,
             worktree=False,
@@ -1475,6 +1496,7 @@ class TestRalphStateCreation(unittest.TestCase):
             prompt_file='test_prompt.md',  # Relative path
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -1721,6 +1743,7 @@ class TestCmdRalphStatus(unittest.TestCase):
             consecutive_failures=0,
             total_failures=2,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern='All tasks complete'
         )
         swarm.save_ralph_state(ralph_state)
@@ -2445,6 +2468,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -2480,6 +2504,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
             prompt_file=None,
             max_iterations=None,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=True,
             worktree=False,
@@ -2514,6 +2539,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -2549,6 +2575,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -2581,6 +2608,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
             prompt_file='test_prompt.md',
             max_iterations=10,
             inactivity_timeout=300,
+            inactivity_mode='ready',
             done_pattern=None,
             tmux=False,
             worktree=False,
@@ -3321,7 +3349,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
             return 'stopped'
 
         inactivity_count = [0]
-        def mock_inactivity(w, t):
+        def mock_inactivity(w, t, mode='ready'):
             inactivity_count[0] += 1
             if inactivity_count[0] == 1:
                 return True  # First check shows inactivity
@@ -4207,6 +4235,535 @@ class TestRalphListDispatch(unittest.TestCase):
             swarm.cmd_ralph(args)
 
         mock_list.assert_called_once_with(args)
+
+
+class TestInactivityModeArgument(unittest.TestCase):
+    """Test --inactivity-mode argument for spawn command."""
+
+    def test_inactivity_mode_argument_exists(self):
+        """Test that --inactivity-mode argument is recognized by spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--inactivity-mode', result.stdout)
+
+    def test_inactivity_mode_choices(self):
+        """Test that --inactivity-mode accepts output, ready, and both."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('output', result.stdout)
+        self.assertIn('ready', result.stdout)
+        self.assertIn('both', result.stdout)
+
+    def test_inactivity_mode_default_is_ready(self):
+        """Test --inactivity-mode has default value of 'ready'."""
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--inactivity-mode", type=str, choices=["output", "ready", "both"],
+                          default="ready")
+        args = parser.parse_args([])
+        self.assertEqual(args.inactivity_mode, "ready")
+
+    def test_inactivity_mode_invalid_choice_rejected(self):
+        """Test that invalid --inactivity-mode values are rejected."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'spawn', '--name', 'test', '--inactivity-mode', 'invalid', '--', 'echo'],
+            capture_output=True,
+            text=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('invalid choice', result.stderr)
+
+
+class TestRalphStateInactivityMode(unittest.TestCase):
+    """Test RalphState dataclass with inactivity_mode field."""
+
+    def test_ralph_state_has_inactivity_mode_field(self):
+        """Test that RalphState has inactivity_mode field."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/test/prompt.md',
+            max_iterations=10
+        )
+        self.assertTrue(hasattr(state, 'inactivity_mode'))
+        self.assertEqual(state.inactivity_mode, 'ready')  # default
+
+    def test_ralph_state_inactivity_mode_in_to_dict(self):
+        """Test that inactivity_mode is included in to_dict()."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/test/prompt.md',
+            max_iterations=10,
+            inactivity_mode='output'
+        )
+        d = state.to_dict()
+        self.assertIn('inactivity_mode', d)
+        self.assertEqual(d['inactivity_mode'], 'output')
+
+    def test_ralph_state_inactivity_mode_from_dict(self):
+        """Test that inactivity_mode is restored from dict."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/test/prompt.md',
+            'max_iterations': 10,
+            'inactivity_mode': 'both'
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertEqual(state.inactivity_mode, 'both')
+
+    def test_ralph_state_inactivity_mode_default_in_from_dict(self):
+        """Test that inactivity_mode defaults to 'ready' when not in dict."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/test/prompt.md',
+            'max_iterations': 10
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertEqual(state.inactivity_mode, 'ready')
+
+
+class TestDetectInactivityModes(unittest.TestCase):
+    """Test detect_inactivity function with different modes."""
+
+    def test_detect_inactivity_no_tmux_returns_false(self):
+        """Test detect_inactivity returns False for non-tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+        # Test all modes
+        for mode in ['output', 'ready', 'both']:
+            result = swarm.detect_inactivity(worker, timeout=1, mode=mode)
+            self.assertFalse(result, f"Mode '{mode}' should return False for non-tmux worker")
+
+    def test_detect_inactivity_default_mode_is_ready(self):
+        """Test detect_inactivity uses 'ready' as default mode."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+        # Should not raise - verifies signature accepts no mode param
+        result = swarm.detect_inactivity(worker, timeout=1)
+        self.assertFalse(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_output_mode_detects_no_change(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test output mode detects when output stops changing."""
+        mock_refresh.return_value = 'running'
+        # Return same output for all calls
+        mock_capture.return_value = 'same output'
+        # Time progression: iter1 start, iter1 check, iter2 start, iter2 check (timeout triggered)
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='output')
+        self.assertTrue(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_ready_mode_detects_ready_pattern(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test ready mode detects when agent shows ready pattern."""
+        mock_refresh.return_value = 'running'
+        # Return output with ready pattern ("> " at start of line)
+        mock_capture.return_value = '> waiting for input'
+        # Time progression to trigger timeout
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+        self.assertTrue(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    def test_detect_inactivity_ready_mode_ignores_no_ready_pattern(self, mock_capture, mock_refresh):
+        """Test ready mode doesn't trigger without ready pattern."""
+        mock_refresh.side_effect = ['running', 'stopped']  # Worker stops
+        mock_capture.return_value = 'Working on task...'
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('time.sleep'):
+            result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+
+        self.assertFalse(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_both_mode_triggers_on_ready(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test both mode triggers when ready pattern detected."""
+        mock_refresh.return_value = 'running'
+        # Changing output but with ready pattern - ready detection triggers
+        mock_capture.return_value = '> ready prompt'
+        # Time progression to trigger ready timeout (more calls needed for both mode)
+        mock_time.side_effect = [0, 0, 0, 1, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='both')
+        self.assertTrue(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_both_mode_triggers_on_output_stagnation(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test both mode triggers when output stops changing."""
+        mock_refresh.return_value = 'running'
+        # Same output without ready pattern
+        mock_capture.return_value = 'working...'
+        # Time progression to trigger output timeout
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='both')
+        self.assertTrue(result)
+
+
+class TestRalphSpawnWithInactivityMode(unittest.TestCase):
+    """Test spawn command with --inactivity-mode creates correct ralph state."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        # Create a test prompt file
+        self.prompt_file = Path(self.temp_dir) / "PROMPT.md"
+        self.prompt_file.write_text("Test prompt")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_with_inactivity_mode_output(self):
+        """Test spawn with --inactivity-mode output creates state with correct mode."""
+        args = Namespace(
+            name='test-worker',
+            tmux=False,
+            session=None,
+            tmux_socket=None,
+            worktree=False,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            ralph=True,
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            inactivity_timeout=300,
+            inactivity_mode='output',
+            done_pattern=None,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Check ralph state has correct inactivity_mode
+        ralph_state = swarm.load_ralph_state('test-worker')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.inactivity_mode, 'output')
+
+    def test_spawn_with_inactivity_mode_both(self):
+        """Test spawn with --inactivity-mode both creates state with correct mode."""
+        args = Namespace(
+            name='test-worker-both',
+            tmux=False,
+            session=None,
+            tmux_socket=None,
+            worktree=False,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            ralph=True,
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            inactivity_timeout=300,
+            inactivity_mode='both',
+            done_pattern=None,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('test-worker-both')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.inactivity_mode, 'both')
+
+    def test_spawn_default_inactivity_mode_is_ready(self):
+        """Test spawn defaults to inactivity_mode='ready' for ralph workers."""
+        args = Namespace(
+            name='test-worker-default',
+            tmux=False,
+            session=None,
+            tmux_socket=None,
+            worktree=False,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            ralph=True,
+            prompt_file=str(self.prompt_file),
+            max_iterations=10,
+            inactivity_timeout=300,
+            inactivity_mode='ready',  # default
+            done_pattern=None,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('test-worker-default')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.inactivity_mode, 'ready')
+
+
+class TestRalphStatusShowsInactivityMode(unittest.TestCase):
+    """Test ralph status command shows inactivity mode."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_status_shows_inactivity_mode(self):
+        """Test ralph status output includes inactivity mode."""
+        # Create a worker and ralph state
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state = swarm.State()
+        state.add_worker(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/test/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            started='2024-01-15T10:30:00',
+            last_iteration_started='2024-01-15T10:30:00',
+            inactivity_mode='output'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Capture output
+        import io
+        captured_output = io.StringIO()
+
+        args = Namespace(name='test-worker')
+        with patch('sys.stdout', captured_output):
+            swarm.cmd_ralph_status(args)
+
+        output = captured_output.getvalue()
+        self.assertIn('Inactivity mode: output', output)
+
+
+class TestDetectInactivityErrorHandling(unittest.TestCase):
+    """Test detect_inactivity error handling."""
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_detect_inactivity_returns_false_on_subprocess_error(self, mock_sleep, mock_capture, mock_refresh):
+        """Test detect_inactivity returns False when tmux capture fails."""
+        mock_refresh.return_value = 'running'
+        mock_capture.side_effect = subprocess.CalledProcessError(1, 'tmux')
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+        self.assertFalse(result)
+
+
+class TestDetectInactivityReadyPatterns(unittest.TestCase):
+    """Test detect_inactivity recognizes all ready patterns."""
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_ready_mode_detects_bypass_permissions(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test ready mode detects 'bypass permissions' pattern."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = 'bypass permissions on'
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+        self.assertTrue(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_ready_mode_detects_claude_code_banner(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test ready mode detects 'Claude Code v' pattern."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = 'Claude Code v2.1.4'
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+        self.assertTrue(result)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_ready_mode_detects_shell_prompt(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test ready mode detects '$ ' shell prompt."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = '$ '
+        mock_time.side_effect = [0, 0, 0, 1, 1, 2]
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, mode='ready')
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":

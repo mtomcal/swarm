@@ -185,20 +185,51 @@ Test file: `test_cmd_ralph.py`
 | TestCmdRalphList | 14 | Passing |
 | TestRalphListCLI | 3 | Passing |
 | TestRalphListDispatch | 1 | Passing |
-| **Total** | **162** | **All Passing** |
+| TestInactivityModeArgument | 4 | Passing |
+| TestRalphStateInactivityMode | 4 | Passing |
+| TestDetectInactivityModes | 7 | Passing |
+| TestRalphSpawnWithInactivityMode | 3 | Passing |
+| TestRalphStatusShowsInactivityMode | 1 | Passing |
+| TestDetectInactivityErrorHandling | 1 | Passing |
+| TestDetectInactivityReadyPatterns | 3 | Passing |
+| **Total** | **185** | **All Passing** |
 
-**Coverage**: Ralph-specific code coverage is **95.4%** (cmd_ralph_list function at 100%)
+**Coverage**: Ralph-specific code coverage is **95%+** (all ralph functions well tested)
 
 ## Next Steps
 
-All phases are now COMPLETE. The ralph loop feature is fully implemented.
+All phases are now COMPLETE. The ralph loop feature is fully implemented including the `--inactivity-mode` flag.
 
 Possible future enhancements:
-- Add `--inactivity-mode` flag to select detection method (output|ready|both)
 - Add integration tests with real tmux sessions
 - Add graceful shutdown on SIGTERM
 
 ## Recent Changes
+
+### 2026-02-02: Added `--inactivity-mode` Flag
+
+- Added `--inactivity-mode` argument to spawn command with choices: `output`, `ready`, `both`
+- Default mode is `ready` (most reliable for Claude Code)
+- Added `inactivity_mode` field to `RalphState` dataclass
+- Updated `detect_inactivity()` function to support all three modes:
+  - `output`: Triggers when tmux output stops changing for timeout seconds
+  - `ready`: Triggers when agent shows ready pattern (prompt visible) for timeout seconds
+  - `both`: Triggers on either condition (most sensitive)
+- Updated `ralph status` to display current inactivity mode
+- Updated `ralph run` to pass inactivity_mode to detect_inactivity
+- Added 23 new tests for inactivity mode functionality (total: 185 tests)
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 903-905 (argument), lines 163 (RalphState field), lines 2359-2449 (detect_inactivity)
+- **Tests**: `test_cmd_ralph.py` with 7 new test classes:
+  - `TestInactivityModeArgument`: 4 tests for CLI argument
+  - `TestRalphStateInactivityMode`: 4 tests for dataclass field
+  - `TestDetectInactivityModes`: 7 tests for detection modes
+  - `TestRalphSpawnWithInactivityMode`: 3 tests for spawn integration
+  - `TestRalphStatusShowsInactivityMode`: 1 test for status display
+  - `TestDetectInactivityErrorHandling`: 1 test for error handling
+  - `TestDetectInactivityReadyPatterns`: 3 tests for ready pattern matching
 
 ### 2026-02-02: Added `swarm ralph list` Subcommand
 
