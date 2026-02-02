@@ -66,24 +66,44 @@ The main ralph loop that manages agent lifecycle.
 | Done pattern matching | Not Started | Stop loop when pattern matched |
 | Max iterations check | Not Started | Stop loop when limit reached |
 
-### Phase 4: Ralph State Management (NOT STARTED)
+### Phase 4: Ralph State Management (COMPLETE)
 
 Persist ralph loop state between iterations.
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| State file creation | Not Started | `~/.swarm/ralph/<worker-name>/state.json` |
-| State schema | Not Started | JSON schema per spec |
+| State file creation | Complete | `~/.swarm/ralph/<worker-name>/state.json` |
+| State schema | Complete | JSON schema per spec (RalphState dataclass) |
 | Iteration logging | Not Started | `~/.swarm/ralph/<worker-name>/iterations.log` |
 | Worker metadata | Not Started | Add ralph_iteration to worker record |
 
-### Phase 5: Pause and Resume (NOT STARTED)
+#### Implementation Details
+
+- **RalphState dataclass**: Complete implementation matching spec schema
+- **Persistence functions**: `load_ralph_state()`, `save_ralph_state()`, `get_ralph_state_path()`
+- **RALPH_DIR constant**: `~/.swarm/ralph/` directory for all ralph state
+
+### Phase 5: Pause and Resume (COMPLETE)
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| `swarm ralph pause <name>` | Not Started | Pause the loop |
-| `swarm ralph resume <name>` | Not Started | Resume the loop |
-| `swarm ralph status <name>` | Not Started | Show ralph loop status |
+| `swarm ralph pause <name>` | Complete | Pause the loop |
+| `swarm ralph resume <name>` | Complete | Resume the loop |
+| `swarm ralph status <name>` | Complete | Show ralph loop status |
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 147-228 (RalphState class and helpers), lines 1933-2111 (ralph command functions)
+- **Tests**: `test_cmd_ralph.py` with 84 comprehensive tests
+- **Coverage**: All ralph functions are fully tested
+
+#### Features
+
+- **RalphState dataclass**: Stores ralph loop state with all required fields from spec
+- **State persistence**: `~/.swarm/ralph/<worker-name>/state.json`
+- **ralph status**: Shows iteration count, status, failure counts, and configuration
+- **ralph pause**: Sets status to "paused", warns if already paused
+- **ralph resume**: Sets status to "running", warns if not paused
 
 ### Phase 6: Failure Handling (NOT STARTED)
 
@@ -104,19 +124,26 @@ Test file: `test_cmd_ralph.py`
 | TestRalphPromptTemplate | 6 | Passing |
 | TestCmdRalphInit | 9 | Passing |
 | TestCmdRalphTemplate | 3 | Passing |
-| TestCmdRalphDispatch | 2 | Passing |
+| TestCmdRalphDispatch | 5 | Passing |
 | TestRalphIntegration | 4 | Passing |
 | TestRalphScenarios | 4 | Passing |
 | TestRalphSpawnArguments | 3 | Passing |
 | TestRalphSpawnValidation | 7 | Passing |
 | TestRalphSpawnScenarios | 5 | Passing |
 | TestRalphSpawnEdgeCases | 5 | Passing |
-| **Total** | **52** | **All Passing** |
+| TestRalphStateDataclass | 4 | Passing |
+| TestRalphStatePersistence | 4 | Passing |
+| TestCmdRalphStatus | 3 | Passing |
+| TestCmdRalphPause | 4 | Passing |
+| TestCmdRalphResume | 4 | Passing |
+| TestRalphSubcommandsCLI | 6 | Passing |
+| TestRalphScenariosPauseResume | 4 | Passing |
+| **Total** | **84** | **All Passing** |
 
 ## Next Steps
 
 1. ~~Phase 2: Add `--ralph` flag to spawn with validation~~ (COMPLETE)
 2. Phase 3: Implement outer loop execution
-3. Phase 4: Add ralph state management
-4. Phase 5: Implement pause/resume commands
+3. ~~Phase 4: Add ralph state management~~ (COMPLETE - RalphState dataclass and persistence)
+4. ~~Phase 5: Implement pause/resume commands~~ (COMPLETE)
 5. Phase 6: Add failure handling with backoff

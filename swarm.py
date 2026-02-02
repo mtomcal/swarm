@@ -26,6 +26,7 @@ SWARM_DIR = Path.home() / ".swarm"
 STATE_FILE = SWARM_DIR / "state.json"
 STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"
+RALPH_DIR = SWARM_DIR / "ralph"  # Ralph loop state directory
 
 # Agent instructions template for AGENTS.md/CLAUDE.md injection
 # Marker string 'Process Management (swarm)' used for idempotent detection
@@ -140,6 +141,91 @@ class Worker:
             worktree=worktree,
             pid=d.get("pid"),
         )
+
+
+@dataclass
+class RalphState:
+    """Ralph loop state for a worker."""
+    worker_name: str
+    prompt_file: str
+    max_iterations: int
+    current_iteration: int = 0
+    status: str = "running"  # running, paused, stopped, failed
+    started: str = ""
+    last_iteration_started: str = ""
+    consecutive_failures: int = 0
+    total_failures: int = 0
+    done_pattern: Optional[str] = None
+    inactivity_timeout: int = 300
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "worker_name": self.worker_name,
+            "prompt_file": self.prompt_file,
+            "max_iterations": self.max_iterations,
+            "current_iteration": self.current_iteration,
+            "status": self.status,
+            "started": self.started,
+            "last_iteration_started": self.last_iteration_started,
+            "consecutive_failures": self.consecutive_failures,
+            "total_failures": self.total_failures,
+            "done_pattern": self.done_pattern,
+            "inactivity_timeout": self.inactivity_timeout,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RalphState":
+        """Create RalphState from dictionary."""
+        return cls(
+            worker_name=d["worker_name"],
+            prompt_file=d["prompt_file"],
+            max_iterations=d["max_iterations"],
+            current_iteration=d.get("current_iteration", 0),
+            status=d.get("status", "running"),
+            started=d.get("started", ""),
+            last_iteration_started=d.get("last_iteration_started", ""),
+            consecutive_failures=d.get("consecutive_failures", 0),
+            total_failures=d.get("total_failures", 0),
+            done_pattern=d.get("done_pattern"),
+            inactivity_timeout=d.get("inactivity_timeout", 300),
+        )
+
+
+def get_ralph_state_path(worker_name: str) -> Path:
+    """Get the path to a worker's ralph state file."""
+    return RALPH_DIR / worker_name / "state.json"
+
+
+def load_ralph_state(worker_name: str) -> Optional[RalphState]:
+    """Load ralph state for a worker.
+
+    Args:
+        worker_name: Name of the worker
+
+    Returns:
+        RalphState if it exists, None otherwise
+    """
+    state_path = get_ralph_state_path(worker_name)
+    if not state_path.exists():
+        return None
+
+    with open(state_path, "r") as f:
+        data = json.load(f)
+        return RalphState.from_dict(data)
+
+
+def save_ralph_state(ralph_state: RalphState) -> None:
+    """Save ralph state for a worker.
+
+    Args:
+        ralph_state: RalphState to save
+    """
+    state_path = get_ralph_state_path(ralph_state.worker_name)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(state_path, "w") as f:
+        json.dump(ralph_state.to_dict(), f, indent=2)
 
 
 @contextmanager
@@ -851,6 +937,18 @@ def main() -> None:
 
     # ralph template - output template to stdout
     ralph_subparsers.add_parser("template", help="Output prompt template to stdout")
+
+    # ralph status - show ralph loop status
+    ralph_status_p = ralph_subparsers.add_parser("status", help="Show ralph loop status for a worker")
+    ralph_status_p.add_argument("name", help="Worker name")
+
+    # ralph pause - pause the ralph loop
+    ralph_pause_p = ralph_subparsers.add_parser("pause", help="Pause ralph loop for a worker")
+    ralph_pause_p.add_argument("name", help="Worker name")
+
+    # ralph resume - resume the ralph loop
+    ralph_resume_p = ralph_subparsers.add_parser("resume", help="Resume ralph loop for a worker")
+    ralph_resume_p.add_argument("name", help="Worker name")
 
     args = parser.parse_args()
 
@@ -1838,11 +1936,20 @@ def cmd_ralph(args) -> None:
     Dispatches to ralph subcommands:
     - init: Create PROMPT.md with starter template
     - template: Output template to stdout
+    - status: Show ralph loop status for a worker
+    - pause: Pause ralph loop for a worker
+    - resume: Resume ralph loop for a worker
     """
     if args.ralph_command == "init":
         cmd_ralph_init(args)
     elif args.ralph_command == "template":
         cmd_ralph_template(args)
+    elif args.ralph_command == "status":
+        cmd_ralph_status(args)
+    elif args.ralph_command == "pause":
+        cmd_ralph_pause(args)
+    elif args.ralph_command == "resume":
+        cmd_ralph_resume(args)
 
 
 def cmd_ralph_init(args) -> None:
@@ -1881,6 +1988,124 @@ def cmd_ralph_template(args) -> None:
         args: Namespace (unused, but required for consistency)
     """
     print(RALPH_PROMPT_TEMPLATE)
+
+
+def cmd_ralph_status(args) -> None:
+    """Show ralph loop status for a worker.
+
+    Displays the current state of a ralph loop including iteration count,
+    status, failure counts, and configuration.
+
+    Args:
+        args: Namespace with name attribute
+    """
+    # Load swarm state to verify worker exists
+    state = State()
+    worker = state.get_worker(args.name)
+
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Load ralph state
+    ralph_state = load_ralph_state(args.name)
+
+    if not ralph_state:
+        print(f"swarm: error: worker '{args.name}' is not a ralph worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Format output per spec
+    print(f"Ralph Loop: {ralph_state.worker_name}")
+    print(f"Status: {ralph_state.status}")
+    print(f"Iteration: {ralph_state.current_iteration}/{ralph_state.max_iterations}")
+
+    if ralph_state.started:
+        # Parse ISO format and format nicely
+        started_dt = datetime.fromisoformat(ralph_state.started)
+        print(f"Started: {started_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if ralph_state.last_iteration_started:
+        last_iter_dt = datetime.fromisoformat(ralph_state.last_iteration_started)
+        print(f"Current iteration started: {last_iter_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    print(f"Consecutive failures: {ralph_state.consecutive_failures}")
+    print(f"Total failures: {ralph_state.total_failures}")
+    print(f"Inactivity timeout: {ralph_state.inactivity_timeout}s")
+
+    if ralph_state.done_pattern:
+        print(f"Done pattern: {ralph_state.done_pattern}")
+
+
+def cmd_ralph_pause(args) -> None:
+    """Pause ralph loop for a worker.
+
+    Sets the ralph state status to "paused". The current worker continues
+    running, but the loop will not restart when it exits.
+
+    Args:
+        args: Namespace with name attribute
+    """
+    # Load swarm state to verify worker exists
+    state = State()
+    worker = state.get_worker(args.name)
+
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Load ralph state
+    ralph_state = load_ralph_state(args.name)
+
+    if not ralph_state:
+        print(f"swarm: error: worker '{args.name}' is not a ralph worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if already paused
+    if ralph_state.status == "paused":
+        print(f"swarm: warning: worker '{args.name}' is already paused", file=sys.stderr)
+        return
+
+    # Update status to paused
+    ralph_state.status = "paused"
+    save_ralph_state(ralph_state)
+
+    print(f"paused ralph loop for {args.name}")
+
+
+def cmd_ralph_resume(args) -> None:
+    """Resume ralph loop for a worker.
+
+    Sets the ralph state status to "running". If the worker is not running,
+    a fresh agent will need to be spawned.
+
+    Args:
+        args: Namespace with name attribute
+    """
+    # Load swarm state to verify worker exists
+    state = State()
+    worker = state.get_worker(args.name)
+
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Load ralph state
+    ralph_state = load_ralph_state(args.name)
+
+    if not ralph_state:
+        print(f"swarm: error: worker '{args.name}' is not a ralph worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if not paused
+    if ralph_state.status != "paused":
+        print(f"swarm: warning: worker '{args.name}' is not paused", file=sys.stderr)
+        return
+
+    # Update status to running
+    ralph_state.status = "running"
+    save_ralph_state(ralph_state)
+
+    print(f"resumed ralph loop for {args.name}")
 
 
 if __name__ == "__main__":
