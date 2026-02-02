@@ -1683,6 +1683,17 @@ def cmd_kill(args) -> None:
                 print(f"swarm: warning: cannot remove worktree for '{worker.name}': {msg}", file=sys.stderr)
                 print(f"swarm: use --force-dirty to remove anyway", file=sys.stderr)
 
+        # Update ralph state if this is a ralph worker
+        ralph_state = load_ralph_state(worker.name)
+        if ralph_state:
+            ralph_state.status = "stopped"
+            save_ralph_state(ralph_state)
+            log_ralph_iteration(
+                worker.name, "DONE",
+                total_iterations=ralph_state.current_iteration,
+                reason="killed"
+            )
+
         print(f"killed {worker.name}")
 
     # Clean up empty tmux sessions

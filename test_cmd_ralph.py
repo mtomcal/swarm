@@ -5081,5 +5081,187 @@ class TestRalphRunLoopInternal(unittest.TestCase):
         self.assertEqual(cm.exception.code, 1)
 
 
+class TestCmdKillRalphWorker(unittest.TestCase):
+    """Test cmd_kill updates ralph state when killing a ralph worker."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        # Patch swarm directories
+        self.swarm_dir_patcher = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patcher = patch.object(swarm, 'STATE_FILE', Path(self.temp_dir) / 'state.json')
+        self.logs_dir_patcher = patch.object(swarm, 'LOGS_DIR', Path(self.temp_dir) / 'logs')
+        self.ralph_dir_patcher = patch.object(swarm, 'RALPH_DIR', Path(self.temp_dir) / 'ralph')
+
+        self.swarm_dir_patcher.start()
+        self.state_file_patcher.start()
+        self.logs_dir_patcher.start()
+        self.ralph_dir_patcher.start()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.swarm_dir_patcher.stop()
+        self.state_file_patcher.stop()
+        self.logs_dir_patcher.stop()
+        self.ralph_dir_patcher.stop()
+
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_kill_ralph_worker_updates_state(self):
+        """Test killing a ralph worker updates ralph state to stopped."""
+        # Create a worker with tmux
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 3}
+        )
+        state.add_worker(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/tmp/PROMPT.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Verify ralph state is running before kill
+        loaded_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(loaded_state.status, 'running')
+
+        # Mock subprocess and kill
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = None
+            args = Namespace(name='ralph-worker', all=False, rm_worktree=False)
+            swarm.cmd_kill(args)
+
+        # Verify ralph state is now stopped
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'stopped')
+
+    def test_kill_ralph_worker_logs_done_event(self):
+        """Test killing a ralph worker logs DONE event with reason=killed."""
+        # Create a worker with tmux
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 5}
+        )
+        state.add_worker(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/tmp/PROMPT.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Mock subprocess and kill
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = None
+            args = Namespace(name='ralph-worker', all=False, rm_worktree=False)
+            swarm.cmd_kill(args)
+
+        # Check iteration log for DONE event with reason=killed
+        log_path = swarm.get_ralph_iterations_log_path('ralph-worker')
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn('[DONE]', log_content)
+        self.assertIn('reason=killed', log_content)
+        self.assertIn('5 iterations', log_content)
+
+    def test_kill_non_ralph_worker_no_ralph_state_change(self):
+        """Test killing a non-ralph worker doesn't create or modify ralph state."""
+        # Create a regular worker (no ralph state)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='regular-worker',
+            status='running',
+            cmd=['bash'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='regular-worker')
+        )
+        state.add_worker(worker)
+        state.save()
+
+        # Mock subprocess and kill
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = None
+            args = Namespace(name='regular-worker', all=False, rm_worktree=False)
+            swarm.cmd_kill(args)
+
+        # Verify no ralph state was created
+        ralph_state = swarm.load_ralph_state('regular-worker')
+        self.assertIsNone(ralph_state)
+
+    def test_kill_all_updates_all_ralph_workers(self):
+        """Test --all flag updates ralph state for all ralph workers."""
+        state = swarm.State()
+
+        # Create two ralph workers
+        worker1 = swarm.Worker(
+            name='ralph-1',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-1'),
+            metadata={'ralph': True}
+        )
+        worker2 = swarm.Worker(
+            name='ralph-2',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-2'),
+            metadata={'ralph': True}
+        )
+        state.add_worker(worker1)
+        state.add_worker(worker2)
+        state.save()
+
+        # Create ralph states
+        for name in ['ralph-1', 'ralph-2']:
+            ralph_state = swarm.RalphState(
+                worker_name=name,
+                prompt_file='/tmp/PROMPT.md',
+                max_iterations=10,
+                current_iteration=2,
+                status='running'
+            )
+            swarm.save_ralph_state(ralph_state)
+
+        # Mock subprocess and kill all
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = None
+            args = Namespace(name=None, all=True, rm_worktree=False)
+            swarm.cmd_kill(args)
+
+        # Verify both ralph states are stopped
+        for name in ['ralph-1', 'ralph-2']:
+            updated_state = swarm.load_ralph_state(name)
+            self.assertEqual(updated_state.status, 'stopped')
+
+
 if __name__ == "__main__":
     unittest.main()

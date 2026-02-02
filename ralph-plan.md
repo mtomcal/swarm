@@ -194,7 +194,8 @@ Test file: `test_cmd_ralph.py`
 | TestDetectInactivityReadyPatterns | 3 | Passing |
 | TestRalphRunSigterm | 5 | Passing |
 | TestRalphRunLoopInternal | 2 | Passing |
-| **Total** | **192** | **All Passing** |
+| TestCmdKillRalphWorker | 4 | Passing |
+| **Total** | **196** | **All Passing** |
 
 **Coverage**: Ralph-specific code coverage is **95%+** (all ralph functions well tested)
 
@@ -203,6 +204,7 @@ Test file: `test_cmd_ralph.py`
 All phases are now COMPLETE. The ralph loop feature is fully implemented including:
 - `--inactivity-mode` flag
 - Graceful shutdown on SIGTERM
+- Kill command updates ralph state
 
 **VERIFIED 2026-02-02**: All features from `specs/ralph-loop.md` have been implemented and tested. Coverage on ralph-specific code is at 95.4%, exceeding the >90% target.
 
@@ -210,6 +212,29 @@ Possible future enhancements:
 - Add integration tests with real tmux sessions
 
 ## Recent Changes
+
+### 2026-02-02: Kill Command Updates Ralph State
+
+- Added ralph state update to `cmd_kill()` when killing a ralph worker
+- When `swarm kill <name>` is used on a ralph worker, ralph state is set to "stopped"
+- Logs DONE event with reason=killed to iterations.log
+- Implements edge case from spec: "Killing a ralph worker also stops the loop (state set to 'stopped')"
+- Added 4 new tests for this behavior (total: 196 tests)
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 1686-1693 (in cmd_kill)
+- **Log Format**: `[DONE] loop complete after N iterations reason=killed`
+- **Tests**: `test_cmd_ralph.py` with new test class:
+  - `TestCmdKillRalphWorker`: 4 tests for kill command ralph state integration
+
+#### Behavior
+
+When `swarm kill` targets a ralph worker:
+1. Worker is killed (tmux window or process)
+2. Ralph state status is set to "stopped"
+3. DONE event is logged with `reason=killed` and current iteration count
+4. Worker state is updated normally
 
 ### 2026-02-02: Added Graceful Shutdown on SIGTERM
 
