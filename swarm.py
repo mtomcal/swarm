@@ -840,6 +840,10 @@ def main() -> None:
                         help="Path to prompt file for ralph mode (required with --ralph)")
     spawn_p.add_argument("--max-iterations", type=int, default=None,
                         help="Maximum loop iterations for ralph mode (required with --ralph)")
+    spawn_p.add_argument("--inactivity-timeout", type=int, default=300,
+                        help="Inactivity timeout in seconds for ralph mode (default: 300)")
+    spawn_p.add_argument("--done-pattern", type=str, default=None,
+                        help="Regex pattern to stop ralph loop when matched in output")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to run (after --)")
 
@@ -1122,6 +1126,20 @@ def cmd_spawn(args) -> None:
     # Add to state
     state.add_worker(worker)
 
+    # Create ralph state if in ralph mode
+    if args.ralph:
+        ralph_state = RalphState(
+            worker_name=args.name,
+            prompt_file=str(Path(args.prompt_file).resolve()),
+            max_iterations=args.max_iterations,
+            current_iteration=0,
+            status="running",
+            started=datetime.now().isoformat(),
+            inactivity_timeout=args.inactivity_timeout,
+            done_pattern=args.done_pattern,
+        )
+        save_ralph_state(ralph_state)
+
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:
         socket = tmux_info.socket if tmux_info else None
@@ -1130,7 +1148,10 @@ def cmd_spawn(args) -> None:
 
     # Print success message
     if tmux_info:
-        print(f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
+        msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
+        if args.ralph:
+            msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
+        print(msg)
     else:
         print(f"spawned {args.name} (pid: {pid})")
 

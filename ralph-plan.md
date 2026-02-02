@@ -42,16 +42,18 @@ Add `--ralph` flag to spawn command with required dependencies.
 | `--ralph` flag on spawn | Complete | Enable ralph loop mode |
 | `--prompt-file` argument | Complete | Path to prompt file (required with --ralph) |
 | `--max-iterations` argument | Complete | Maximum loop iterations (required with --ralph) |
-| `--inactivity-timeout` argument | Not Started | Timeout in seconds (default: 300) |
-| `--done-pattern` argument | Not Started | Regex pattern to stop loop |
+| `--inactivity-timeout` argument | Complete | Timeout in seconds (default: 300) |
+| `--done-pattern` argument | Complete | Regex pattern to stop loop |
 | Auto-enable `--tmux` | Complete | Ralph requires tmux mode |
 | Validation | Complete | Require prompt-file and max-iterations with --ralph |
+| Create ralph state on spawn | Complete | Creates `~/.swarm/ralph/<name>/state.json` with initial values |
+| Ralph mode success message | Complete | Shows iteration count in spawn output |
 
 #### Implementation Details
 
-- **Location**: `swarm.py` lines 751-757 (argparser), 901-924 (validation)
-- **Tests**: `test_cmd_ralph.py` with 52 comprehensive tests (20 new tests for Phase 2)
-- **Coverage**: 100% for ralph-specific executable code
+- **Location**: `swarm.py` lines 837-846 (argparser), 999-1022 (validation), 1127-1137 (state creation)
+- **Tests**: `test_cmd_ralph.py` with 92 comprehensive tests (8 new tests for spawn state creation)
+- **Coverage**: All ralph-specific executable code is tested
 
 ### Phase 3: Outer Loop Execution (NOT STARTED)
 
@@ -131,6 +133,8 @@ Test file: `test_cmd_ralph.py`
 | TestRalphSpawnValidation | 7 | Passing |
 | TestRalphSpawnScenarios | 5 | Passing |
 | TestRalphSpawnEdgeCases | 5 | Passing |
+| TestRalphSpawnNewArguments | 3 | Passing |
+| TestRalphStateCreation | 5 | Passing |
 | TestRalphStateDataclass | 4 | Passing |
 | TestRalphStatePersistence | 4 | Passing |
 | TestCmdRalphStatus | 3 | Passing |
@@ -138,12 +142,22 @@ Test file: `test_cmd_ralph.py`
 | TestCmdRalphResume | 4 | Passing |
 | TestRalphSubcommandsCLI | 6 | Passing |
 | TestRalphScenariosPauseResume | 4 | Passing |
-| **Total** | **84** | **All Passing** |
+| **Total** | **92** | **All Passing** |
 
 ## Next Steps
 
 1. ~~Phase 2: Add `--ralph` flag to spawn with validation~~ (COMPLETE)
-2. Phase 3: Implement outer loop execution
+2. Phase 3: Implement outer loop execution (main ralph loop logic)
 3. ~~Phase 4: Add ralph state management~~ (COMPLETE - RalphState dataclass and persistence)
 4. ~~Phase 5: Implement pause/resume commands~~ (COMPLETE)
 5. Phase 6: Add failure handling with backoff
+
+## Recent Changes
+
+### 2026-02-02: Completed Spawn Integration
+
+- Added `--inactivity-timeout` argument (default: 300 seconds)
+- Added `--done-pattern` argument for regex pattern matching
+- Added ralph state creation when spawning with `--ralph` flag
+- Added ralph mode indication in spawn success message
+- Added 8 new tests for spawn state creation (total: 92 tests)
