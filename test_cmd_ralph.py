@@ -3025,6 +3025,36 @@ class TestCheckDonePattern(unittest.TestCase):
         result = swarm.check_done_pattern(worker, "test pattern")
         self.assertFalse(result)
 
+    def test_check_done_pattern_matches(self):
+        """Test check_done_pattern returns True when pattern matches."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.tmux_capture_pane', return_value='All tasks complete\nDone'):
+            result = swarm.check_done_pattern(worker, "All tasks complete")
+            self.assertTrue(result)
+
+    def test_check_done_pattern_no_match(self):
+        """Test check_done_pattern returns False when pattern doesn't match."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.tmux_capture_pane', return_value='Still working on tasks'):
+            result = swarm.check_done_pattern(worker, "All tasks complete")
+            self.assertFalse(result)
+
 
 class TestDetectInactivity(unittest.TestCase):
     """Test detect_inactivity function."""

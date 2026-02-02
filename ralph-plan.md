@@ -195,9 +195,9 @@ Test file: `test_cmd_ralph.py`
 | TestRalphRunSigterm | 5 | Passing |
 | TestRalphRunLoopInternal | 2 | Passing |
 | TestCmdKillRalphWorker | 4 | Passing |
-| **Total** | **196** | **All Passing** |
+| **Total** | **198** | **All Passing** |
 
-**Coverage**: Ralph-specific code coverage is **95%+** (all ralph functions well tested)
+**Coverage**: Ralph-specific code coverage is **97.9%** (all ralph functions well tested)
 
 ## Next Steps
 
@@ -206,12 +206,20 @@ All phases are now COMPLETE. The ralph loop feature is fully implemented includi
 - Graceful shutdown on SIGTERM
 - Kill command updates ralph state
 
-**VERIFIED 2026-02-02**: All features from `specs/ralph-loop.md` have been implemented and tested. Coverage on ralph-specific code is at 95.4%, exceeding the >90% target.
+**VERIFIED 2026-02-02**: All features from `specs/ralph-loop.md` have been implemented and tested. Coverage on ralph-specific code is at 97.9%, exceeding the >90% target.
 
 Possible future enhancements:
 - Add integration tests with real tmux sessions
 
 ## Recent Changes
+
+### 2026-02-02: Added Tests for check_done_pattern Happy Path
+
+- Added 2 new tests for `check_done_pattern` function to cover pattern matching
+- `test_check_done_pattern_matches`: Tests that True is returned when pattern matches output
+- `test_check_done_pattern_no_match`: Tests that False is returned when pattern doesn't match
+- Coverage improved from 97.6% to 97.9%
+- Total: 198 tests, all passing
 
 ### 2026-02-02: Kill Command Updates Ralph State
 
