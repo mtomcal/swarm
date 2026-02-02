@@ -181,9 +181,13 @@ Test file: `test_cmd_ralph.py`
 | TestRalphRunMainLoop | 6 | Passing |
 | TestWaitForWorkerExit | 1 | Passing |
 | TestRalphRunEdgeCases | 4 | Passing |
-| **Total** | **144** | **All Passing** |
+| TestRalphListSubparser | 3 | Passing |
+| TestCmdRalphList | 14 | Passing |
+| TestRalphListCLI | 3 | Passing |
+| TestRalphListDispatch | 1 | Passing |
+| **Total** | **162** | **All Passing** |
 
-**Coverage**: Ralph-specific code coverage is **95.4%** (725/760 lines covered)
+**Coverage**: Ralph-specific code coverage is **95.4%** (cmd_ralph_list function at 100%)
 
 ## Next Steps
 
@@ -192,10 +196,30 @@ All phases are now COMPLETE. The ralph loop feature is fully implemented.
 Possible future enhancements:
 - Add `--inactivity-mode` flag to select detection method (output|ready|both)
 - Add integration tests with real tmux sessions
-- Add `swarm ralph list` to show all ralph workers
 - Add graceful shutdown on SIGTERM
 
 ## Recent Changes
+
+### 2026-02-02: Added `swarm ralph list` Subcommand
+
+- Added `swarm ralph list` command to show all ralph workers
+- Supports multiple output formats: table (default), json, names
+- Supports filtering by ralph status: all, running, paused, stopped, failed
+- Table format shows: NAME, RALPH_STATUS, WORKER_STATUS, ITERATION, FAILURES
+- JSON format includes full ralph state plus worker status
+- Added 18 new tests for ralph list functionality (total: 162 tests)
+- cmd_ralph_list function has 100% test coverage
+
+#### Implementation Details
+
+- **Location**: `swarm.py` lines 2224-2317 (cmd_ralph_list function)
+- **CLI Parser**: `swarm.py` lines 1017-1021 (ralph list subparser)
+- **Dispatch**: `swarm.py` lines 2054-2055 (cmd_ralph dispatch)
+- **Tests**: `test_cmd_ralph.py` with 4 new test classes:
+  - `TestRalphListSubparser`: 3 tests for CLI parser
+  - `TestCmdRalphList`: 14 tests for function behavior
+  - `TestRalphListCLI`: 3 tests for CLI integration
+  - `TestRalphListDispatch`: 1 test for dispatch
 
 ### 2026-02-02: Improved Test Coverage
 

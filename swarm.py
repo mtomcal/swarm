@@ -1015,6 +1015,13 @@ def main() -> None:
     ralph_run_p = ralph_subparsers.add_parser("run", help="Run the ralph loop for a worker")
     ralph_run_p.add_argument("name", help="Worker name")
 
+    # ralph list - list all ralph workers
+    ralph_list_p = ralph_subparsers.add_parser("list", help="List all ralph workers")
+    ralph_list_p.add_argument("--format", choices=["table", "json", "names"],
+                              default="table", help="Output format (default: table)")
+    ralph_list_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
+                              default="all", help="Filter by ralph status (default: all)")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -2040,6 +2047,7 @@ def cmd_ralph(args) -> None:
     - pause: Pause ralph loop for a worker
     - resume: Resume ralph loop for a worker
     - run: Run the ralph loop (main outer loop execution)
+    - list: List all ralph workers
     """
     if args.ralph_command == "init":
         cmd_ralph_init(args)
@@ -2053,6 +2061,8 @@ def cmd_ralph(args) -> None:
         cmd_ralph_resume(args)
     elif args.ralph_command == "run":
         cmd_ralph_run(args)
+    elif args.ralph_command == "list":
+        cmd_ralph_list(args)
 
 
 def cmd_ralph_init(args) -> None:
@@ -2209,6 +2219,102 @@ def cmd_ralph_resume(args) -> None:
     save_ralph_state(ralph_state)
 
     print(f"resumed ralph loop for {args.name}")
+
+
+def cmd_ralph_list(args) -> None:
+    """List all ralph workers.
+
+    Shows all workers that have ralph state (are/were ralph workers).
+    Supports filtering by ralph status and multiple output formats.
+
+    Args:
+        args: Namespace with format and status attributes
+    """
+    # Load swarm state
+    state = State()
+
+    # Find all ralph workers by checking for ralph state files
+    ralph_workers = []
+    if RALPH_DIR.exists():
+        for worker_dir in RALPH_DIR.iterdir():
+            if worker_dir.is_dir():
+                state_file = worker_dir / "state.json"
+                if state_file.exists():
+                    ralph_state = load_ralph_state(worker_dir.name)
+                    if ralph_state:
+                        # Get the worker from swarm state (may not exist)
+                        worker = state.get_worker(ralph_state.worker_name)
+                        ralph_workers.append((ralph_state, worker))
+
+    # Filter by ralph status if specified
+    if args.status != "all":
+        ralph_workers = [(rs, w) for rs, w in ralph_workers if rs.status == args.status]
+
+    # Output based on format
+    if args.format == "json":
+        # JSON format - include ralph state and worker info
+        output = []
+        for ralph_state, worker in ralph_workers:
+            entry = ralph_state.to_dict()
+            if worker:
+                entry["worker_status"] = refresh_worker_status(worker)
+            else:
+                entry["worker_status"] = "removed"
+            output.append(entry)
+        print(json.dumps(output, indent=2))
+
+    elif args.format == "names":
+        # Names format - one per line
+        for ralph_state, _ in ralph_workers:
+            print(ralph_state.worker_name)
+
+    else:  # table format
+        if not ralph_workers:
+            return
+
+        # Prepare rows
+        rows = []
+        for ralph_state, worker in ralph_workers:
+            # WORKER_STATUS column
+            if worker:
+                worker_status = refresh_worker_status(worker)
+            else:
+                worker_status = "removed"
+
+            # ITERATION column
+            iteration = f"{ralph_state.current_iteration}/{ralph_state.max_iterations}"
+
+            # FAILURES column
+            failures = f"{ralph_state.consecutive_failures}/{ralph_state.total_failures}"
+
+            rows.append({
+                "NAME": ralph_state.worker_name,
+                "RALPH_STATUS": ralph_state.status,
+                "WORKER_STATUS": worker_status,
+                "ITERATION": iteration,
+                "FAILURES": failures,
+            })
+
+        # Calculate column widths
+        headers = ["NAME", "RALPH_STATUS", "WORKER_STATUS", "ITERATION", "FAILURES"]
+        col_widths = {}
+        for header in headers:
+            col_widths[header] = len(header)
+            for row in rows:
+                col_widths[header] = max(col_widths[header], len(row[header]))
+
+        # Print header
+        header_parts = []
+        for header in headers:
+            header_parts.append(header.ljust(col_widths[header]))
+        print("  ".join(header_parts))
+
+        # Print rows
+        for row in rows:
+            row_parts = []
+            for header in headers:
+                row_parts.append(row[header].ljust(col_widths[header]))
+            print("  ".join(row_parts))
 
 
 def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple[bool, str]:

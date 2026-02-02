@@ -3781,5 +3781,433 @@ class TestRalphRunEdgeCases(unittest.TestCase):
         self.assertIn('[FAIL]', log_content)
 
 
+class TestRalphListSubparser(unittest.TestCase):
+    """Test that ralph list subparser is correctly configured."""
+
+    def test_ralph_list_subcommand_exists(self):
+        """Test that 'ralph list' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('format', result.stdout.lower())
+
+    def test_ralph_list_format_flag(self):
+        """Test --format flag accepts valid values."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--format', 'json', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_ralph_list_status_flag(self):
+        """Test --status flag accepts valid values."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--status', 'running', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+
+class TestCmdRalphList(unittest.TestCase):
+    """Test cmd_ralph_list function."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        # Create temp directory for RALPH_DIR
+        self.temp_dir = tempfile.mkdtemp()
+        self.old_ralph_dir = swarm.RALPH_DIR
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Create temp directory for STATE_FILE
+        self.old_state_file = swarm.STATE_FILE
+        self.old_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Restore original directories and clean up."""
+        swarm.RALPH_DIR = self.old_ralph_dir
+        swarm.STATE_FILE = self.old_state_file
+        swarm.STATE_LOCK_FILE = self.old_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_list_empty_no_ralph_workers(self):
+        """Test ralph list with no ralph workers returns empty."""
+        args = Namespace(format='table', status='all')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        # Should not print anything for empty list
+        mock_print.assert_not_called()
+
+    def test_list_table_format_single_worker(self):
+        """Test ralph list table format with single worker."""
+        # Create a ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running',
+            consecutive_failures=1,
+            total_failures=2
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(format='table', status='all')
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('builtins.print') as mock_print:
+                swarm.cmd_ralph_list(args)
+
+        # Check header was printed
+        calls = [str(call) for call in mock_print.call_args_list]
+        output = '\n'.join(calls)
+        self.assertIn('NAME', output)
+        self.assertIn('RALPH_STATUS', output)
+        self.assertIn('WORKER_STATUS', output)
+        self.assertIn('ITERATION', output)
+        self.assertIn('FAILURES', output)
+        # Check worker data
+        self.assertIn('test-worker', output)
+        self.assertIn('running', output)
+        self.assertIn('3/10', output)
+        self.assertIn('1/2', output)
+
+    def test_list_json_format(self):
+        """Test ralph list JSON format."""
+        # Create a ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='json-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=20,
+            current_iteration=5,
+            status='paused',
+            consecutive_failures=0,
+            total_failures=1
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(format='json', status='all')
+
+        import io
+        import json
+        with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+            swarm.cmd_ralph_list(args)
+            output = mock_stdout.getvalue()
+
+        # Parse JSON and verify
+        data = json.loads(output)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['worker_name'], 'json-worker')
+        self.assertEqual(data[0]['status'], 'paused')
+        self.assertEqual(data[0]['current_iteration'], 5)
+        self.assertEqual(data[0]['max_iterations'], 20)
+        # Worker doesn't exist in swarm state, so should be 'removed'
+        self.assertEqual(data[0]['worker_status'], 'removed')
+
+    def test_list_names_format(self):
+        """Test ralph list names format."""
+        # Create two ralph states
+        ralph_state1 = swarm.RalphState(
+            worker_name='worker-a',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state1)
+
+        ralph_state2 = swarm.RalphState(
+            worker_name='worker-b',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=2,
+            status='paused'
+        )
+        swarm.save_ralph_state(ralph_state2)
+
+        args = Namespace(format='names', status='all')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        # Check both workers were printed
+        calls = [call[0][0] for call in mock_print.call_args_list]
+        self.assertIn('worker-a', calls)
+        self.assertIn('worker-b', calls)
+
+    def test_list_filter_by_status_running(self):
+        """Test ralph list filters by status=running."""
+        # Create workers with different statuses
+        ralph_state1 = swarm.RalphState(
+            worker_name='running-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state1)
+
+        ralph_state2 = swarm.RalphState(
+            worker_name='paused-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=2,
+            status='paused'
+        )
+        swarm.save_ralph_state(ralph_state2)
+
+        args = Namespace(format='names', status='running')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        # Only running worker should be printed
+        calls = [call[0][0] for call in mock_print.call_args_list]
+        self.assertEqual(calls, ['running-worker'])
+
+    def test_list_filter_by_status_paused(self):
+        """Test ralph list filters by status=paused."""
+        # Create workers with different statuses
+        ralph_state1 = swarm.RalphState(
+            worker_name='running-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state1)
+
+        ralph_state2 = swarm.RalphState(
+            worker_name='paused-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=2,
+            status='paused'
+        )
+        swarm.save_ralph_state(ralph_state2)
+
+        args = Namespace(format='names', status='paused')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        # Only paused worker should be printed
+        calls = [call[0][0] for call in mock_print.call_args_list]
+        self.assertEqual(calls, ['paused-worker'])
+
+    def test_list_filter_by_status_stopped(self):
+        """Test ralph list filters by status=stopped."""
+        ralph_state = swarm.RalphState(
+            worker_name='stopped-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='stopped'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(format='names', status='stopped')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        calls = [call[0][0] for call in mock_print.call_args_list]
+        self.assertEqual(calls, ['stopped-worker'])
+
+    def test_list_filter_by_status_failed(self):
+        """Test ralph list filters by status=failed."""
+        ralph_state = swarm.RalphState(
+            worker_name='failed-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='failed',
+            consecutive_failures=5,
+            total_failures=5
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(format='names', status='failed')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_list(args)
+
+        calls = [call[0][0] for call in mock_print.call_args_list]
+        self.assertEqual(calls, ['failed-worker'])
+
+    def test_list_with_existing_worker(self):
+        """Test ralph list shows worker status for existing workers."""
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='existing-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create corresponding swarm worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='existing-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:00:00',
+            cwd='/tmp'
+        )
+        state.add_worker(worker)
+
+        args = Namespace(format='json', status='all')
+
+        import io
+        import json
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+                swarm.cmd_ralph_list(args)
+                output = mock_stdout.getvalue()
+
+        data = json.loads(output)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['worker_status'], 'running')
+
+    def test_list_removed_worker_shows_removed(self):
+        """Test ralph list shows 'removed' for non-existent workers."""
+        # Create ralph state for a worker that doesn't exist in swarm state
+        ralph_state = swarm.RalphState(
+            worker_name='removed-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='stopped'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(format='json', status='all')
+
+        import io
+        import json
+        with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+            swarm.cmd_ralph_list(args)
+            output = mock_stdout.getvalue()
+
+        data = json.loads(output)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['worker_status'], 'removed')
+
+    def test_list_table_format_with_existing_worker(self):
+        """Test ralph list table format shows worker status for existing workers."""
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='existing-table-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create corresponding swarm worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='existing-table-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:00:00',
+            cwd='/tmp'
+        )
+        state.add_worker(worker)
+
+        args = Namespace(format='table', status='all')
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('builtins.print') as mock_print:
+                swarm.cmd_ralph_list(args)
+
+        # Check output contains running status from existing worker
+        calls = [str(call) for call in mock_print.call_args_list]
+        output = '\n'.join(calls)
+        self.assertIn('existing-table-worker', output)
+        self.assertIn('running', output)
+        self.assertIn('5/10', output)
+
+
+class TestRalphListCLI(unittest.TestCase):
+    """Test ralph list CLI integration."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.old_ralph_dir = swarm.RALPH_DIR
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Restore original directories and clean up."""
+        swarm.RALPH_DIR = self.old_ralph_dir
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_list_cli_empty(self):
+        """Test ralph list CLI with no workers."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        # Should succeed with empty output
+        self.assertEqual(result.returncode, 0)
+
+    def test_ralph_list_cli_json_format(self):
+        """Test ralph list CLI with --format json."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--format', 'json'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0)
+        # Should be valid JSON (empty array)
+        import json
+        data = json.loads(result.stdout)
+        self.assertEqual(data, [])
+
+    def test_ralph_list_cli_names_format(self):
+        """Test ralph list CLI with --format names."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--format', 'names'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0)
+        # Should be empty for no workers
+        self.assertEqual(result.stdout.strip(), '')
+
+
+class TestRalphListDispatch(unittest.TestCase):
+    """Test ralph list is dispatched correctly from cmd_ralph."""
+
+    def test_dispatch_to_cmd_ralph_list(self):
+        """Test that ralph command dispatches to cmd_ralph_list."""
+        args = Namespace(ralph_command='list', format='table', status='all')
+
+        with patch('swarm.cmd_ralph_list') as mock_list:
+            swarm.cmd_ralph(args)
+
+        mock_list.assert_called_once_with(args)
+
+
 if __name__ == "__main__":
     unittest.main()
