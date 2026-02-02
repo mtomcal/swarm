@@ -1401,7 +1401,7 @@ class TestRalphStateCreation(unittest.TestCase):
         self.assertEqual(ralph_state.max_iterations, 50)
         self.assertEqual(ralph_state.inactivity_timeout, 600)
         self.assertEqual(ralph_state.done_pattern, 'All tasks complete')
-        self.assertEqual(ralph_state.current_iteration, 0)
+        self.assertEqual(ralph_state.current_iteration, 1)  # Starts at iteration 1
         self.assertIsNotNone(ralph_state.started)
 
     def test_spawn_ralph_message_includes_iteration(self):
@@ -2237,6 +2237,374 @@ class TestRalphScenariosPauseResume(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         error_calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any('not a ralph worker' in call for call in error_calls))
+
+
+class TestRalphIterationLogging(unittest.TestCase):
+    """Test ralph iteration logging functionality."""
+
+    def setUp(self):
+        """Set up test fixtures with temporary SWARM_DIR."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_ralph_iterations_log_path(self):
+        """Test get_ralph_iterations_log_path returns correct path."""
+        path = swarm.get_ralph_iterations_log_path('my-worker')
+        expected = swarm.RALPH_DIR / 'my-worker' / 'iterations.log'
+        self.assertEqual(path, expected)
+
+    def test_log_ralph_iteration_creates_directory(self):
+        """Test log_ralph_iteration creates parent directory if needed."""
+        swarm.log_ralph_iteration('new-worker', 'START', iteration=1, max_iterations=10)
+        log_path = swarm.get_ralph_iterations_log_path('new-worker')
+        self.assertTrue(log_path.exists())
+
+    def test_log_ralph_iteration_start_event(self):
+        """Test log_ralph_iteration with START event."""
+        swarm.log_ralph_iteration('worker', 'START', iteration=5, max_iterations=100)
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        self.assertIn('[START]', content)
+        self.assertIn('iteration 5/100', content)
+
+    def test_log_ralph_iteration_end_event(self):
+        """Test log_ralph_iteration with END event."""
+        swarm.log_ralph_iteration('worker', 'END', iteration=5, exit_code=0, duration='3m42s')
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        self.assertIn('[END]', content)
+        self.assertIn('iteration 5', content)
+        self.assertIn('exit=0', content)
+        self.assertIn('duration=3m42s', content)
+
+    def test_log_ralph_iteration_fail_event(self):
+        """Test log_ralph_iteration with FAIL event."""
+        swarm.log_ralph_iteration('worker', 'FAIL', iteration=3, exit_code=1, attempt=2, backoff=4)
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        self.assertIn('[FAIL]', content)
+        self.assertIn('iteration 3', content)
+        self.assertIn('exit=1', content)
+        self.assertIn('attempt=2/5', content)
+        self.assertIn('backoff=4s', content)
+
+    def test_log_ralph_iteration_timeout_event(self):
+        """Test log_ralph_iteration with TIMEOUT event."""
+        swarm.log_ralph_iteration('worker', 'TIMEOUT', iteration=7, timeout=300)
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        self.assertIn('[TIMEOUT]', content)
+        self.assertIn('iteration 7', content)
+        self.assertIn('inactivity_timeout=300s', content)
+
+    def test_log_ralph_iteration_done_event(self):
+        """Test log_ralph_iteration with DONE event."""
+        swarm.log_ralph_iteration('worker', 'DONE', total_iterations=47, reason='max_iterations')
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        self.assertIn('[DONE]', content)
+        self.assertIn('loop complete after 47 iterations', content)
+        self.assertIn('reason=max_iterations', content)
+
+    def test_log_ralph_iteration_appends(self):
+        """Test log_ralph_iteration appends to existing log."""
+        swarm.log_ralph_iteration('worker', 'START', iteration=1, max_iterations=10)
+        swarm.log_ralph_iteration('worker', 'END', iteration=1, exit_code=0, duration='5m')
+        swarm.log_ralph_iteration('worker', 'START', iteration=2, max_iterations=10)
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        lines = content.strip().split('\n')
+        self.assertEqual(len(lines), 3)
+
+    def test_log_ralph_iteration_has_timestamp(self):
+        """Test log_ralph_iteration includes ISO timestamp."""
+        swarm.log_ralph_iteration('worker', 'START', iteration=1, max_iterations=10)
+        log_path = swarm.get_ralph_iterations_log_path('worker')
+        content = log_path.read_text()
+        # Check for ISO format timestamp pattern (YYYY-MM-DDTHH:MM:SS)
+        import re
+        self.assertTrue(re.search(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', content))
+
+
+class TestWorkerMetadata(unittest.TestCase):
+    """Test Worker metadata field."""
+
+    def test_worker_has_metadata_field(self):
+        """Test Worker dataclass has metadata field."""
+        worker = swarm.Worker(
+            name='test',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        self.assertIsNotNone(worker.metadata)
+        self.assertEqual(worker.metadata, {})
+
+    def test_worker_metadata_to_dict(self):
+        """Test Worker.to_dict includes metadata."""
+        worker = swarm.Worker(
+            name='test',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            metadata={'ralph': True, 'ralph_iteration': 5}
+        )
+        d = worker.to_dict()
+        self.assertIn('metadata', d)
+        self.assertEqual(d['metadata']['ralph'], True)
+        self.assertEqual(d['metadata']['ralph_iteration'], 5)
+
+    def test_worker_metadata_from_dict(self):
+        """Test Worker.from_dict loads metadata."""
+        d = {
+            'name': 'test',
+            'status': 'running',
+            'cmd': ['echo'],
+            'started': '2024-01-15T10:30:00',
+            'cwd': '/tmp',
+            'metadata': {'ralph': True, 'ralph_iteration': 3}
+        }
+        worker = swarm.Worker.from_dict(d)
+        self.assertEqual(worker.metadata['ralph'], True)
+        self.assertEqual(worker.metadata['ralph_iteration'], 3)
+
+    def test_worker_metadata_from_dict_missing(self):
+        """Test Worker.from_dict handles missing metadata."""
+        d = {
+            'name': 'test',
+            'status': 'running',
+            'cmd': ['echo'],
+            'started': '2024-01-15T10:30:00',
+            'cwd': '/tmp'
+        }
+        worker = swarm.Worker.from_dict(d)
+        self.assertEqual(worker.metadata, {})
+
+    def test_worker_metadata_roundtrip(self):
+        """Test Worker metadata survives round-trip through dict."""
+        original = swarm.Worker(
+            name='test',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            metadata={'ralph': True, 'ralph_iteration': 42}
+        )
+        d = original.to_dict()
+        restored = swarm.Worker.from_dict(d)
+        self.assertEqual(original.metadata, restored.metadata)
+
+
+class TestRalphSpawnMetadata(unittest.TestCase):
+    """Test ralph spawn creates correct metadata."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Set up temp swarm dirs
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        # Create a test prompt file
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_ralph_sets_metadata(self):
+        """Test that spawning with --ralph sets worker metadata."""
+        args = Namespace(
+            name='ralph-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Load worker and verify metadata
+        state = swarm.State()
+        worker = state.get_worker('ralph-worker')
+        self.assertIsNotNone(worker)
+        self.assertEqual(worker.metadata.get('ralph'), True)
+        self.assertEqual(worker.metadata.get('ralph_iteration'), 1)
+
+    def test_spawn_non_ralph_has_empty_metadata(self):
+        """Test that spawning without --ralph has empty metadata."""
+        args = Namespace(
+            name='normal-worker',
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            inactivity_timeout=300,
+            done_pattern=None,
+            tmux=True,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Load worker and verify empty metadata
+        state = swarm.State()
+        worker = state.get_worker('normal-worker')
+        self.assertIsNotNone(worker)
+        self.assertEqual(worker.metadata, {})
+
+    def test_spawn_ralph_logs_iteration_start(self):
+        """Test that spawning with --ralph logs iteration start."""
+        args = Namespace(
+            name='ralph-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Verify iteration log was created
+        log_path = swarm.get_ralph_iterations_log_path('ralph-worker')
+        self.assertTrue(log_path.exists())
+        content = log_path.read_text()
+        self.assertIn('[START]', content)
+        self.assertIn('iteration 1/10', content)
+
+    def test_spawn_ralph_state_starts_at_iteration_1(self):
+        """Test that ralph state starts at iteration 1, not 0."""
+        args = Namespace(
+            name='ralph-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Verify ralph state starts at iteration 1
+        ralph_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(ralph_state.current_iteration, 1)
+
+    def test_spawn_ralph_state_has_last_iteration_started(self):
+        """Test that ralph state has last_iteration_started set on spawn."""
+        args = Namespace(
+            name='ralph-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+
+        # Verify ralph state has last_iteration_started
+        ralph_state = swarm.load_ralph_state('ralph-worker')
+        self.assertIsNotNone(ralph_state.last_iteration_started)
+        self.assertNotEqual(ralph_state.last_iteration_started, '')
 
 
 if __name__ == "__main__":

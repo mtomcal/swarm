@@ -76,14 +76,16 @@ Persist ralph loop state between iterations.
 |---------|--------|-------------|
 | State file creation | Complete | `~/.swarm/ralph/<worker-name>/state.json` |
 | State schema | Complete | JSON schema per spec (RalphState dataclass) |
-| Iteration logging | Not Started | `~/.swarm/ralph/<worker-name>/iterations.log` |
-| Worker metadata | Not Started | Add ralph_iteration to worker record |
+| Iteration logging | Complete | `~/.swarm/ralph/<worker-name>/iterations.log` with START/END/FAIL/TIMEOUT/DONE events |
+| Worker metadata | Complete | Add `metadata` field with `ralph: true` and `ralph_iteration` to Worker record |
 
 #### Implementation Details
 
 - **RalphState dataclass**: Complete implementation matching spec schema
 - **Persistence functions**: `load_ralph_state()`, `save_ralph_state()`, `get_ralph_state_path()`
 - **RALPH_DIR constant**: `~/.swarm/ralph/` directory for all ralph state
+- **Iteration logging**: `get_ralph_iterations_log_path()`, `log_ralph_iteration()` for all event types
+- **Worker metadata**: `metadata` dict field added to Worker dataclass with `ralph` and `ralph_iteration` keys
 
 ### Phase 5: Pause and Resume (COMPLETE)
 
@@ -142,7 +144,10 @@ Test file: `test_cmd_ralph.py`
 | TestCmdRalphResume | 4 | Passing |
 | TestRalphSubcommandsCLI | 6 | Passing |
 | TestRalphScenariosPauseResume | 4 | Passing |
-| **Total** | **92** | **All Passing** |
+| TestRalphIterationLogging | 10 | Passing |
+| TestWorkerMetadata | 5 | Passing |
+| TestRalphSpawnMetadata | 5 | Passing |
+| **Total** | **111** | **All Passing** |
 
 ## Next Steps
 
@@ -153,6 +158,16 @@ Test file: `test_cmd_ralph.py`
 5. Phase 6: Add failure handling with backoff
 
 ## Recent Changes
+
+### 2026-02-02: Completed Phase 4 - Ralph State Management
+
+- Added `log_ralph_iteration()` function for logging iteration events (START, END, FAIL, TIMEOUT, DONE)
+- Added `get_ralph_iterations_log_path()` function for getting iterations log file path
+- Added `metadata` field to Worker dataclass for extensible metadata
+- Worker metadata now includes `ralph: true` and `ralph_iteration` for ralph workers
+- Ralph state now starts at iteration 1 (more intuitive for users)
+- Spawn now logs iteration START event to iterations.log
+- Added 19 new tests for iteration logging and worker metadata (total: 111 tests)
 
 ### 2026-02-02: Completed Spawn Integration
 

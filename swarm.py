@@ -107,6 +107,7 @@ class Worker:
     tmux: Optional[TmuxInfo] = None
     worktree: Optional[WorktreeInfo] = None
     pid: Optional[int] = None
+    metadata: dict = field(default_factory=dict)  # Extensible metadata (e.g., ralph info)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -121,6 +122,7 @@ class Worker:
             "tmux": asdict(self.tmux) if self.tmux else None,
             "worktree": asdict(self.worktree) if self.worktree else None,
             "pid": self.pid,
+            "metadata": self.metadata,
         }
         return d
 
@@ -140,6 +142,7 @@ class Worker:
             tmux=tmux,
             worktree=worktree,
             pid=d.get("pid"),
+            metadata=d.get("metadata", {}),
         )
 
 
@@ -226,6 +229,60 @@ def save_ralph_state(ralph_state: RalphState) -> None:
 
     with open(state_path, "w") as f:
         json.dump(ralph_state.to_dict(), f, indent=2)
+
+
+def get_ralph_iterations_log_path(worker_name: str) -> Path:
+    """Get the path to a worker's ralph iterations log file."""
+    return RALPH_DIR / worker_name / "iterations.log"
+
+
+def log_ralph_iteration(worker_name: str, event: str, **kwargs) -> None:
+    """Log a ralph iteration event.
+
+    Appends a timestamped log entry to the worker's iterations.log file.
+    Log format: ISO_TIMESTAMP [EVENT] message
+
+    Args:
+        worker_name: Name of the worker
+        event: Event type (START, END, FAIL, TIMEOUT, DONE)
+        **kwargs: Additional event-specific data (iteration, max_iterations, exit_code, duration)
+    """
+    log_path = get_ralph_iterations_log_path(worker_name)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().isoformat(timespec='seconds')
+
+    # Format the log message based on event type
+    if event == "START":
+        iteration = kwargs.get('iteration', 0)
+        max_iterations = kwargs.get('max_iterations', 0)
+        message = f"iteration {iteration}/{max_iterations}"
+    elif event == "END":
+        iteration = kwargs.get('iteration', 0)
+        exit_code = kwargs.get('exit_code', 0)
+        duration = kwargs.get('duration', '')
+        message = f"iteration {iteration} exit={exit_code} duration={duration}"
+    elif event == "FAIL":
+        iteration = kwargs.get('iteration', 0)
+        exit_code = kwargs.get('exit_code', 1)
+        attempt = kwargs.get('attempt', 1)
+        backoff = kwargs.get('backoff', 0)
+        message = f"iteration {iteration} exit={exit_code} attempt={attempt}/5 backoff={backoff}s"
+    elif event == "TIMEOUT":
+        iteration = kwargs.get('iteration', 0)
+        timeout = kwargs.get('timeout', 300)
+        message = f"iteration {iteration} inactivity_timeout={timeout}s"
+    elif event == "DONE":
+        total_iterations = kwargs.get('total_iterations', 0)
+        reason = kwargs.get('reason', 'max_iterations')
+        message = f"loop complete after {total_iterations} iterations reason={reason}"
+    else:
+        message = kwargs.get('message', '')
+
+    log_line = f"{timestamp} [{event}] {message}\n"
+
+    with open(log_path, "a") as f:
+        f.write(log_line)
 
 
 @contextmanager
@@ -1109,6 +1166,14 @@ def cmd_spawn(args) -> None:
             print(f"swarm: error: failed to spawn process: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # Build metadata for ralph workers
+    metadata = {}
+    if args.ralph:
+        metadata = {
+            "ralph": True,
+            "ralph_iteration": 1,  # Starting with iteration 1
+        }
+
     # Create Worker object
     worker = Worker(
         name=args.name,
@@ -1121,6 +1186,7 @@ def cmd_spawn(args) -> None:
         tmux=tmux_info,
         worktree=worktree_info,
         pid=pid,
+        metadata=metadata,
     )
 
     # Add to state
@@ -1132,13 +1198,22 @@ def cmd_spawn(args) -> None:
             worker_name=args.name,
             prompt_file=str(Path(args.prompt_file).resolve()),
             max_iterations=args.max_iterations,
-            current_iteration=0,
+            current_iteration=1,  # Starting at iteration 1, not 0
             status="running",
             started=datetime.now().isoformat(),
+            last_iteration_started=datetime.now().isoformat(),
             inactivity_timeout=args.inactivity_timeout,
             done_pattern=args.done_pattern,
         )
         save_ralph_state(ralph_state)
+
+        # Log the iteration start
+        log_ralph_iteration(
+            args.name,
+            "START",
+            iteration=1,
+            max_iterations=args.max_iterations
+        )
 
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:
