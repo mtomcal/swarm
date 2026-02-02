@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# Pre-commit hook: runs tests with coverage, fails if <90%
+#
+
+set -e
+
+# Check coverage is installed
+if ! python3 -c "import coverage" 2>/dev/null; then
+    echo "Error: coverage not installed. Run: pip install coverage"
+    exit 1
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Run tests with coverage, capturing output
+# Use buffer mode to suppress success output, only show failures
+OUTPUT=$(python3 -m coverage run --source=swarm -m unittest discover -s . -p 'test_*.py' -b 2>&1) || {
+    # On failure, show only relevant error lines
+    echo "$OUTPUT" | grep -E "(FAIL|ERROR|Traceback|File.*line|Assert|Error:)" | head -50
+    echo "Tests failed"
+    exit 1
+}
+
+# Get coverage percentage
+TOTAL=$(python3 -m coverage report --format=total 2>/dev/null || python3 -m coverage report | grep -E "^TOTAL" | awk '{print $NF}' | tr -d '%')
+
+# Check minimum coverage
+if [ -z "$TOTAL" ]; then
+    python3 -m coverage report
+    echo "Could not determine coverage"
+    exit 1
+fi
+
+if [ "$TOTAL" -lt 90 ]; then
+    python3 -m coverage report --skip-covered 2>/dev/null || python3 -m coverage report
+    echo "Coverage: ${TOTAL}% (minimum: 90%)"
+    exit 1
+fi
+
+echo "Coverage: ${TOTAL}%"
+exit 0

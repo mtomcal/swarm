@@ -1,4 +1,4 @@
-.PHONY: test lint typecheck all
+.PHONY: test lint typecheck all install-hooks
 
 # Run all unit tests
 test:
@@ -16,3 +16,8 @@ typecheck:
 
 # Run all quality checks
 all: lint typecheck test
+
+# Install git hooks
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed"
