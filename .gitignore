@@ -1,2 +1,8 @@
 *.pyc
 __pycache__/
+
+# Coverage
+.coverage
+coverage.json
+*.py,cover
+htmlcov/
