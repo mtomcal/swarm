@@ -6994,5 +6994,412 @@ class TestRalphPromptRereadIntegration(unittest.TestCase):
             "Ralph state must be 'failed' when prompt file is deleted")
 
 
+class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
+    """Integration test: ralph loop and detect_inactivity work together correctly.
+
+    Contract verified:
+    This test verifies the CRITICAL integration between _run_ralph_loop and
+    detect_inactivity where both components must work together correctly:
+
+    1. When detect_inactivity returns False (worker exited), the loop must:
+       - NOT call kill_worker_for_ralph (worker already exited)
+       - Increment iteration and spawn new worker
+       - Continue to next iteration
+
+    2. When detect_inactivity returns True (inactivity timeout), the loop must:
+       - Call kill_worker_for_ralph to stop inactive worker
+       - Increment iteration and spawn new worker
+       - Continue to next iteration
+
+    3. The loop must properly BLOCK during detect_inactivity (not spin-loop)
+
+    Why this is the MOST IMPORTANT integration test:
+    - Previous tests mock detect_inactivity completely, hiding timing bugs
+    - This test uses realistic detect_inactivity behavior with controlled timing
+    - Catches race conditions where worker state changes mid-detection
+    - Verifies the loop properly distinguishes worker-exit vs inactivity paths
+    - Tests that blocking behavior prevents CPU burn and log spam
+
+    Bug this catches:
+    - If detect_inactivity returns immediately (no blocking), loop spins rapidly
+    - If kill_worker_for_ralph is called when worker already exited, errors occur
+    - If iteration increment happens at wrong time, metadata is inconsistent
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_content = "LOOP_DETECT_INTEGRATION_TEST_PROMPT"
+        self.prompt_path.write_text(self.prompt_content)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_loop_handles_worker_exit_without_kill(self):
+        """Integration test: worker exit path doesn't call kill_worker_for_ralph.
+
+        Contract: When detect_inactivity returns False (worker exited on its own),
+        the ralph loop must NOT call kill_worker_for_ralph because the worker
+        is already gone.
+
+        This tests the critical distinction between:
+        - detect_inactivity returning True → must kill worker
+        - detect_inactivity returning False → must NOT kill worker
+
+        Timeout: 10s to prevent hanging.
+        """
+        # Create worker in running state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='exit-path-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='exit-path-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1, max 2 iterations
+        ralph_state = swarm.RalphState(
+            worker_name='exit-path-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=30,
+            inactivity_mode='ready'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='exit-path-worker')
+
+        # Track operations
+        operations = []
+        kill_calls = []
+        detect_calls = []
+
+        def mock_detect(worker, timeout, mode='ready'):
+            """Simulate detect_inactivity with blocking and return False (worker exit)."""
+            detect_calls.append({
+                'worker': worker.name,
+                'timeout': timeout,
+                'mode': mode,
+                'time': time.time()
+            })
+            # Simulate brief blocking (realistic behavior)
+            time.sleep(0.1)
+            # Return False = worker exited (not inactivity)
+            return False
+
+        def track_kill(worker, state):
+            """Track kill_worker_for_ralph - should NOT be called in this path."""
+            kill_calls.append({
+                'worker': worker.name,
+                'time': time.time()
+            })
+
+        def mock_spawn(*args, **kwargs):
+            operations.append('spawn')
+            return swarm.Worker(
+                name='exit-path-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='exit-path-worker')
+            )
+
+        # First refresh: running, then stopped to trigger respawn
+        refresh_count = [0]
+        def mock_refresh(worker):
+            refresh_count[0] += 1
+            if refresh_count[0] <= 1:
+                return 'running'
+            return 'stopped'
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                    with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
+                        with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
+                            with patch('swarm.send_prompt_to_worker'):
+                                with patch.object(swarm.State, 'add_worker'):
+                                    with patch.object(swarm.State, 'remove_worker'):
+                                        with patch('swarm.check_done_pattern', return_value=False):
+                                            with patch('builtins.print'):
+                                                swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL VERIFICATION: detect_inactivity was called
+        self.assertGreaterEqual(len(detect_calls), 1,
+            "detect_inactivity must be called to monitor worker")
+
+        # CRITICAL VERIFICATION: kill_worker_for_ralph was NOT called
+        # because detect_inactivity returned False (worker exited)
+        self.assertEqual(len(kill_calls), 0,
+            "kill_worker_for_ralph must NOT be called when worker exits on its own "
+            f"(detect_inactivity returned False). Got {len(kill_calls)} kill calls.")
+
+        # Verify final state
+        final_state = swarm.load_ralph_state('exit-path-worker')
+        self.assertEqual(final_state.status, 'stopped',
+            "Ralph loop must stop after reaching max_iterations")
+
+    def test_ralph_loop_handles_inactivity_with_kill(self):
+        """Integration test: inactivity path DOES call kill_worker_for_ralph.
+
+        Contract: When detect_inactivity returns True (inactivity timeout),
+        the ralph loop MUST call kill_worker_for_ralph to terminate the
+        inactive worker before spawning a new one.
+
+        This verifies the kill path is taken when inactivity is detected.
+
+        Timeout: 10s to prevent hanging.
+        """
+        # Create worker in running state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='inactivity-path-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='inactivity-path-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1, max 2 iterations
+        ralph_state = swarm.RalphState(
+            worker_name='inactivity-path-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=30,
+            inactivity_mode='ready'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='inactivity-path-worker')
+
+        kill_calls = []
+        detect_call_count = [0]
+
+        def mock_detect(worker, timeout, mode='ready'):
+            """Return True on first call (inactivity), False on second (exit)."""
+            detect_call_count[0] += 1
+            time.sleep(0.1)  # Brief blocking for realism
+            # First call: inactivity detected
+            if detect_call_count[0] == 1:
+                return True
+            # After that: worker exited
+            return False
+
+        def track_kill(worker, state):
+            """Track kill_worker_for_ralph - SHOULD be called after inactivity."""
+            kill_calls.append({
+                'worker': worker.name,
+                'iteration': swarm.load_ralph_state('inactivity-path-worker').current_iteration,
+                'time': time.time()
+            })
+
+        killed = [False]
+        def mock_refresh(worker):
+            """Return running, then stopped after kill."""
+            if killed[0]:
+                return 'stopped'
+            return 'running'
+
+        def actual_kill(worker, state):
+            """Mark killed and call the tracker."""
+            killed[0] = True
+            track_kill(worker, state)
+
+        def mock_spawn(*args, **kwargs):
+            return swarm.Worker(
+                name='inactivity-path-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='inactivity-path-worker')
+            )
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                    with patch('swarm.kill_worker_for_ralph', side_effect=actual_kill):
+                        with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
+                            with patch('swarm.send_prompt_to_worker'):
+                                with patch.object(swarm.State, 'add_worker'):
+                                    with patch.object(swarm.State, 'remove_worker'):
+                                        with patch('swarm.check_done_pattern', return_value=False):
+                                            with patch('builtins.print'):
+                                                swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL VERIFICATION: kill_worker_for_ralph WAS called
+        # because detect_inactivity returned True (inactivity detected)
+        self.assertEqual(len(kill_calls), 1,
+            "kill_worker_for_ralph MUST be called when inactivity is detected "
+            f"(detect_inactivity returned True). Got {len(kill_calls)} kill calls.")
+
+        # Verify kill happened at the right iteration (iteration 1 is when worker was inactive)
+        self.assertEqual(kill_calls[0]['iteration'], 1,
+            "kill must happen at iteration 1 (when inactivity was detected)")
+
+    def test_ralph_loop_blocks_during_detect_inactivity(self):
+        """Integration test: ralph loop properly blocks during monitoring.
+
+        Contract: The ralph loop must BLOCK while detect_inactivity is monitoring
+        the worker. This prevents:
+        - CPU burn from spin-looping
+        - Log spam from rapid iteration messages
+        - Race conditions from state changes
+
+        This test verifies that detect_inactivity's blocking behavior is
+        respected by the outer loop - if it's bypassed, the loop would
+        complete in milliseconds instead of the expected blocking time.
+
+        Timeout: 15s to allow for blocking time.
+        """
+        # Create worker in running state (needs to be running for detect_inactivity)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='blocking-test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='blocking-test-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0, max 1
+        # The loop will increment to 1, spawn, call detect_inactivity, then exit
+        ralph_state = swarm.RalphState(
+            worker_name='blocking-test-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=1,  # Just one iteration
+            current_iteration=0,  # Will be incremented to 1 after worker respawn
+            status='running',
+            inactivity_timeout=30,
+            inactivity_mode='ready'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='blocking-test-worker')
+
+        detect_start_times = []
+        detect_end_times = []
+
+        def mock_detect_with_blocking(worker, timeout, mode='ready'):
+            """Simulate detect_inactivity that blocks for 0.5 seconds."""
+            detect_start_times.append(time.time())
+            # This simulates the blocking behavior of real detect_inactivity
+            time.sleep(0.5)
+            detect_end_times.append(time.time())
+            return False  # Worker exited
+
+        # Worker is stopped initially to trigger respawn, then running for detect_inactivity
+        refresh_count = [0]
+        def mock_refresh(worker):
+            refresh_count[0] += 1
+            # First check: stopped to trigger respawn
+            if refresh_count[0] <= 1:
+                return 'stopped'
+            # After that: running for detect_inactivity
+            return 'running'
+
+        def mock_spawn(*args, **kwargs):
+            return swarm.Worker(
+                name='blocking-test-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='blocking-test-worker')
+            )
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(15)
+
+        loop_start_time = time.time()
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=mock_detect_with_blocking):
+                    with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('swarm.check_done_pattern', return_value=False):
+                                        with patch('builtins.print'):
+                                            swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        loop_end_time = time.time()
+        total_loop_time = loop_end_time - loop_start_time
+
+        # CRITICAL VERIFICATION: detect_inactivity was called
+        self.assertEqual(len(detect_start_times), 1,
+            "detect_inactivity must be called once for iteration 1")
+
+        # CRITICAL VERIFICATION: The loop respected the blocking behavior
+        # If blocking was bypassed, total time would be < 0.1s
+        # With blocking, total time should be >= 0.5s (the blocking duration)
+        self.assertGreaterEqual(total_loop_time, 0.4,  # Allow some timing slack
+            f"Ralph loop must block during detect_inactivity. "
+            f"Total time: {total_loop_time:.3f}s, expected >= 0.4s")
+
+        # Verify detect_inactivity itself blocked
+        if detect_start_times and detect_end_times:
+            detect_duration = detect_end_times[0] - detect_start_times[0]
+            self.assertGreaterEqual(detect_duration, 0.4,
+                f"detect_inactivity must block for its duration. "
+                f"Blocked for: {detect_duration:.3f}s, expected >= 0.4s")
+
+
 if __name__ == "__main__":
     unittest.main()

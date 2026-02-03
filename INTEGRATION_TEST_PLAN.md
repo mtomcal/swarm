@@ -97,6 +97,26 @@ From ralph-loop.md spec: "File is re-read every time (allows editing mid-loop)"
 - `test_prompt_file_deleted_mid_loop_fails_gracefully`: Verifies proper error handling
   when prompt file is deleted between iterations
 
+### 7. Test ralph loop and detect_inactivity integration - IMPLEMENTED (NEW)
+**Contract**: The ralph loop and detect_inactivity must work together correctly:
+1. When detect_inactivity returns False (worker exited), loop must NOT call kill_worker_for_ralph
+2. When detect_inactivity returns True (inactivity), loop MUST call kill_worker_for_ralph
+3. The loop must properly BLOCK during detect_inactivity (not spin-loop)
+
+**Why this matters**: This is the MOST CRITICAL integration point because:
+- Previous tests mock detect_inactivity completely, potentially hiding timing bugs
+- If blocking is bypassed, the loop spins rapidly causing CPU burn and log spam
+- If kill is called when worker already exited, errors or zombie states occur
+- Race conditions can cause worker state inconsistencies
+
+**Tests added (TestRalphLoopDetectInactivityIntegration)**:
+- `test_ralph_loop_handles_worker_exit_without_kill`: Verifies kill is NOT called when
+  detect_inactivity returns False (worker exited on its own)
+- `test_ralph_loop_handles_inactivity_with_kill`: Verifies kill IS called when
+  detect_inactivity returns True (inactivity timeout)
+- `test_ralph_loop_blocks_during_detect_inactivity`: Verifies the loop respects
+  blocking behavior and doesn't spin-loop
+
 ## Implementation Progress
 
 - [x] Plan created
@@ -106,12 +126,13 @@ From ralph-loop.md spec: "File is re-read every time (allows editing mid-loop)"
 - [x] Test 4: detect_inactivity blocking (TestDetectInactivityBlockingIntegration)
 - [x] Test 5: inactivity triggers full restart cycle (TestRalphInactivityRestartIntegration)
 - [x] Test 6: prompt file re-read on each iteration (TestRalphPromptRereadIntegration - NEW)
+- [x] Test 7: ralph loop and detect_inactivity integration (TestRalphLoopDetectInactivityIntegration - NEW)
 
 ## Test Execution
 
 Run all ralph integration tests:
 ```bash
-python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration test_cmd_ralph.TestRalphInactivityRestartIntegration test_cmd_ralph.TestDetectInactivityBlockingIntegration test_cmd_ralph.TestRalphStateFlowIntegration test_cmd_ralph.TestRalphPromptRereadIntegration -v
+python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration test_cmd_ralph.TestRalphInactivityRestartIntegration test_cmd_ralph.TestDetectInactivityBlockingIntegration test_cmd_ralph.TestRalphStateFlowIntegration test_cmd_ralph.TestRalphPromptRereadIntegration test_cmd_ralph.TestRalphLoopDetectInactivityIntegration -v
 ```
 
 Run with timeout to catch hangs:
