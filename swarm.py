@@ -626,6 +626,10 @@ def tmux_send(session: str, window: str, text: str, enter: bool = True, socket: 
     subprocess.run(cmd, capture_output=True, check=True)
 
     if enter:
+        # Delay to ensure text is fully received before Enter
+        # Longer delay for multiline content which takes more time to process
+        delay = 0.5 if '\n' in text else 0.1
+        time.sleep(delay)
         subprocess.run(
             cmd_prefix + ["send-keys", "-t", target, "Enter"],
             capture_output=True,
@@ -1235,6 +1239,10 @@ def cmd_spawn(args) -> None:
             iteration=1,
             max_iterations=args.max_iterations
         )
+
+        # Send the prompt to the worker for the first iteration
+        prompt_content = Path(args.prompt_file).read_text()
+        send_prompt_to_worker(worker, prompt_content)
 
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:
@@ -2823,70 +2831,61 @@ def _run_ralph_loop(args) -> None:
                 time.sleep(backoff)
                 continue
 
-        # Monitor the worker
-        while True:
-            # Reload ralph state (could have been paused externally)
-            ralph_state = load_ralph_state(args.name)
-            if not ralph_state or ralph_state.status == "paused":
-                print(f"[ralph] {args.name}: paused, exiting loop")
-                break
+        # Monitor the worker - detect_inactivity blocks until worker exits or goes inactive
+        inactivity_detected = detect_inactivity(worker, ralph_state.inactivity_timeout, ralph_state.inactivity_mode)
 
-            # Check worker status
-            state = State()
-            worker = state.get_worker(args.name)
-            if not worker:
-                break
+        # Reload ralph state (could have been paused while monitoring)
+        ralph_state = load_ralph_state(args.name)
+        if not ralph_state or ralph_state.status == "paused":
+            print(f"[ralph] {args.name}: paused, exiting loop")
+            break
 
-            worker_status = refresh_worker_status(worker)
+        # Check worker status
+        state = State()
+        worker = state.get_worker(args.name)
 
-            if worker_status == "stopped":
-                # Worker exited
-                duration = format_duration(time.time() - iteration_start)
-                print(f"[ralph] {args.name}: iteration {ralph_state.current_iteration} completed (exit: 0, duration: {duration})")
-                log_ralph_iteration(
-                    args.name,
-                    "END",
-                    iteration=ralph_state.current_iteration,
-                    exit_code=0,
-                    duration=duration
-                )
+        if inactivity_detected:
+            # Worker went inactive - restart it
+            print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s, mode={ralph_state.inactivity_mode}), restarting")
+            log_ralph_iteration(
+                args.name,
+                "TIMEOUT",
+                iteration=ralph_state.current_iteration,
+                timeout=ralph_state.inactivity_timeout
+            )
 
-                # Reset consecutive failures on success
-                ralph_state.consecutive_failures = 0
-                save_ralph_state(ralph_state)
-
-                # Check for done pattern
-                if ralph_state.done_pattern:
-                    if check_done_pattern(worker, ralph_state.done_pattern):
-                        print(f"[ralph] {args.name}: done pattern matched, stopping loop")
-                        log_ralph_iteration(
-                            args.name,
-                            "DONE",
-                            total_iterations=ralph_state.current_iteration,
-                            reason="done_pattern"
-                        )
-                        ralph_state.status = "stopped"
-                        save_ralph_state(ralph_state)
-                        return
-
-                break  # Continue to next iteration
-
-            # Check for inactivity
-            if detect_inactivity(worker, ralph_state.inactivity_timeout, ralph_state.inactivity_mode):
-                print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s, mode={ralph_state.inactivity_mode}), restarting")
-                log_ralph_iteration(
-                    args.name,
-                    "TIMEOUT",
-                    iteration=ralph_state.current_iteration,
-                    timeout=ralph_state.inactivity_timeout
-                )
-
-                # Kill the worker
+            # Kill the worker
+            if worker:
                 kill_worker_for_ralph(worker, state)
-                break  # Continue to next iteration
+        else:
+            # Worker exited on its own
+            duration = format_duration(time.time() - iteration_start)
+            print(f"[ralph] {args.name}: iteration {ralph_state.current_iteration} completed (exit: 0, duration: {duration})")
+            log_ralph_iteration(
+                args.name,
+                "END",
+                iteration=ralph_state.current_iteration,
+                exit_code=0,
+                duration=duration
+            )
 
-            # Brief sleep before next check
-            time.sleep(1)
+            # Reset consecutive failures on success
+            ralph_state.consecutive_failures = 0
+            save_ralph_state(ralph_state)
+
+            # Check for done pattern
+            if ralph_state.done_pattern and worker:
+                if check_done_pattern(worker, ralph_state.done_pattern):
+                    print(f"[ralph] {args.name}: done pattern matched, stopping loop")
+                    log_ralph_iteration(
+                        args.name,
+                        "DONE",
+                        total_iterations=ralph_state.current_iteration,
+                        reason="done_pattern"
+                    )
+                    ralph_state.status = "stopped"
+                    save_ralph_state(ralph_state)
+                    return
 
         # Check if we should exit (paused)
         ralph_state = load_ralph_state(args.name)

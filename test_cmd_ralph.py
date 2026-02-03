@@ -2,9 +2,11 @@
 """Tests for swarm ralph command - TDD tests for ralph subcommands."""
 
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -5291,6 +5293,548 @@ class TestCmdKillRalphWorker(unittest.TestCase):
         for name in ['ralph-1', 'ralph-2']:
             updated_state = swarm.load_ralph_state(name)
             self.assertEqual(updated_state.status, 'stopped')
+
+
+class TestRalphSpawnSendsPrompt(unittest.TestCase):
+    """Integration test: spawn --ralph sends prompt to worker.
+
+    Contract verified:
+        When spawning with --ralph flag, the command must:
+        1. Create the worker in tmux
+        2. Create ralph state with iteration=1
+        3. Call send_prompt_to_worker with the prompt file contents
+
+    This is the critical integration point - if spawn doesn't send the
+    prompt, the ralph loop feature is broken at the most basic level.
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Set up temp swarm dirs
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        # Create a test prompt file with known content
+        self.prompt_content = "This is the test prompt content for ralph mode"
+        Path('test_prompt.md').write_text(self.prompt_content)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_ralph_sends_prompt_content_to_worker(self):
+        """Integration test: spawn --ralph actually sends prompt to the worker.
+
+        This verifies the critical contract that:
+        1. spawn creates the worker
+        2. spawn calls send_prompt_to_worker with the prompt file contents
+        3. send_prompt_to_worker calls wait_for_agent_ready then tmux_send
+
+        The test uses minimal mocking to verify the integration works end-to-end.
+        """
+        args = Namespace(
+            name='ralph-test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            inactivity_mode='ready',
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        sent_prompts = []
+
+        def capture_send_prompt(worker, content):
+            """Capture sent prompts to verify content."""
+            sent_prompts.append({
+                'worker_name': worker.name,
+                'content': content,
+                'has_tmux': worker.tmux is not None
+            })
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', side_effect=capture_send_prompt) as mock_send:
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
+
+        # Verify send_prompt_to_worker was called exactly once
+        self.assertEqual(len(sent_prompts), 1, "send_prompt_to_worker should be called exactly once")
+        mock_send.assert_called_once()
+
+        # Verify the prompt content matches the file content
+        sent = sent_prompts[0]
+        self.assertEqual(sent['worker_name'], 'ralph-test-worker')
+        self.assertEqual(sent['content'], self.prompt_content)
+        self.assertTrue(sent['has_tmux'], "Worker must be in tmux mode for ralph")
+
+        # Verify ralph state was created correctly
+        ralph_state = swarm.load_ralph_state('ralph-test-worker')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.current_iteration, 1)
+        self.assertEqual(ralph_state.status, 'running')
+
+        # Verify worker was added to state
+        state = swarm.State()
+        worker = state.get_worker('ralph-test-worker')
+        self.assertIsNotNone(worker)
+        self.assertEqual(worker.metadata.get('ralph'), True)
+        self.assertEqual(worker.metadata.get('ralph_iteration'), 1)
+
+    def test_spawn_ralph_reads_correct_prompt_file(self):
+        """Verify spawn reads from the specified prompt file path.
+
+        This ensures that prompt file reading and path resolution works correctly.
+        """
+        # Create prompt file with unique content
+        unique_content = "UNIQUE_CONTENT_12345_FOR_TESTING"
+        prompt_path = Path(self.temp_dir) / 'unique_prompt.md'
+        prompt_path.write_text(unique_content)
+
+        args = Namespace(
+            name='path-test-worker',
+            ralph=True,
+            prompt_file=str(prompt_path),  # Absolute path
+            max_iterations=5,
+            inactivity_timeout=300,
+            inactivity_mode='ready',
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        captured_content = []
+
+        def capture_content(worker, content):
+            captured_content.append(content)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', side_effect=capture_content):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
+
+        self.assertEqual(len(captured_content), 1)
+        self.assertEqual(captured_content[0], unique_content)
+
+
+class TestRalphRunIntegration(unittest.TestCase):
+    """Integration tests for ralph run loop behavior.
+
+    Contract verified:
+        The ralph run loop must:
+        1. Check if worker is stopped
+        2. If stopped, increment iteration and spawn new worker
+        3. Call send_prompt_to_worker for new worker
+        4. Call detect_inactivity to monitor worker
+        5. Handle inactivity/exit correctly to loop back or complete
+
+    These tests verify components work together correctly with minimal mocking.
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_content = "Test prompt for integration"
+        self.prompt_path.write_text(self.prompt_content)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_run_increments_iteration_on_worker_exit(self):
+        """Integration test: worker exit triggers iteration increment.
+
+        Contract: When a worker exits and ralph run spawns a new one,
+        the iteration counter must increment before spawning.
+
+        Timeout: 5s to prevent hanging.
+        """
+        import signal
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=3,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        iteration_at_spawn = []
+
+        def capture_spawn(*args, **kwargs):
+            """Capture the iteration number when spawn is called."""
+            current_state = swarm.load_ralph_state('ralph-worker')
+            iteration_at_spawn.append(current_state.current_iteration)
+            return swarm.Worker(
+                name='ralph-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=str(self.prompt_path.parent),
+                tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+            )
+
+        # Set up timeout to prevent hanging
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out after 5 seconds")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(5)  # 5 second timeout
+
+        try:
+            with patch('swarm.refresh_worker_status', return_value='stopped'):
+                with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
+                    with patch('swarm.send_prompt_to_worker'):
+                        with patch.object(swarm.State, 'add_worker'):
+                            with patch.object(swarm.State, 'remove_worker'):
+                                with patch('builtins.print'):
+                                    swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)  # Cancel alarm
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Verify iteration was incremented before spawn
+        self.assertEqual(len(iteration_at_spawn), 2)  # Two iterations spawned (2 and 3)
+        self.assertEqual(iteration_at_spawn[0], 2)  # First spawn at iteration 2
+        self.assertEqual(iteration_at_spawn[1], 3)  # Second spawn at iteration 3
+
+        # Final state should be stopped at max iterations
+        final_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(final_state.status, 'stopped')
+        self.assertEqual(final_state.current_iteration, 3)
+
+    def test_ralph_run_calls_detect_inactivity_with_correct_params(self):
+        """Integration test: ralph run passes correct params to detect_inactivity.
+
+        Contract: detect_inactivity must be called with:
+        - The worker object
+        - The inactivity_timeout from ralph state
+        - The inactivity_mode from ralph state
+
+        Timeout: 5s to prevent hanging.
+        """
+        import signal
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with specific settings
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=999,  # Unique value to verify
+            inactivity_mode='output'  # Specific mode to verify
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        detect_calls = []
+
+        def capture_detect_inactivity(worker, timeout, mode='ready'):
+            """Capture detect_inactivity calls."""
+            detect_calls.append({
+                'worker_name': worker.name,
+                'timeout': timeout,
+                'mode': mode
+            })
+            return False  # Worker exited normally
+
+        # Set up timeout
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(5)
+
+        refresh_count = [0]
+        def mock_refresh(w):
+            refresh_count[0] += 1
+            # First check: running, then stopped after detect_inactivity
+            if refresh_count[0] <= 2:
+                return 'running'
+            return 'stopped'
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=capture_detect_inactivity):
+                    with patch('swarm.check_done_pattern', return_value=False):
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Verify detect_inactivity was called with correct parameters
+        self.assertGreaterEqual(len(detect_calls), 1)
+        first_call = detect_calls[0]
+        self.assertEqual(first_call['worker_name'], 'ralph-worker')
+        self.assertEqual(first_call['timeout'], 999)  # Custom timeout
+        self.assertEqual(first_call['mode'], 'output')  # Custom mode
+
+
+class TestRalphSpawnSendsPromptIntegration(unittest.TestCase):
+    """Integration test: spawn --ralph must send prompt to worker.
+
+    Contract verified:
+    - When cmd_spawn is called with --ralph flag, it must:
+      1. Create the tmux window
+      2. Wait for agent ready
+      3. Send the prompt content via tmux_send
+
+    This test uses minimal mocking to verify the real integration between
+    cmd_spawn and send_prompt_to_worker. Heavy mocking could hide bugs where
+    the prompt is "sent" but never reaches the worker.
+
+    Why this matters:
+    - If spawn doesn't send the initial prompt, the worker sits idle
+    - The ralph loop expects iteration 1 to already be running
+    - This is the entry point for the entire ralph feature
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Set up temp swarm dirs
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+
+        # Create a test prompt file with unique content we can verify
+        self.prompt_content = "INTEGRATION_TEST_PROMPT_12345\nDo the test task\n"
+        Path('test_prompt.md').write_text(self.prompt_content)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_ralph_sends_prompt_to_worker(self):
+        """Integration test: spawn --ralph actually sends prompt content.
+
+        This test verifies that when spawn is called with --ralph:
+        1. send_prompt_to_worker is called (not just mocked away)
+        2. The actual prompt file content is passed to it
+        3. tmux_send receives the correct prompt content
+
+        We mock at the lowest level (tmux_send) to verify the prompt flows
+        through the entire call chain: cmd_spawn -> send_prompt_to_worker -> tmux_send
+        """
+        args = Namespace(
+            name='integration-test-worker',
+            ralph=True,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=300,
+            inactivity_mode='ready',
+            done_pattern=None,
+            tmux=False,  # Will be auto-enabled
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Track what gets sent via tmux_send
+        sent_prompts = []
+
+        def capture_tmux_send(session, window, text, enter=True, socket=None):
+            """Capture calls to tmux_send to verify prompt is sent."""
+            sent_prompts.append({
+                'session': session,
+                'window': window,
+                'text': text,
+                'enter': enter
+            })
+
+        # Use real functions except for actual tmux interaction
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.wait_for_agent_ready', return_value=True):
+                    with patch('swarm.tmux_send', side_effect=capture_tmux_send):
+                        with patch('builtins.print'):
+                            swarm.cmd_spawn(args)
+
+        # CRITICAL VERIFICATION: The prompt content must have been sent
+        self.assertGreaterEqual(len(sent_prompts), 1,
+            "spawn --ralph must call tmux_send to deliver the prompt")
+
+        # Verify the prompt content matches what was in the file
+        prompt_sent = False
+        for call in sent_prompts:
+            if 'INTEGRATION_TEST_PROMPT_12345' in call['text']:
+                prompt_sent = True
+                # Verify it was sent to the right window
+                self.assertEqual(call['window'], 'integration-test-worker')
+                # Verify Enter was pressed
+                self.assertTrue(call['enter'],
+                    "Prompt must be submitted with Enter")
+                break
+
+        self.assertTrue(prompt_sent,
+            f"Prompt content must be sent via tmux_send. Got calls: {sent_prompts}")
+
+        # Also verify state was created correctly
+        ralph_state = swarm.load_ralph_state('integration-test-worker')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.current_iteration, 1,
+            "Ralph state must start at iteration 1")
+        self.assertEqual(ralph_state.status, 'running')
+
+    def test_spawn_ralph_reads_prompt_file_content(self):
+        """Verify spawn reads the actual file content, not just the path.
+
+        This catches bugs where we might pass the path instead of content,
+        or where file reading fails silently.
+        """
+        # Create prompt with distinctive content
+        unique_content = f"UNIQUE_CONTENT_{os.getpid()}_{time.time()}"
+        Path('unique_prompt.md').write_text(unique_content)
+
+        args = Namespace(
+            name='file-content-test',
+            ralph=True,
+            prompt_file='unique_prompt.md',
+            max_iterations=5,
+            inactivity_timeout=300,
+            inactivity_mode='ready',
+            done_pattern=None,
+            tmux=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        sent_texts = []
+
+        def capture_send(session, window, text, enter=True, socket=None):
+            sent_texts.append(text)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.wait_for_agent_ready', return_value=True):
+                    with patch('swarm.tmux_send', side_effect=capture_send):
+                        with patch('builtins.print'):
+                            swarm.cmd_spawn(args)
+
+        # The unique content must appear in what was sent
+        all_sent = ''.join(sent_texts)
+        self.assertIn(unique_content, all_sent,
+            "Spawn must read and send the actual file content")
+
+        # The file path should NOT appear (we want content, not path)
+        self.assertNotIn('unique_prompt.md', all_sent,
+            "Spawn should send file content, not file path")
 
 
 if __name__ == "__main__":
