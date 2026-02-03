@@ -80,6 +80,23 @@ in this chain means the loop will either:
 - `test_inactivity_triggers_kill_then_restart_with_prompt`: Full cycle verification
 - `test_inactivity_restart_increments_iteration_before_spawn`: Verifies ordering
 
+### 6. Test prompt file re-read on each iteration - IMPLEMENTED
+**Contract**: The ralph loop must re-read the prompt file from disk at the START
+of each iteration, NOT cache it.
+
+From ralph-loop.md spec: "File is re-read every time (allows editing mid-loop)"
+
+**Why this matters**: If the prompt file is cached instead of re-read:
+- Users can't adjust instructions mid-loop
+- A key feature of the ralph pattern for iterative development is broken
+- The bug would be invisible until someone tries to edit mid-loop
+
+**Tests added (TestRalphPromptRereadIntegration)**:
+- `test_prompt_file_reread_each_iteration`: Verifies each iteration reads fresh
+  prompt content by modifying the file between iterations and checking the sent content
+- `test_prompt_file_deleted_mid_loop_fails_gracefully`: Verifies proper error handling
+  when prompt file is deleted between iterations
+
 ## Implementation Progress
 
 - [x] Plan created
@@ -88,12 +105,13 @@ in this chain means the loop will either:
 - [x] Test 3: state flows across iterations (TestRalphStateFlowIntegration - NEW)
 - [x] Test 4: detect_inactivity blocking (TestDetectInactivityBlockingIntegration)
 - [x] Test 5: inactivity triggers full restart cycle (TestRalphInactivityRestartIntegration)
+- [x] Test 6: prompt file re-read on each iteration (TestRalphPromptRereadIntegration - NEW)
 
 ## Test Execution
 
 Run all ralph integration tests:
 ```bash
-python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration test_cmd_ralph.TestRalphInactivityRestartIntegration test_cmd_ralph.TestDetectInactivityBlockingIntegration test_cmd_ralph.TestRalphStateFlowIntegration -v
+python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration test_cmd_ralph.TestRalphInactivityRestartIntegration test_cmd_ralph.TestDetectInactivityBlockingIntegration test_cmd_ralph.TestRalphStateFlowIntegration test_cmd_ralph.TestRalphPromptRereadIntegration -v
 ```
 
 Run with timeout to catch hangs:

@@ -6759,5 +6759,240 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
             "inactivity_mode must persist unchanged")
 
 
+class TestRalphPromptRereadIntegration(unittest.TestCase):
+    """Integration test: prompt file is re-read on each iteration.
+
+    Contract verified:
+    The ralph loop must re-read the prompt file from disk at the START of each
+    iteration, not cache it. This enables users to edit the prompt mid-loop.
+
+    From ralph-loop.md spec:
+    "File is re-read every time (allows editing mid-loop)"
+
+    Why this test matters:
+    - If prompt is cached, users can't adjust instructions mid-loop
+    - This is a key feature of the ralph pattern for iterative development
+    - A bug here would be invisible until someone tries to edit mid-loop
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create initial prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_path.write_text("INITIAL_PROMPT_CONTENT_V1")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_prompt_file_reread_each_iteration(self):
+        """Integration test: prompt file is re-read fresh on each iteration.
+
+        This test verifies that:
+        1. Iteration 1 gets the original prompt content
+        2. When the file is modified between iterations
+        3. Iteration 2 gets the UPDATED prompt content
+
+        We track what content is passed to send_prompt_to_worker for each
+        iteration to verify the file is actually re-read.
+
+        Timeout: 10s to prevent hanging.
+        """
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='reread-test-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='reread-test-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0, max 3 iterations
+        ralph_state = swarm.RalphState(
+            worker_name='reread-test-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=3,
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='reread-test-worker')
+
+        # Track prompts sent to workers
+        prompts_sent = []
+        spawn_count = [0]
+
+        def track_spawn(*args, **kwargs):
+            """Track spawns and modify prompt file between iterations."""
+            spawn_count[0] += 1
+            # After first spawn, modify the prompt file
+            if spawn_count[0] == 1:
+                self.prompt_path.write_text("MODIFIED_PROMPT_CONTENT_V2")
+            elif spawn_count[0] == 2:
+                self.prompt_path.write_text("MODIFIED_PROMPT_CONTENT_V3")
+
+            return swarm.Worker(
+                name='reread-test-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='reread-test-worker')
+            )
+
+        def track_send_prompt(worker, content):
+            """Capture prompt content sent to each iteration."""
+            prompts_sent.append({
+                'iteration': swarm.load_ralph_state('reread-test-worker').current_iteration,
+                'content': content
+            })
+
+        def mock_refresh(worker):
+            """Worker is stopped on each iteration to trigger respawn."""
+            return 'stopped'
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
+                    with patch('swarm.send_prompt_to_worker', side_effect=track_send_prompt):
+                        with patch.object(swarm.State, 'add_worker'):
+                            with patch.object(swarm.State, 'remove_worker'):
+                                with patch('builtins.print'):
+                                    swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL VERIFICATION: We should have sent 3 different prompts
+        self.assertEqual(len(prompts_sent), 3,
+            "Should send prompt for all 3 iterations")
+
+        # CRITICAL VERIFICATION: Iteration 1 should get original content
+        self.assertEqual(prompts_sent[0]['content'], "INITIAL_PROMPT_CONTENT_V1",
+            "Iteration 1 must receive original prompt content")
+
+        # CRITICAL VERIFICATION: Iteration 2 should get MODIFIED content (V2)
+        self.assertEqual(prompts_sent[1]['content'], "MODIFIED_PROMPT_CONTENT_V2",
+            "Iteration 2 must receive modified prompt content (re-read from disk)")
+
+        # CRITICAL VERIFICATION: Iteration 3 should get MODIFIED content (V3)
+        self.assertEqual(prompts_sent[2]['content'], "MODIFIED_PROMPT_CONTENT_V3",
+            "Iteration 3 must receive further modified prompt content")
+
+    def test_prompt_file_deleted_mid_loop_fails_gracefully(self):
+        """Integration test: deleting prompt file mid-loop exits with error.
+
+        Contract: If the prompt file is deleted between iterations,
+        the ralph loop must exit with an appropriate error message.
+
+        This catches bugs where file errors are silently swallowed.
+
+        Timeout: 5s.
+        """
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='deleted-prompt-worker',
+            status='stopped',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='deleted-prompt-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0
+        ralph_state = swarm.RalphState(
+            worker_name='deleted-prompt-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=3,
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='deleted-prompt-worker')
+
+        spawn_count = [0]
+
+        def track_spawn(*args, **kwargs):
+            """Delete prompt file after first spawn."""
+            spawn_count[0] += 1
+            if spawn_count[0] == 1:
+                # Delete the prompt file - should cause error on next iteration
+                self.prompt_path.unlink()
+
+            return swarm.Worker(
+                name='deleted-prompt-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='deleted-prompt-worker')
+            )
+
+        def mock_refresh(worker):
+            """Worker stops to trigger next iteration."""
+            return 'stopped'
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(5)
+
+        error_output = []
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
+                    with patch('swarm.send_prompt_to_worker'):
+                        with patch.object(swarm.State, 'add_worker'):
+                            with patch.object(swarm.State, 'remove_worker'):
+                                with patch('builtins.print') as mock_print:
+                                    with self.assertRaises(SystemExit) as ctx:
+                                        swarm.cmd_ralph_run(args)
+                                    error_output = [str(c) for c in mock_print.call_args_list]
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Should exit with error code 1
+        self.assertEqual(ctx.exception.code, 1,
+            "Ralph loop must exit with code 1 when prompt file is deleted")
+
+        # Ralph state should be marked as failed
+        final_state = swarm.load_ralph_state('deleted-prompt-worker')
+        self.assertEqual(final_state.status, 'failed',
+            "Ralph state must be 'failed' when prompt file is deleted")
+
+
 if __name__ == "__main__":
     unittest.main()
