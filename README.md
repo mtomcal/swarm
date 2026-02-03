@@ -85,6 +85,57 @@ swarm ls --tag team-a  # Filter workers by tag
 | `interrupt` | Send Ctrl-C | `--all` |
 | `eof` | Send Ctrl-D | |
 | `respawn` | Restart dead worker | `--clean-first` |
+| `ralph` | Autonomous agent looping | `init` `status` `pause` `resume` `list` |
+
+## Ralph Loop (Autonomous Agents)
+
+Swarm supports autonomous agent looping via the `--ralph` flag, enabling long-running workflows that restart with fresh context windows. Based on the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralph-wiggum).
+
+### Quick Start
+
+```bash
+# Generate a starter prompt file
+swarm ralph init
+
+# Start autonomous loop (10 iterations max)
+swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+
+# Monitor progress
+swarm ralph status agent
+swarm attach agent  # Live view (Ctrl-B D to detach)
+
+# Pause/resume the loop
+swarm ralph pause agent
+swarm ralph resume agent
+```
+
+### How It Works
+
+1. **Each iteration**: Reads `PROMPT.md`, spawns agent, waits for completion or inactivity
+2. **Automatic restart**: When agent exits or becomes inactive, loop restarts with fresh context
+3. **Failure handling**: Exponential backoff on failures (1s → 2s → 4s → 8s), stops after 5 consecutive failures
+4. **Done detection**: Optional `--done-pattern` regex stops the loop when matched
+
+### Key Options
+
+| Flag | Description |
+|------|-------------|
+| `--ralph` | Enable autonomous loop mode |
+| `--prompt-file` | Path to prompt file (re-read each iteration) |
+| `--max-iterations` | Maximum loop iterations |
+| `--inactivity-timeout` | Seconds of inactivity before restart (default: 300) |
+| `--done-pattern` | Regex to stop loop when matched in output |
+
+### Ralph Subcommands
+
+```bash
+swarm ralph init              # Create PROMPT.md template
+swarm ralph template          # Output template to stdout
+swarm ralph status <name>     # Show loop status and iteration
+swarm ralph pause <name>      # Pause the loop
+swarm ralph resume <name>     # Resume paused loop
+swarm ralph list              # List all ralph workers
+```
 
 ## Integration Patterns
 
@@ -181,13 +232,19 @@ done
 
 ```
 ~/.swarm/
-├── state.json              # Worker registry
-└── logs/
-    ├── worker1.stdout.log  # Background process output
-    └── worker1.stderr.log
+├── state.json                      # Worker registry
+├── logs/
+│   ├── worker1.stdout.log          # Background process output
+│   └── worker1.stderr.log
+└── ralph/
+    └── <worker-name>/
+        ├── state.json              # Ralph loop state (iteration, status)
+        └── iterations.log          # Iteration history with timestamps
 ```
 
 Tmux workers use scrollback buffer—access via `swarm logs <name>`.
+
+For ralph loops, monitor iteration progress with `tail -f ~/.swarm/ralph/<name>/iterations.log`.
 
 ## Requirements
 
