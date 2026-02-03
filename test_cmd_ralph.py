@@ -756,8 +756,9 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_spawn(args)
 
         # Check warning was printed
         all_calls = [str(call) for call in mock_print.call_args_list]
@@ -792,8 +793,9 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window') as mock_create_tmux:
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print'):
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print'):
+                                swarm.cmd_spawn(args)
 
         # Verify tmux window was created (indicating tmux was enabled)
         mock_create_tmux.assert_called_once()
@@ -827,8 +829,9 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add_worker:
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_spawn(args)
 
         # Verify worker was added
         mock_add_worker.assert_called_once()
@@ -1039,8 +1042,9 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_spawn(args)
 
         # Check warning was printed
         all_calls = [str(call) for call in mock_print.call_args_list]
@@ -1084,8 +1088,9 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window') as mock_tmux:
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print'):
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print'):
+                                swarm.cmd_spawn(args)
 
         # Verify tmux window was created
         mock_tmux.assert_called_once()
@@ -1142,9 +1147,10 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print'):
-                            # Should not raise
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print'):
+                                # Should not raise
+                                swarm.cmd_spawn(args)
 
     def test_prompt_file_relative_path(self):
         """Test prompt file with relative path works."""
@@ -1177,9 +1183,10 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print'):
-                            # Should not raise
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print'):
+                                # Should not raise
+                                swarm.cmd_spawn(args)
 
     def test_empty_prompt_file_allowed(self):
         """Test empty prompt file is allowed."""
@@ -1211,9 +1218,10 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print'):
-                            # Should not raise - empty file is allowed
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print'):
+                                # Should not raise - empty file is allowed
+                                swarm.cmd_spawn(args)
 
     def test_max_iterations_exactly_50_no_warning(self):
         """Test max-iterations of exactly 50 does not trigger warning."""
@@ -1245,12 +1253,13 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_spawn(args)
 
-        # No warning should be printed
-        all_calls = [str(call) for call in mock_print.call_args_list]
-        self.assertFalse(any('high iteration count' in call for call in all_calls))
+                            # No warning should be printed
+                            all_calls = [str(call) for call in mock_print.call_args_list]
+                            self.assertFalse(any('high iteration count' in call for call in all_calls))
 
     def test_max_iterations_51_triggers_warning(self):
         """Test max-iterations of 51 triggers warning."""
@@ -1282,12 +1291,13 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_spawn(args)
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_spawn(args)
 
-        # Warning should be printed
-        all_calls = [str(call) for call in mock_print.call_args_list]
-        self.assertTrue(any('high iteration count' in call for call in all_calls))
+                            # Warning should be printed
+                            all_calls = [str(call) for call in mock_print.call_args_list]
+                            self.assertTrue(any('high iteration count' in call for call in all_calls))
 
 
 class TestRalphSpawnNewArguments(unittest.TestCase):
@@ -1379,8 +1389,9 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Verify ralph state was created
         ralph_state = swarm.load_ralph_state('ralph-worker')
@@ -1415,8 +1426,9 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         ralph_state = swarm.load_ralph_state('ralph-worker')
         self.assertEqual(ralph_state.max_iterations, 50)
@@ -1451,8 +1463,9 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print') as mock_print:
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print') as mock_print:
+                        swarm.cmd_spawn(args)
 
         all_calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any('ralph mode: iteration 1/100' in call for call in all_calls))
@@ -1516,8 +1529,9 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         ralph_state = swarm.load_ralph_state('ralph-worker')
         # Should be absolute path
@@ -2488,8 +2502,9 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Load worker and verify metadata
         state = swarm.State()
@@ -2559,8 +2574,9 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Verify iteration log was created
         log_path = swarm.get_ralph_iterations_log_path('ralph-worker')
@@ -2595,8 +2611,9 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Verify ralph state starts at iteration 1
         ralph_state = swarm.load_ralph_state('ralph-worker')
@@ -2628,8 +2645,9 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Verify ralph state has last_iteration_started
         ralph_state = swarm.load_ralph_state('ralph-worker')
@@ -4567,8 +4585,9 @@ class TestRalphSpawnWithInactivityMode(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         # Check ralph state has correct inactivity_mode
         ralph_state = swarm.load_ralph_state('test-worker')
@@ -4601,8 +4620,9 @@ class TestRalphSpawnWithInactivityMode(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         ralph_state = swarm.load_ralph_state('test-worker-both')
         self.assertIsNotNone(ralph_state)
@@ -4634,8 +4654,9 @@ class TestRalphSpawnWithInactivityMode(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('builtins.print'):
-                    swarm.cmd_spawn(args)
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
 
         ralph_state = swarm.load_ralph_state('test-worker-default')
         self.assertIsNotNone(ralph_state)
@@ -5835,6 +5856,347 @@ class TestRalphSpawnSendsPromptIntegration(unittest.TestCase):
         # The file path should NOT appear (we want content, not path)
         self.assertNotIn('unique_prompt.md', all_sent,
             "Spawn should send file content, not file path")
+
+
+class TestRalphInactivityRestartIntegration(unittest.TestCase):
+    """Integration test: inactivity detection triggers full restart cycle.
+
+    Contract verified:
+    When detect_inactivity returns True (inactivity detected), the ralph loop must:
+    1. Call kill_worker_for_ralph to stop the inactive worker
+    2. Increment the iteration counter
+    3. Call spawn_worker_for_ralph with new iteration metadata
+    4. Call send_prompt_to_worker with the prompt content
+
+    This is the core ralph loop functionality. If any step is skipped:
+    - Skipped kill: Zombie workers accumulate
+    - Skipped iteration increment: Loop never terminates
+    - Skipped spawn: No new worker to continue work
+    - Skipped send_prompt: Worker sits idle with no instructions
+
+    Why this test matters:
+    The existing tests verify worker exit (detect_inactivity returns False).
+    This test verifies the INACTIVITY path (detect_inactivity returns True),
+    which is the primary mechanism for restarting stuck agents.
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_content = "INACTIVITY_TEST_PROMPT_CONTENT_12345"
+        self.prompt_path.write_text(self.prompt_content)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_inactivity_triggers_kill_then_restart_with_prompt(self):
+        """Integration test: inactivity detection triggers full restart cycle.
+
+        This test verifies the complete flow when a worker becomes inactive:
+        1. detect_inactivity returns True (inactivity detected)
+        2. kill_worker_for_ralph is called
+        3. Iteration counter is incremented (on next loop)
+        4. spawn_worker_for_ralph is called
+        5. send_prompt_to_worker is called with prompt content
+
+        The test uses timeouts to prevent hanging (10s limit).
+        """
+        # Create initial worker in running state
+        state = swarm.State()
+        initial_worker = swarm.Worker(
+            name='inactivity-test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='inactivity-test-worker')
+        )
+        state.workers.append(initial_worker)
+        state.save()
+
+        # Create ralph state at iteration 1, max 2 iterations
+        # Starting at iteration 1, after inactivity we spawn iteration 2, then loop exits
+        ralph_state = swarm.RalphState(
+            worker_name='inactivity-test-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=30,
+            inactivity_mode='ready'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='inactivity-test-worker')
+
+        # Track all operations in sequence
+        operations = []
+
+        killed = [False]
+        def track_kill(worker, state):
+            """Track kill_worker_for_ralph calls."""
+            killed[0] = True
+            operations.append({
+                'op': 'kill',
+                'worker_name': worker.name,
+                'iteration': swarm.load_ralph_state('inactivity-test-worker').current_iteration
+            })
+
+        def track_spawn(*args, **kwargs):
+            """Track spawn_worker_for_ralph calls."""
+            current_state = swarm.load_ralph_state('inactivity-test-worker')
+            operations.append({
+                'op': 'spawn',
+                'iteration': current_state.current_iteration,
+                'metadata': kwargs.get('metadata', {})
+            })
+            return swarm.Worker(
+                name='inactivity-test-worker',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='inactivity-test-worker')
+            )
+
+        def track_send_prompt(worker, content):
+            """Track send_prompt_to_worker calls."""
+            operations.append({
+                'op': 'send_prompt',
+                'worker_name': worker.name,
+                'content': content,
+                'iteration': swarm.load_ralph_state('inactivity-test-worker').current_iteration
+            })
+
+        # Simulate detect_inactivity behavior:
+        # - First call: return True (inactivity detected) - triggers kill then restart
+        # - Second call: return False (worker exited) - loop completes
+        detect_call_count = [0]
+        def mock_detect_inactivity(worker, timeout, mode='ready'):
+            detect_call_count[0] += 1
+            operations.append({
+                'op': 'detect_inactivity',
+                'worker_name': worker.name,
+                'timeout': timeout,
+                'mode': mode,
+                'call_number': detect_call_count[0]
+            })
+            # First call: return True (inactivity) to trigger kill/restart
+            # After that: return False (worker exited) so loop completes
+            return detect_call_count[0] == 1
+
+        # Track refresh_worker_status to control the flow
+        # Return 'running' initially, then 'stopped' after kill to trigger respawn
+        def mock_refresh(worker):
+            if killed[0]:
+                return 'stopped'
+            return 'running'
+
+        # Set up timeout to prevent hanging
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out after 10 seconds")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)  # 10 second timeout
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=mock_detect_inactivity):
+                    with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
+                        with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
+                            with patch('swarm.send_prompt_to_worker', side_effect=track_send_prompt):
+                                with patch.object(swarm.State, 'add_worker'):
+                                    with patch.object(swarm.State, 'remove_worker'):
+                                        with patch('swarm.check_done_pattern', return_value=False):
+                                            with patch('builtins.print'):
+                                                swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)  # Cancel alarm
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Extract operations by type
+        kills = [op for op in operations if op['op'] == 'kill']
+        spawns = [op for op in operations if op['op'] == 'spawn']
+        sends = [op for op in operations if op['op'] == 'send_prompt']
+        detects = [op for op in operations if op['op'] == 'detect_inactivity']
+
+        # CRITICAL VERIFICATION 1: detect_inactivity was called at least once
+        self.assertGreaterEqual(len(detects), 1,
+            "detect_inactivity must be called to monitor the worker")
+
+        # CRITICAL VERIFICATION 2: kill was called after inactivity detected
+        self.assertEqual(len(kills), 1,
+            "kill_worker_for_ralph must be called exactly once when inactivity is detected")
+
+        # CRITICAL VERIFICATION 3: spawn was called after kill (for iteration 2)
+        self.assertEqual(len(spawns), 1,
+            "spawn_worker_for_ralph must be called once to restart the worker")
+
+        # CRITICAL VERIFICATION 4: send_prompt was called after spawn
+        self.assertEqual(len(sends), 1,
+            "send_prompt_to_worker must be called for the new worker")
+
+        # Verify prompt content was actually sent
+        self.assertIn(self.prompt_content, sends[0]['content'],
+            "send_prompt_to_worker must receive the prompt file content")
+
+        # Verify operation sequence: detect -> kill -> spawn -> send_prompt
+        detect_indices = [i for i, op in enumerate(operations) if op['op'] == 'detect_inactivity']
+        kill_indices = [i for i, op in enumerate(operations) if op['op'] == 'kill']
+        spawn_indices = [i for i, op in enumerate(operations) if op['op'] == 'spawn']
+        send_indices = [i for i, op in enumerate(operations) if op['op'] == 'send_prompt']
+
+        # First kill should be after first detect
+        self.assertGreater(kill_indices[0], detect_indices[0],
+            "kill must happen AFTER detect_inactivity returns True")
+
+        # First spawn should be after first kill
+        self.assertGreater(spawn_indices[0], kill_indices[0],
+            "spawn must happen AFTER kill")
+
+        # First send_prompt should be after first spawn
+        self.assertGreater(send_indices[0], spawn_indices[0],
+            "send_prompt must happen AFTER spawn")
+
+        # Verify the spawn happened at iteration 2 (incremented from 1)
+        self.assertEqual(spawns[0]['iteration'], 2,
+            "spawn should happen at iteration 2 (incremented from 1)")
+        self.assertEqual(spawns[0]['metadata'].get('ralph_iteration'), 2,
+            "spawn metadata should have ralph_iteration=2")
+
+        # Verify final state
+        final_state = swarm.load_ralph_state('inactivity-test-worker')
+        self.assertEqual(final_state.status, 'stopped',
+            "Ralph loop must stop when max_iterations reached")
+
+    def test_inactivity_restart_increments_iteration_before_spawn(self):
+        """Verify iteration is incremented BEFORE spawn, not after.
+
+        Contract: When restarting due to inactivity:
+        - Iteration counter must be incremented first
+        - Then spawn_worker_for_ralph is called
+        - The spawned worker metadata must have the NEW iteration number
+
+        This catches bugs where iteration is incremented after spawn,
+        which would cause metadata to have stale iteration number.
+        """
+        # Create initial worker in running state
+        state = swarm.State()
+        initial_worker = swarm.Worker(
+            name='iteration-order-test',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='iteration-order-test')
+        )
+        state.workers.append(initial_worker)
+        state.save()
+
+        # Create ralph state at iteration 5, max 10
+        ralph_state = swarm.RalphState(
+            worker_name='iteration-order-test',
+            prompt_file=str(self.prompt_path),
+            max_iterations=10,
+            current_iteration=5,
+            status='running',
+            inactivity_timeout=30,
+            inactivity_mode='ready'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='iteration-order-test')
+
+        spawn_metadata_captures = []
+        killed = [False]
+
+        def capture_spawn(*args, **kwargs):
+            """Capture spawn metadata to verify iteration."""
+            metadata = kwargs.get('metadata', {})
+            current_state = swarm.load_ralph_state('iteration-order-test')
+            spawn_metadata_captures.append({
+                'metadata_iteration': metadata.get('ralph_iteration'),
+                'state_iteration': current_state.current_iteration
+            })
+            return swarm.Worker(
+                name='iteration-order-test',
+                status='running',
+                cmd=['echo', 'test'],
+                started='2024-01-15T10:30:00',
+                cwd=self.temp_dir,
+                tmux=swarm.TmuxInfo(session='swarm', window='iteration-order-test')
+            )
+
+        detect_count = [0]
+        def mock_detect(worker, timeout, mode='ready'):
+            detect_count[0] += 1
+            if detect_count[0] == 1:
+                return True  # Trigger restart on first call
+            return False  # Exit normally after that
+
+        def mock_kill(worker, state):
+            killed[0] = True
+
+        def mock_refresh(worker):
+            if killed[0]:
+                return 'stopped'
+            return 'running'
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                    with patch('swarm.kill_worker_for_ralph', side_effect=mock_kill):
+                        with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
+                            with patch('swarm.send_prompt_to_worker'):
+                                with patch.object(swarm.State, 'add_worker'):
+                                    with patch.object(swarm.State, 'remove_worker'):
+                                        with patch('swarm.check_done_pattern', return_value=False):
+                                            with patch('builtins.print'):
+                                                swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Verify spawn was called
+        self.assertGreaterEqual(len(spawn_metadata_captures), 1,
+            "spawn_worker_for_ralph must be called")
+
+        # Verify metadata iteration matches state iteration
+        for capture in spawn_metadata_captures:
+            self.assertEqual(
+                capture['metadata_iteration'],
+                capture['state_iteration'],
+                f"Metadata iteration ({capture['metadata_iteration']}) must match "
+                f"state iteration ({capture['state_iteration']}) - "
+                "iteration must be incremented BEFORE spawn"
+            )
+
+            # Verify iteration was incremented from initial value (5)
+            self.assertGreater(capture['state_iteration'], 5,
+                "Iteration must be incremented before spawn")
 
 
 if __name__ == "__main__":

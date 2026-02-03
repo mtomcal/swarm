@@ -52,6 +52,22 @@ the ralph loop will spin rapidly or never restart workers.
 
 **Status**: Covered by existing unit tests in TestDetectInactivity
 
+### 5. Test inactivity triggers full restart cycle (NEW - HIGHEST IMPACT)
+**Contract**: When `detect_inactivity` returns True (inactivity detected):
+1. `kill_worker_for_ralph` must be called to stop the inactive worker
+2. Loop must increment iteration and spawn a new worker
+3. `send_prompt_to_worker` must be called with prompt content for new worker
+4. The full cycle (kill → increment → spawn → send prompt) must complete atomically
+
+**Why this matters**: This is the core ralph loop functionality. A bug anywhere
+in this chain means the loop will either:
+- Leave zombie workers running (if kill fails)
+- Not restart the worker (if spawn path isn't taken after kill)
+- Start worker without prompt (if send_prompt is skipped after spawn)
+
+**Test added (TestRalphInactivityRestartIntegration)**:
+- `test_inactivity_triggers_kill_then_restart_with_prompt`: Full cycle verification
+
 ## Implementation Progress
 
 - [x] Plan created
@@ -59,12 +75,13 @@ the ralph loop will spin rapidly or never restart workers.
 - [x] Test 2: ralph run monitoring loop (TestRalphRunIntegration - existing)
 - [x] Test 3: state flows across iterations (TestRalphRunIntegration - existing)
 - [x] Test 4: detect_inactivity blocking (TestDetectInactivity - existing unit tests)
+- [x] Test 5: inactivity triggers full restart cycle (TestRalphInactivityRestartIntegration - NEW)
 
 ## Test Execution
 
 Run the integration tests specifically:
 ```bash
-python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration -v
+python3 -m unittest test_cmd_ralph.TestRalphSpawnSendsPromptIntegration test_cmd_ralph.TestRalphRunIntegration test_cmd_ralph.TestRalphInactivityRestartIntegration -v
 ```
 
 Note: Running `make test` in this repo will timeout because the test suite
