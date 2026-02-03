@@ -308,6 +308,264 @@ class TestCmdSpawn(unittest.TestCase):
                 swarm.cmd_spawn(args)
             self.assertEqual(cm.exception.code, 1)
 
+    def test_spawn_with_worktree(self):
+        """Test spawning with worktree creates worktree and sets cwd."""
+        import subprocess
+
+        args = Namespace(
+            name="worktree-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=True,
+            worktree_dir=None,
+            branch=None,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+        mock_worktree_path = mock_git_root.parent / "repo-worktrees" / "worktree-worker"
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm.create_worktree') as mock_create:
+                with patch('swarm.spawn_process', return_value=555) as mock_spawn:
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
+
+                        # Verify worktree was created with branch=name
+                        mock_create.assert_called_once()
+                        call_args = mock_create.call_args[0]
+                        self.assertEqual(call_args[0], mock_worktree_path)
+                        self.assertEqual(call_args[1], "worktree-worker")
+
+                        # Verify spawn used worktree as cwd
+                        spawn_call = mock_spawn.call_args[0]
+                        self.assertEqual(spawn_call[1], mock_worktree_path)
+
+        # Verify state has worktree info
+        with open(self.state_file) as f:
+            state = json.load(f)
+            worker = state["workers"][0]
+            self.assertIsNotNone(worker["worktree"])
+            self.assertEqual(worker["worktree"]["branch"], "worktree-worker")
+            self.assertEqual(worker["worktree"]["base_repo"], str(mock_git_root))
+
+    def test_spawn_with_worktree_custom_branch(self):
+        """Test spawning with worktree uses custom branch name."""
+        args = Namespace(
+            name="worktree-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=True,
+            worktree_dir=None,
+            branch="custom-branch",
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm.create_worktree') as mock_create:
+                with patch('swarm.spawn_process', return_value=666):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
+
+                        # Verify custom branch was used
+                        call_args = mock_create.call_args[0]
+                        self.assertEqual(call_args[1], "custom-branch")
+
+    def test_spawn_with_worktree_custom_dir(self):
+        """Test spawning with worktree uses custom worktree directory."""
+        args = Namespace(
+            name="worktree-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=True,
+            worktree_dir="custom-worktrees",
+            branch=None,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+        expected_path = mock_git_root.parent / "custom-worktrees" / "worktree-worker"
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm.create_worktree') as mock_create:
+                with patch('swarm.spawn_process', return_value=777):
+                    with patch('builtins.print'):
+                        swarm.cmd_spawn(args)
+
+                        # Verify custom dir was used
+                        call_args = mock_create.call_args[0]
+                        self.assertEqual(call_args[0], expected_path)
+
+    def test_spawn_worktree_not_in_git_repo(self):
+        """Test that worktree outside git repo produces error."""
+        import subprocess
+
+        args = Namespace(
+            name="worktree-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=True,
+            worktree_dir=None,
+            branch=None,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        with patch('swarm.get_git_root', side_effect=subprocess.CalledProcessError(1, "git")):
+            with patch('sys.stderr'):
+                with self.assertRaises(SystemExit) as cm:
+                    swarm.cmd_spawn(args)
+                self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_worktree_creation_fails(self):
+        """Test that worktree creation failure produces error."""
+        import subprocess
+
+        args = Namespace(
+            name="worktree-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=True,
+            worktree_dir=None,
+            branch=None,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm.create_worktree', side_effect=subprocess.CalledProcessError(1, "git worktree")):
+                with patch('sys.stderr'):
+                    with self.assertRaises(SystemExit) as cm:
+                        swarm.cmd_spawn(args)
+                    self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_tmux_window_creation_fails(self):
+        """Test that tmux window creation failure produces error."""
+        import subprocess
+
+        args = Namespace(
+            name="tmux-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        with patch('swarm.create_tmux_window', side_effect=subprocess.CalledProcessError(1, "tmux")):
+            with patch('sys.stderr'):
+                with self.assertRaises(SystemExit) as cm:
+                    swarm.cmd_spawn(args)
+                self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_process_failure(self):
+        """Test that process spawn failure produces error."""
+        args = Namespace(
+            name="fail-worker",
+            cmd=["--", "echo", "test"],
+            tmux=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        with patch('swarm.spawn_process', side_effect=Exception("Spawn failed")):
+            with patch('sys.stderr'):
+                with self.assertRaises(SystemExit) as cm:
+                    swarm.cmd_spawn(args)
+                self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_ready_wait_timeout_warning(self):
+        """Test ready-wait timeout shows warning."""
+        from io import StringIO
+
+        args = Namespace(
+            name="ready-wait-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=True,
+            ready_timeout=5,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None
+        )
+
+        stderr_output = StringIO()
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.wait_for_agent_ready', return_value=False):
+                # Capture output from print(..., file=sys.stderr)
+                with patch('builtins.print', side_effect=lambda *args, **kwargs:
+                           stderr_output.write(args[0] + '\n') if kwargs.get('file') else None) as mock_print:
+                    swarm.cmd_spawn(args)
+
+                    # Verify warning was printed to stderr
+                    output = stderr_output.getvalue()
+                    self.assertIn("warning", output.lower())
+                    self.assertIn("did not become ready", output)
+
 
 if __name__ == "__main__":
     unittest.main()

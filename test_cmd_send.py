@@ -241,5 +241,23 @@ class TestCmdSend(unittest.TestCase):
         self.assertIn("worker 'w1' is not running", mock_stderr.getvalue())
 
 
+    def test_send_without_name_or_all_flag(self):
+        """Test error when neither name nor --all is specified."""
+        self.create_test_state([])
+
+        args = MagicMock()
+        args.name = None
+        args.text = "hello"
+        args.no_enter = False
+        args.all = False
+
+        with patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_send(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("--name required", mock_stderr.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

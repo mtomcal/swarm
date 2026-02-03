@@ -339,5 +339,133 @@ class TestCmdRespawn(unittest.TestCase):
             self.assertEqual(worker["cmd"], ["python", "-c", "print('hello')"])
 
 
+    def test_respawn_worktree_creation_fails(self):
+        """Test respawn handles worktree creation failure."""
+        import subprocess
+        from io import StringIO
+
+        self._create_worker_state({
+            "name": "worktree-fail",
+            "status": "stopped",
+            "cmd": ["echo", "test"],
+            "started": "2024-01-01T00:00:00",
+            "cwd": "/tmp/worktree",
+            "env": {},
+            "tags": [],
+            "tmux": None,
+            "worktree": {
+                "path": str(Path(self.temp_dir) / "nonexistent-worktree"),
+                "branch": "test-branch",
+                "base_repo": str(self.temp_dir)
+            },
+            "pid": 123
+        })
+
+        args = Namespace(name="worktree-fail", clean_first=False, force_dirty=False)
+
+        with patch('swarm.refresh_worker_status', return_value="stopped"), \
+             patch('swarm.create_worktree', side_effect=subprocess.CalledProcessError(1, "git")), \
+             patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_respawn(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("failed to create worktree", mock_stderr.getvalue())
+
+    def test_respawn_tmux_creation_fails(self):
+        """Test respawn handles tmux window creation failure."""
+        import subprocess
+        from io import StringIO
+
+        self._create_worker_state({
+            "name": "tmux-fail",
+            "status": "stopped",
+            "cmd": ["echo", "test"],
+            "started": "2024-01-01T00:00:00",
+            "cwd": "/tmp",
+            "env": {},
+            "tags": [],
+            "tmux": {"session": "swarm", "window": "tmux-fail", "socket": None},
+            "worktree": None,
+            "pid": None
+        })
+
+        args = Namespace(name="tmux-fail", clean_first=False, force_dirty=False)
+
+        with patch('swarm.refresh_worker_status', return_value="stopped"), \
+             patch('swarm.create_tmux_window', side_effect=subprocess.CalledProcessError(1, "tmux")), \
+             patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_respawn(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("failed to create tmux window", mock_stderr.getvalue())
+
+    def test_respawn_process_spawn_fails(self):
+        """Test respawn handles process spawn failure."""
+        from io import StringIO
+
+        self._create_worker_state({
+            "name": "spawn-fail",
+            "status": "stopped",
+            "cmd": ["echo", "test"],
+            "started": "2024-01-01T00:00:00",
+            "cwd": "/tmp",
+            "env": {},
+            "tags": [],
+            "tmux": None,
+            "worktree": None,
+            "pid": 123
+        })
+
+        args = Namespace(name="spawn-fail", clean_first=False, force_dirty=False)
+
+        with patch('swarm.refresh_worker_status', return_value="stopped"), \
+             patch('swarm.spawn_process', side_effect=Exception("Spawn failed")), \
+             patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_respawn(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("failed to spawn process", mock_stderr.getvalue())
+
+    def test_respawn_clean_first_dirty_worktree_fails(self):
+        """Test respawn --clean-first fails with dirty worktree without --force-dirty."""
+        from io import StringIO
+
+        worktree_path = Path(self.temp_dir) / "dirty-worktree"
+        worktree_path.mkdir(exist_ok=True)
+
+        self._create_worker_state({
+            "name": "dirty-worker",
+            "status": "stopped",
+            "cmd": ["echo", "test"],
+            "started": "2024-01-01T00:00:00",
+            "cwd": str(worktree_path),
+            "env": {},
+            "tags": [],
+            "tmux": None,
+            "worktree": {
+                "path": str(worktree_path),
+                "branch": "test-branch",
+                "base_repo": str(self.temp_dir)
+            },
+            "pid": 123
+        })
+
+        args = Namespace(name="dirty-worker", clean_first=True, force_dirty=False)
+
+        with patch('swarm.refresh_worker_status', return_value="stopped"), \
+             patch('swarm.remove_worktree', return_value=(False, "worktree has uncommitted changes")), \
+             patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_respawn(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        output = mock_stderr.getvalue()
+        self.assertIn("cannot remove worktree", output)
+        self.assertIn("uncommitted changes", output)
+
+
 if __name__ == "__main__":
     unittest.main()

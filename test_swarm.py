@@ -408,6 +408,54 @@ class TestCmdAttach(unittest.TestCase):
         )
 
 
+class TestCmdInterruptWithoutName(unittest.TestCase):
+    """Test cmd_interrupt error handling for missing name."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_file = Path(self.temp_dir) / "state.json"
+        self.logs_dir = Path(self.temp_dir) / "logs"
+        self.logs_dir.mkdir(exist_ok=True)
+
+        # Patch SWARM_DIR and STATE_FILE
+        self.swarm_dir_patch = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patch = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.logs_dir_patch = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+
+        self.swarm_dir_patch.start()
+        self.state_file_patch.start()
+        self.logs_dir_patch.start()
+
+        # Create empty state
+        state_data = {"workers": []}
+        with open(self.state_file, 'w') as f:
+            json.dump(state_data, f)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.swarm_dir_patch.stop()
+        self.state_file_patch.stop()
+        self.logs_dir_patch.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_interrupt_without_name_or_all_flag(self):
+        """Test error when neither name nor --all is specified for interrupt."""
+        from io import StringIO
+
+        args = MagicMock()
+        args.name = None
+        args.all = False
+
+        with patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_interrupt(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("worker name required", mock_stderr.getvalue())
+
+
 class TestCmdWait(unittest.TestCase):
     """Test cmd_wait function."""
 

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, call
+from unittest.mock import Mock, MagicMock, patch, call
 
 # Import the module under test
 import swarm
@@ -453,6 +453,147 @@ class TestCmdClean(unittest.TestCase):
         updated_worker = state.get_worker("stale-stopped")
         self.assertEqual(updated_worker.status, "running",
                         "Worker status should be updated to actual 'running' in state after refresh")
+
+
+class TestCmdCleanMissingName(unittest.TestCase):
+    """Test cmd_clean error handling for missing name."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_file = Path(self.temp_dir) / "state.json"
+        self.logs_dir = Path(self.temp_dir) / "logs"
+        self.logs_dir.mkdir(exist_ok=True)
+
+        self.swarm_dir_patch = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patch = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.logs_dir_patch = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+
+        self.swarm_dir_patch.start()
+        self.state_file_patch.start()
+        self.logs_dir_patch.start()
+
+        # Create empty state
+        state_data = {"workers": []}
+        with open(self.state_file, 'w') as f:
+            json.dump(state_data, f)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.swarm_dir_patch.stop()
+        self.state_file_patch.stop()
+        self.logs_dir_patch.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_clean_without_name_or_all_flag(self):
+        """Test error when neither name nor --all is specified."""
+        from io import StringIO
+
+        args = MagicMock()
+        args.name = None
+        args.all = False
+
+        with patch('sys.stderr', new_callable=StringIO) as mock_stderr, \
+             self.assertRaises(SystemExit) as cm:
+            swarm.cmd_clean(args)
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("must specify worker name or use --all", mock_stderr.getvalue())
+
+
+class TestCmdCleanSkipsRunningWithWarning(unittest.TestCase):
+    """Test cmd_clean --all skips running workers with warning."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_file = Path(self.temp_dir) / "state.json"
+        self.logs_dir = Path(self.temp_dir) / "logs"
+        self.logs_dir.mkdir(exist_ok=True)
+
+        self.swarm_dir_patch = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patch = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.logs_dir_patch = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+
+        self.swarm_dir_patch.start()
+        self.state_file_patch.start()
+        self.logs_dir_patch.start()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.swarm_dir_patch.stop()
+        self.state_file_patch.stop()
+        self.logs_dir_patch.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_state(self, workers):
+        """Helper to create a state file with given workers."""
+        data = {"workers": [w.to_dict() for w in workers]}
+        with open(self.state_file, "w") as f:
+            json.dump(data, f)
+
+    def test_clean_all_skips_running_with_warning(self):
+        """Test clean --all skips running workers and shows warning.
+
+        This tests the scenario where a worker appears stopped during the initial
+        filtering phase (line 1762), but becomes running by the time we try to
+        clean it (line 1785). This can happen in race conditions.
+        """
+        from io import StringIO
+        import sys
+
+        # Create one stopped and one "flaky" worker that becomes running during cleanup
+        workers = [
+            swarm.Worker(
+                name="stopped-worker",
+                status="stopped",
+                cmd=["echo", "test"],
+                started="2026-01-10T12:00:00",
+                cwd="/tmp",
+            ),
+            swarm.Worker(
+                name="flaky-worker",
+                status="stopped",  # cached as stopped
+                cmd=["echo", "test"],
+                started="2026-01-10T12:00:00",
+                cwd="/tmp",
+            ),
+        ]
+        self._create_state(workers)
+
+        args = MagicMock()
+        args.name = None
+        args.all = True
+        args.rm_worktree = False
+        args.force_dirty = False
+
+        # Track call count to simulate status flip
+        refresh_calls = {}
+
+        def mock_refresh(worker):
+            if worker.name not in refresh_calls:
+                refresh_calls[worker.name] = 0
+            refresh_calls[worker.name] += 1
+
+            if worker.name == "flaky-worker":
+                # First call (filtering phase): return stopped
+                # Second call (cleanup phase): return running
+                if refresh_calls[worker.name] == 1:
+                    return "stopped"
+                else:
+                    return "running"
+            return "stopped"
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh), \
+             patch('sys.stderr', new_callable=StringIO) as mock_stderr:
+            swarm.cmd_clean(args)
+
+            # Verify warning was printed
+            output = mock_stderr.getvalue()
+            self.assertIn("warning", output.lower())
+            self.assertIn("flaky-worker", output)
 
 
 if __name__ == "__main__":

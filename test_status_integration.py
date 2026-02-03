@@ -6,40 +6,44 @@ import os
 import subprocess
 import sys
 import tempfile
+import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-def test_status_worker_not_found():
-    """Test status command for non-existent worker."""
-    # Set up clean environment
-    with tempfile.TemporaryDirectory() as tmpdir:
-        env = os.environ.copy()
-        env['HOME'] = tmpdir
 
-        # Try to get status of non-existent worker
+class TestStatusIntegration(unittest.TestCase):
+    """Integration tests for the status command."""
+
+    def setUp(self):
+        """Create a temporary directory for SWARM state."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.env = os.environ.copy()
+        self.env['HOME'] = self.tmpdir
+        # Create .swarm directory
+        swarm_dir = Path(self.tmpdir) / ".swarm"
+        swarm_dir.mkdir(parents=True, exist_ok=True)
+        (swarm_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_status_worker_not_found(self):
+        """Test status command for non-existent worker."""
         result = subprocess.run(
             ['./swarm.py', 'status', 'nonexistent'],
             capture_output=True,
             text=True,
-            env=env
+            env=self.env
         )
 
         # Should exit with code 2 (not found)
-        assert result.returncode == 2, f"Expected exit code 2, got {result.returncode}"
-        assert "worker 'nonexistent' not found" in result.stderr, f"Expected error message in stderr: {result.stderr}"
-        print("✓ Test passed: worker not found")
+        self.assertEqual(result.returncode, 2, f"Expected exit code 2, got {result.returncode}")
+        self.assertIn("worker 'nonexistent' not found", result.stderr)
 
-
-def test_status_worker_mock():
-    """Test status command with a mocked worker."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        env = os.environ.copy()
-        env['HOME'] = tmpdir
-
-        # Create state directory
-        swarm_dir = Path(tmpdir) / ".swarm"
-        swarm_dir.mkdir(parents=True)
-
+    def test_status_worker_mock(self):
+        """Test status command with a mocked worker (PID doesn't exist)."""
         # Create a mock worker in state
         started = (datetime.now() - timedelta(minutes=5)).isoformat()
         state_data = {
@@ -59,7 +63,7 @@ def test_status_worker_mock():
             ]
         }
 
-        state_file = swarm_dir / "state.json"
+        state_file = Path(self.tmpdir) / ".swarm" / "state.json"
         with open(state_file, "w") as f:
             json.dump(state_data, f)
 
@@ -68,28 +72,15 @@ def test_status_worker_mock():
             ['./swarm.py', 'status', 'test-worker'],
             capture_output=True,
             text=True,
-            env=env
+            env=self.env
         )
 
         # Should exit with code 1 (stopped, since PID 99999 doesn't exist)
-        assert result.returncode == 1, f"Expected exit code 1, got {result.returncode}"
-        assert "test-worker: stopped" in result.stdout, f"Expected status in stdout: {result.stdout}"
-        assert "pid 99999" in result.stdout, f"Expected PID in output: {result.stdout}"
-        assert "uptime 5m" in result.stdout, f"Expected uptime in output: {result.stdout}"
-        print("✓ Test passed: worker status with PID")
+        self.assertEqual(result.returncode, 1, f"Expected exit code 1, got {result.returncode}")
+        self.assertIn("test-worker: stopped", result.stdout)
+        self.assertIn("pid 99999", result.stdout)
+        self.assertIn("uptime 5m", result.stdout)
 
 
 if __name__ == "__main__":
-    print("Running integration tests for cmd_status...")
-    try:
-        test_status_worker_not_found()
-        test_status_worker_mock()
-        print("\n✓ All integration tests passed!")
-    except AssertionError as e:
-        print(f"\n✗ Test failed: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n✗ Test error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    unittest.main()
