@@ -41,16 +41,21 @@ limit and ralph status display.
 **Existing tests (TestRalphRunIntegration)**:
 - `test_ralph_run_increments_iteration_on_worker_exit`: Verifies iteration increment
 
-### 4. Test `detect_inactivity` blocking behavior matches caller expectations
+### 4. Test `detect_inactivity` blocking behavior matches caller expectations (NEW)
 **Contract**:
 - Returns True when inactivity timeout reached (blocks until then)
 - Returns False when worker exits (unblocks early)
 - Does not return until one of these conditions
+- Timer resets when output changes
 
 **Why this matters**: If detect_inactivity returns early or doesn't block,
 the ralph loop will spin rapidly or never restart workers.
 
-**Status**: Covered by existing unit tests in TestDetectInactivity
+**Tests added (TestDetectInactivityBlockingIntegration)**:
+- `test_detect_inactivity_returns_false_when_worker_exits`: Verifies quick return on worker exit
+- `test_detect_inactivity_returns_true_after_timeout_output_mode`: Verifies blocking for output mode
+- `test_detect_inactivity_returns_true_after_timeout_ready_mode`: Verifies blocking for ready mode
+- `test_detect_inactivity_resets_timer_on_output_change`: Verifies timer reset behavior
 
 ### 5. Test inactivity triggers full restart cycle (NEW - HIGHEST IMPACT)
 **Contract**: When `detect_inactivity` returns True (inactivity detected):
@@ -74,7 +79,7 @@ in this chain means the loop will either:
 - [x] Test 1: spawn --ralph sends prompt to worker (TestRalphSpawnSendsPromptIntegration)
 - [x] Test 2: ralph run monitoring loop (TestRalphRunIntegration - existing)
 - [x] Test 3: state flows across iterations (TestRalphRunIntegration - existing)
-- [x] Test 4: detect_inactivity blocking (TestDetectInactivity - existing unit tests)
+- [x] Test 4: detect_inactivity blocking (TestDetectInactivityBlockingIntegration - NEW)
 - [x] Test 5: inactivity triggers full restart cycle (TestRalphInactivityRestartIntegration - NEW)
 
 ## Test Execution

@@ -6199,5 +6199,288 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
                 "Iteration must be incremented before spawn")
 
 
+class TestDetectInactivityBlockingIntegration(unittest.TestCase):
+    """Integration test: detect_inactivity blocking behavior.
+
+    Contract verified:
+    - detect_inactivity BLOCKS until one of these conditions:
+      1. Worker exits (returns False)
+      2. Inactivity timeout reached (returns True)
+    - The function must NOT return prematurely
+
+    Why this test matters:
+    The ralph loop depends on detect_inactivity to block while monitoring.
+    If it returns early, the ralph loop will spin rapidly (CPU burn, log spam).
+    If it never returns when worker exits, the ralph loop hangs forever.
+
+    These tests use minimal mocking (only tmux_capture_pane) to verify the
+    real blocking logic and timing behavior.
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_detect_inactivity_returns_false_when_worker_exits(self):
+        """Integration test: detect_inactivity returns False when worker exits.
+
+        Contract: When refresh_worker_status returns 'stopped', detect_inactivity
+        must immediately return False (not wait for timeout).
+
+        This test verifies:
+        1. detect_inactivity calls refresh_worker_status to check worker state
+        2. When worker is stopped, it returns False quickly (not waiting for timeout)
+        3. The return value is correct (False = worker exited, not inactivity)
+
+        Timeout: 5s - if it takes longer, the function is not returning on worker exit.
+        """
+        worker = swarm.Worker(
+            name='exit-test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='exit-test-worker')
+        )
+
+        refresh_call_count = [0]
+
+        def mock_refresh(w):
+            """Simulate worker that exits after first check."""
+            refresh_call_count[0] += 1
+            # Worker exits on second check
+            if refresh_call_count[0] >= 2:
+                return 'stopped'
+            return 'running'
+
+        def mock_capture(session, window, socket=None, history_lines=None):
+            """Return consistent output (no change, simulating idle)."""
+            return "Test output\n> "
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("detect_inactivity did not return when worker exited")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(5)  # 5 second timeout - should return much faster
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                    start_time = time.time()
+                    result = swarm.detect_inactivity(worker, timeout=300, mode='ready')
+                    elapsed = time.time() - start_time
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL: Must return False (worker exited, not inactivity)
+        self.assertFalse(result,
+            "detect_inactivity must return False when worker exits")
+
+        # CRITICAL: Must return quickly (not wait for 300s timeout)
+        self.assertLess(elapsed, 5.0,
+            f"detect_inactivity should return quickly when worker exits, took {elapsed}s")
+
+        # Verify refresh_worker_status was actually called
+        self.assertGreaterEqual(refresh_call_count[0], 2,
+            "detect_inactivity must check worker status")
+
+    def test_detect_inactivity_returns_true_after_timeout_output_mode(self):
+        """Integration test: detect_inactivity returns True after output timeout.
+
+        Contract: In 'output' mode, when output stops changing for the timeout
+        duration, detect_inactivity must return True.
+
+        This test verifies:
+        1. detect_inactivity monitors output changes via tmux_capture_pane
+        2. When output stops changing, it waits for the full timeout
+        3. After timeout, it returns True (inactivity detected)
+
+        Timeout: 10s - we use a 2s inactivity timeout to keep test fast.
+        """
+        worker = swarm.Worker(
+            name='timeout-test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='timeout-test-worker')
+        )
+
+        def mock_refresh(w):
+            """Worker stays running throughout test."""
+            return 'running'
+
+        capture_count = [0]
+
+        def mock_capture(session, window, socket=None, history_lines=None):
+            """Return identical output to simulate no activity."""
+            capture_count[0] += 1
+            return "Static output that never changes\n"
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("detect_inactivity did not return after timeout")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)  # 10 second test timeout
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                    start_time = time.time()
+                    # Use a short 2 second timeout for the test
+                    result = swarm.detect_inactivity(worker, timeout=2, mode='output')
+                    elapsed = time.time() - start_time
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL: Must return True (inactivity detected)
+        self.assertTrue(result,
+            "detect_inactivity must return True after inactivity timeout")
+
+        # CRITICAL: Must wait approximately the timeout duration
+        self.assertGreaterEqual(elapsed, 2.0,
+            f"detect_inactivity should wait for timeout, only waited {elapsed}s")
+        self.assertLess(elapsed, 6.0,
+            f"detect_inactivity should not wait much longer than timeout, waited {elapsed}s")
+
+        # Verify tmux_capture_pane was called multiple times (polling)
+        self.assertGreaterEqual(capture_count[0], 2,
+            "detect_inactivity must poll output multiple times")
+
+    def test_detect_inactivity_returns_true_after_timeout_ready_mode(self):
+        """Integration test: detect_inactivity returns True after ready timeout.
+
+        Contract: In 'ready' mode, when the agent shows ready patterns for the
+        timeout duration, detect_inactivity must return True.
+
+        This test verifies:
+        1. detect_inactivity detects ready patterns in output
+        2. When ready pattern persists for timeout duration, returns True
+        3. The ready pattern matching works correctly
+
+        Timeout: 10s - we use a 2s inactivity timeout to keep test fast.
+        """
+        worker = swarm.Worker(
+            name='ready-timeout-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ready-timeout-worker')
+        )
+
+        def mock_refresh(w):
+            """Worker stays running throughout test."""
+            return 'running'
+
+        def mock_capture(session, window, socket=None, history_lines=None):
+            """Return output with ready pattern to trigger ready-mode detection."""
+            # Use a ready pattern that detect_inactivity recognizes
+            return "Some output\n> "  # "> " is a ready pattern
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("detect_inactivity did not return after timeout")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                    start_time = time.time()
+                    result = swarm.detect_inactivity(worker, timeout=2, mode='ready')
+                    elapsed = time.time() - start_time
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL: Must return True (ready state detected for timeout)
+        self.assertTrue(result,
+            "detect_inactivity must return True when ready pattern detected for timeout")
+
+        # CRITICAL: Must wait approximately the timeout duration
+        self.assertGreaterEqual(elapsed, 2.0,
+            f"detect_inactivity should wait for full timeout in ready mode, only waited {elapsed}s")
+
+    def test_detect_inactivity_resets_timer_on_output_change(self):
+        """Integration test: output changes reset the inactivity timer.
+
+        Contract: When new output appears, the inactivity timer must reset.
+        The function should NOT return True if output keeps changing.
+
+        This test verifies:
+        1. Changing output resets the timer
+        2. Function blocks while output is active
+        3. Only returns after output stops AND timeout elapses
+
+        Timeout: 15s - we simulate changing output then stopping.
+        """
+        worker = swarm.Worker(
+            name='reset-timer-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='reset-timer-worker')
+        )
+
+        def mock_refresh(w):
+            """Worker stays running throughout test."""
+            return 'running'
+
+        capture_count = [0]
+        start_time = [None]
+
+        def mock_capture(session, window, socket=None, history_lines=None):
+            """Return changing output for first 2 seconds, then static."""
+            capture_count[0] += 1
+            if start_time[0] is None:
+                start_time[0] = time.time()
+
+            elapsed = time.time() - start_time[0]
+
+            # Change output for first ~2 seconds (resets timer each time)
+            if elapsed < 2.0:
+                return f"Dynamic output {capture_count[0]}\n"
+            else:
+                # Static output - timer will now count down
+                return "Static final output\n"
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out - function did not return")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(15)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                    # 2 second inactivity timeout
+                    # Output changes for ~2s, then static for 2s timeout
+                    # Total expected: ~4 seconds
+                    test_start = time.time()
+                    result = swarm.detect_inactivity(worker, timeout=2, mode='output')
+                    total_elapsed = time.time() - test_start
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # CRITICAL: Must return True (inactivity after output stopped)
+        self.assertTrue(result,
+            "detect_inactivity must return True after output stops and timeout elapses")
+
+        # CRITICAL: Must have waited longer than just the timeout
+        # (because output was changing initially)
+        self.assertGreater(total_elapsed, 3.0,
+            f"detect_inactivity should have blocked longer due to output changes, but only waited {total_elapsed}s")
+
+
 if __name__ == "__main__":
     unittest.main()
