@@ -3622,5 +3622,527 @@ class TestSpawnWorkflowStage(unittest.TestCase):
         self.assertIn('invalid heartbeat-expire', captured.getvalue())
 
 
+class TestStageCompletionResultDataclass(unittest.TestCase):
+    """Test StageCompletionResult dataclass creation and attributes."""
+
+    def test_create_successful_done_pattern(self):
+        """Test creating a successful done_pattern completion result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+            details="Done pattern matched in worker output",
+        )
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "done_pattern")
+        self.assertEqual(result.details, "Done pattern matched in worker output")
+
+    def test_create_timeout_result(self):
+        """Test creating a timeout completion result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="timeout",
+            details="Stage timed out after 1h 30m",
+        )
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "timeout")
+        self.assertIn("timed out", result.details)
+
+    def test_create_worker_exit_result(self):
+        """Test creating a worker exit completion result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="worker_exit",
+            details="Worker exited before done pattern matched",
+        )
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "worker_exit")
+
+    def test_create_ralph_complete_result(self):
+        """Test creating a ralph completion result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="ralph_complete",
+            details="Ralph loop completed after 25 iterations",
+        )
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "ralph_complete")
+
+    def test_create_ralph_failed_result(self):
+        """Test creating a ralph failed result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="ralph_failed",
+            details="Ralph loop failed after 5 total failures",
+        )
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "ralph_failed")
+
+    def test_create_error_result(self):
+        """Test creating an error completion result."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="error",
+            details="Ralph state not found - worker may have been killed",
+        )
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "error")
+
+    def test_create_without_details(self):
+        """Test creating a completion result without details."""
+        result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "done_pattern")
+        self.assertIsNone(result.details)
+
+    def test_all_valid_reasons(self):
+        """Test all valid reason values can be set."""
+        reasons = [
+            "done_pattern",
+            "timeout",
+            "worker_exit",
+            "ralph_complete",
+            "ralph_failed",
+            "error",
+        ]
+        for reason in reasons:
+            result = swarm.StageCompletionResult(
+                completed=True,
+                success=reason in ("done_pattern", "ralph_complete"),
+                reason=reason,
+            )
+            self.assertEqual(result.reason, reason)
+
+
+class TestMonitorWorkerStageCompletion(unittest.TestCase):
+    """Test _monitor_worker_stage_completion function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        # Create a mock worker
+        self.mock_worker = swarm.Worker(
+            name="test-workflow-work",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session="swarm", window="test-workflow-work", socket=None),
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    def test_done_pattern_matched(self, mock_capture, mock_refresh):
+        """Test completion when done pattern matches."""
+        import re
+        mock_refresh.return_value = "running"
+        mock_capture.return_value = "Working...\n/done\nMore output"
+
+        done_regex = re.compile(r"/done")
+        result = swarm._monitor_worker_stage_completion(
+            worker=self.mock_worker,
+            done_regex=done_regex,
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "done_pattern")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    def test_worker_exited_without_pattern(self, mock_capture, mock_refresh):
+        """Test completion when worker exits without done pattern."""
+        import re
+        mock_refresh.return_value = "stopped"
+        mock_capture.return_value = "Working...\nFinished but no pattern"
+
+        done_regex = re.compile(r"/done")
+        result = swarm._monitor_worker_stage_completion(
+            worker=self.mock_worker,
+            done_regex=done_regex,
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "worker_exit")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    def test_worker_exited_with_pattern_before_exit(self, mock_capture, mock_refresh):
+        """Test completion when worker exits after done pattern matched."""
+        import re
+        mock_refresh.return_value = "stopped"
+        mock_capture.return_value = "Working...\n/done\nExiting"
+
+        done_regex = re.compile(r"/done")
+        result = swarm._monitor_worker_stage_completion(
+            worker=self.mock_worker,
+            done_regex=done_regex,
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "done_pattern")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    def test_timeout_reached(self, mock_time, mock_capture, mock_refresh):
+        """Test completion when timeout is reached."""
+        import re
+        mock_refresh.return_value = "running"
+        mock_capture.return_value = "Still working..."
+        # Simulate time passing beyond timeout
+        mock_time.side_effect = [100, 200]  # start=100, now=200, elapsed=100 > 60
+
+        done_regex = re.compile(r"/done")
+        result = swarm._monitor_worker_stage_completion(
+            worker=self.mock_worker,
+            done_regex=done_regex,
+            timeout_seconds=60,  # 60 second timeout
+            start_time=100,  # start time from mock
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "timeout")
+        self.assertIn("timed out", result.details)
+
+    @patch('swarm.refresh_worker_status')
+    def test_worker_exited_no_tmux(self, mock_refresh):
+        """Test completion when worker exits without tmux."""
+        mock_refresh.return_value = "stopped"
+
+        # Worker without tmux info
+        worker_no_tmux = swarm.Worker(
+            name="test-worker",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd=self.temp_dir,
+            tmux=None,
+        )
+
+        result = swarm._monitor_worker_stage_completion(
+            worker=worker_no_tmux,
+            done_regex=None,
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "worker_exit")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    def test_tmux_capture_error(self, mock_capture, mock_refresh):
+        """Test handling of tmux capture errors."""
+        import subprocess
+        mock_refresh.side_effect = ["running", "stopped"]
+        mock_capture.side_effect = subprocess.CalledProcessError(1, "tmux")
+
+        result = swarm._monitor_worker_stage_completion(
+            worker=self.mock_worker,
+            done_regex=None,
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        # Should detect worker exit (window closed)
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "worker_exit")
+
+
+class TestMonitorRalphStageCompletion(unittest.TestCase):
+    """Test _monitor_ralph_stage_completion function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm.load_ralph_state')
+    def test_ralph_completed_normally(self, mock_load):
+        """Test completion when ralph loop finishes normally."""
+        mock_load.return_value = swarm.RalphState(
+            worker_name="test-workflow-build",
+            prompt_file="/path/to/prompt.md",
+            max_iterations=50,
+            current_iteration=50,
+            status="stopped",
+        )
+
+        result = swarm._monitor_ralph_stage_completion(
+            worker_name="test-workflow-build",
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertTrue(result.success)
+        self.assertEqual(result.reason, "ralph_complete")
+        self.assertIn("50 iterations", result.details)
+
+    @patch('swarm.load_ralph_state')
+    def test_ralph_failed(self, mock_load):
+        """Test completion when ralph loop fails."""
+        mock_load.return_value = swarm.RalphState(
+            worker_name="test-workflow-build",
+            prompt_file="/path/to/prompt.md",
+            max_iterations=50,
+            current_iteration=5,
+            status="failed",
+            total_failures=5,
+        )
+
+        result = swarm._monitor_ralph_stage_completion(
+            worker_name="test-workflow-build",
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "ralph_failed")
+        self.assertIn("5 total failures", result.details)
+
+    @patch('swarm.load_ralph_state')
+    def test_ralph_state_not_found(self, mock_load):
+        """Test completion when ralph state is not found."""
+        mock_load.return_value = None
+
+        result = swarm._monitor_ralph_stage_completion(
+            worker_name="nonexistent-worker",
+            timeout_seconds=None,
+            start_time=0,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "error")
+        self.assertIn("not found", result.details)
+
+    @patch('swarm.load_ralph_state')
+    @patch('time.time')
+    def test_ralph_timeout(self, mock_time, mock_load):
+        """Test completion when ralph stage times out."""
+        mock_load.return_value = swarm.RalphState(
+            worker_name="test-workflow-build",
+            prompt_file="/path/to/prompt.md",
+            max_iterations=50,
+            current_iteration=10,
+            status="running",
+        )
+        # Simulate time passing beyond timeout
+        mock_time.side_effect = [100, 200]  # start=100, now=200, elapsed=100 > 60
+
+        result = swarm._monitor_ralph_stage_completion(
+            worker_name="test-workflow-build",
+            timeout_seconds=60,  # 60 second timeout
+            start_time=100,  # start time from mock
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(result.completed)
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, "timeout")
+
+
+class TestMonitorStageCompletion(unittest.TestCase):
+    """Test monitor_stage_completion function (high-level)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        # Create a mock worker
+        self.mock_worker = swarm.Worker(
+            name="test-workflow-work",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session="swarm", window="test-workflow-work", socket=None),
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm._monitor_worker_stage_completion')
+    def test_dispatches_to_worker_monitor_for_worker_type(self, mock_worker_monitor):
+        """Test that worker type stages use worker monitor."""
+        mock_worker_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+
+        stage_def = swarm.StageDefinition(
+            name="work",
+            type="worker",
+            prompt="Do some work",
+            done_pattern="/done",
+        )
+
+        result = swarm.monitor_stage_completion(
+            workflow_name="test-workflow",
+            stage_def=stage_def,
+            worker=self.mock_worker,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(mock_worker_monitor.called)
+        self.assertEqual(result.reason, "done_pattern")
+
+    @patch('swarm._monitor_ralph_stage_completion')
+    def test_dispatches_to_ralph_monitor_for_ralph_type(self, mock_ralph_monitor):
+        """Test that ralph type stages use ralph monitor."""
+        mock_ralph_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="ralph_complete",
+        )
+
+        stage_def = swarm.StageDefinition(
+            name="build",
+            type="ralph",
+            prompt="Build something",
+            max_iterations=50,
+        )
+
+        result = swarm.monitor_stage_completion(
+            workflow_name="test-workflow",
+            stage_def=stage_def,
+            worker=self.mock_worker,
+            poll_interval=0.01,
+        )
+
+        self.assertTrue(mock_ralph_monitor.called)
+        self.assertEqual(result.reason, "ralph_complete")
+
+    @patch('swarm._monitor_worker_stage_completion')
+    def test_parses_timeout_duration(self, mock_worker_monitor):
+        """Test that timeout duration string is parsed correctly."""
+        mock_worker_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="timeout",
+        )
+
+        stage_def = swarm.StageDefinition(
+            name="work",
+            type="worker",
+            prompt="Do some work",
+            timeout="2h30m",  # Duration string
+        )
+
+        swarm.monitor_stage_completion(
+            workflow_name="test-workflow",
+            stage_def=stage_def,
+            worker=self.mock_worker,
+            poll_interval=0.01,
+        )
+
+        # Check that timeout_seconds was passed correctly (2h30m = 9000s)
+        call_args = mock_worker_monitor.call_args
+        self.assertEqual(call_args.kwargs.get('timeout_seconds'), 9000)
+
+    @patch('swarm._monitor_worker_stage_completion')
+    def test_handles_invalid_done_pattern(self, mock_worker_monitor):
+        """Test that invalid regex patterns are handled gracefully."""
+        mock_worker_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="worker_exit",
+        )
+
+        stage_def = swarm.StageDefinition(
+            name="work",
+            type="worker",
+            prompt="Do some work",
+            done_pattern="[invalid(regex",  # Invalid regex
+        )
+
+        # Should not raise an exception
+        result = swarm.monitor_stage_completion(
+            workflow_name="test-workflow",
+            stage_def=stage_def,
+            worker=self.mock_worker,
+            poll_interval=0.01,
+        )
+
+        # Should proceed without pattern matching
+        call_args = mock_worker_monitor.call_args
+        self.assertIsNone(call_args.kwargs.get('done_regex'))
+
+    @patch('swarm._monitor_worker_stage_completion')
+    def test_handles_invalid_timeout(self, mock_worker_monitor):
+        """Test that invalid timeout strings are handled gracefully."""
+        mock_worker_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="worker_exit",
+        )
+
+        stage_def = swarm.StageDefinition(
+            name="work",
+            type="worker",
+            prompt="Do some work",
+            timeout="not-a-duration",  # Invalid duration
+        )
+
+        # Should not raise an exception
+        result = swarm.monitor_stage_completion(
+            workflow_name="test-workflow",
+            stage_def=stage_def,
+            worker=self.mock_worker,
+            poll_interval=0.01,
+        )
+
+        # Should proceed without timeout
+        call_args = mock_worker_monitor.call_args
+        self.assertIsNone(call_args.kwargs.get('timeout_seconds'))
+
+
 if __name__ == "__main__":
     unittest.main()

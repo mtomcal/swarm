@@ -196,7 +196,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Apply global settings (heartbeat, worktree, cwd, env)
   - Apply stage overrides
 
-- [ ] **3.7 Implement stage completion detection**
+- [x] **3.7 Implement stage completion detection**
   - Monitor worker output for done-pattern
   - Handle timeout
   - Detect worker exit

@@ -6681,6 +6681,256 @@ def spawn_workflow_stage(
     return worker
 
 
+@dataclass
+class StageCompletionResult:
+    """Result of monitoring a workflow stage for completion.
+
+    Captures how a stage completed, including whether it succeeded,
+    the reason for completion, and timing information.
+    """
+    completed: bool  # True if stage finished (success or failure)
+    success: bool  # True if stage succeeded (done_pattern matched, ralph completed normally)
+    reason: str  # Reason for completion: done_pattern, timeout, worker_exit, ralph_complete, ralph_failed, error
+    details: Optional[str] = None  # Additional details about the completion
+
+
+def monitor_stage_completion(
+    workflow_name: str,
+    stage_def: StageDefinition,
+    worker: Worker,
+    poll_interval: float = 2.0,
+) -> StageCompletionResult:
+    """Monitor a workflow stage for completion.
+
+    Monitors the given stage's worker for completion conditions based on the
+    stage type:
+
+    For 'worker' type stages:
+    - Checks for done-pattern match in tmux output
+    - Handles timeout (if configured)
+    - Detects worker exit
+
+    For 'ralph' type stages:
+    - Monitors ralph state for loop completion or failure
+    - Done pattern is handled by ralph loop itself
+
+    Args:
+        workflow_name: Name of the workflow
+        stage_def: The stage definition being monitored
+        worker: The worker running the stage
+        poll_interval: Seconds between status checks (default 2.0)
+
+    Returns:
+        StageCompletionResult indicating how the stage completed
+    """
+    import re
+
+    worker_name = worker.name
+    start_time = time.time()
+
+    # Parse timeout if specified
+    timeout_seconds = None
+    if stage_def.timeout:
+        try:
+            timeout_seconds = parse_duration(stage_def.timeout)
+        except ValueError:
+            # Invalid timeout - proceed without timeout
+            pass
+
+    # Compile done pattern regex if specified
+    done_regex = None
+    if stage_def.done_pattern:
+        try:
+            done_regex = re.compile(stage_def.done_pattern)
+        except re.error:
+            # Invalid regex - proceed without pattern matching
+            pass
+
+    if stage_def.type == "ralph":
+        # For ralph stages, monitor ralph state
+        return _monitor_ralph_stage_completion(
+            worker_name=worker_name,
+            timeout_seconds=timeout_seconds,
+            start_time=start_time,
+            poll_interval=poll_interval,
+        )
+    else:
+        # For worker stages, monitor for done pattern, timeout, or exit
+        return _monitor_worker_stage_completion(
+            worker=worker,
+            done_regex=done_regex,
+            timeout_seconds=timeout_seconds,
+            start_time=start_time,
+            poll_interval=poll_interval,
+        )
+
+
+def _monitor_ralph_stage_completion(
+    worker_name: str,
+    timeout_seconds: Optional[float],
+    start_time: float,
+    poll_interval: float,
+) -> StageCompletionResult:
+    """Monitor a ralph-type stage for completion.
+
+    Ralph stages complete when:
+    - The ralph loop finishes (max iterations reached)
+    - The done pattern is matched (if check_done_continuous is set)
+    - The ralph loop fails (consecutive failures)
+    - Timeout is reached
+
+    Args:
+        worker_name: Name of the worker (same as ralph name)
+        timeout_seconds: Optional timeout in seconds
+        start_time: When monitoring started (for timeout calculation)
+        poll_interval: Seconds between status checks
+
+    Returns:
+        StageCompletionResult indicating how the stage completed
+    """
+    while True:
+        # Check for timeout first
+        if timeout_seconds is not None:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                return StageCompletionResult(
+                    completed=True,
+                    success=False,
+                    reason="timeout",
+                    details=f"Stage timed out after {format_duration(timeout_seconds)}",
+                )
+
+        # Load ralph state to check status
+        ralph_state = load_ralph_state(worker_name)
+
+        if ralph_state is None:
+            # Ralph state doesn't exist - worker may have been killed
+            return StageCompletionResult(
+                completed=True,
+                success=False,
+                reason="error",
+                details="Ralph state not found - worker may have been killed",
+            )
+
+        # Check ralph status
+        if ralph_state.status == "stopped":
+            # Ralph loop completed normally (done pattern or max iterations)
+            return StageCompletionResult(
+                completed=True,
+                success=True,
+                reason="ralph_complete",
+                details=f"Ralph loop completed after {ralph_state.current_iteration} iterations",
+            )
+
+        elif ralph_state.status == "failed":
+            # Ralph loop failed
+            return StageCompletionResult(
+                completed=True,
+                success=False,
+                reason="ralph_failed",
+                details=f"Ralph loop failed after {ralph_state.total_failures} total failures",
+            )
+
+        elif ralph_state.status == "paused":
+            # Ralph was paused externally - this is a special case
+            # We don't treat paused as completed - it's a suspended state
+            # Continue polling in case it's resumed
+            pass
+
+        # Ralph is still running, sleep and continue
+        time.sleep(poll_interval)
+
+
+def _monitor_worker_stage_completion(
+    worker: Worker,
+    done_regex: Optional["re.Pattern"],
+    timeout_seconds: Optional[float],
+    start_time: float,
+    poll_interval: float,
+) -> StageCompletionResult:
+    """Monitor a worker-type stage for completion.
+
+    Worker stages complete when:
+    - Done pattern is matched in tmux output
+    - Worker exits (process terminates)
+    - Timeout is reached
+
+    Args:
+        worker: The worker to monitor
+        done_regex: Compiled regex for done pattern (or None)
+        timeout_seconds: Optional timeout in seconds
+        start_time: When monitoring started (for timeout calculation)
+        poll_interval: Seconds between status checks
+
+    Returns:
+        StageCompletionResult indicating how the stage completed
+    """
+    while True:
+        # Check for timeout first
+        if timeout_seconds is not None:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                return StageCompletionResult(
+                    completed=True,
+                    success=False,
+                    reason="timeout",
+                    details=f"Stage timed out after {format_duration(timeout_seconds)}",
+                )
+
+        # Check if worker has exited
+        worker_status = refresh_worker_status(worker)
+        if worker_status == "stopped":
+            # Worker exited - check if done pattern was matched before exit
+            if done_regex and worker.tmux:
+                try:
+                    output = tmux_capture_pane(
+                        worker.tmux.session,
+                        worker.tmux.window,
+                        history_lines=1000,
+                        socket=worker.tmux.socket,
+                    )
+                    if done_regex.search(output):
+                        return StageCompletionResult(
+                            completed=True,
+                            success=True,
+                            reason="done_pattern",
+                            details="Worker exited after done pattern matched",
+                        )
+                except subprocess.CalledProcessError:
+                    pass
+
+            # Worker exited without done pattern
+            return StageCompletionResult(
+                completed=True,
+                success=False,
+                reason="worker_exit",
+                details="Worker exited before done pattern matched",
+            )
+
+        # Check for done pattern in running worker
+        if done_regex and worker.tmux:
+            try:
+                output = tmux_capture_pane(
+                    worker.tmux.session,
+                    worker.tmux.window,
+                    history_lines=1000,
+                    socket=worker.tmux.socket,
+                )
+                if done_regex.search(output):
+                    return StageCompletionResult(
+                        completed=True,
+                        success=True,
+                        reason="done_pattern",
+                        details="Done pattern matched in worker output",
+                    )
+            except subprocess.CalledProcessError:
+                # Window might have closed
+                pass
+
+        # Still running, sleep and continue
+        time.sleep(poll_interval)
+
+
 def cmd_workflow(args) -> None:
     """Workflow management commands.
 
