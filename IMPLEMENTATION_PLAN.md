@@ -238,7 +238,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Show aggregated logs
   - Per-stage log viewing
 
-- [ ] **3.15 Add comprehensive workflow help text**
+- [x] **3.15 Add comprehensive workflow help text**
   - Follow cli-help-standards.md
   - Include full YAML schema in `run --help`
   - Include examples for all common patterns

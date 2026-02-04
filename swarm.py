@@ -1486,25 +1486,138 @@ configurable failure handling.
 """
 
 WORKFLOW_RUN_HELP_EPILOG = """\
-Scheduling:
-  # Run immediately (default)
-  swarm workflow run workflow.yaml
+Workflow YAML Format:
+  A workflow defines sequential stages that execute one after another.
+  Each stage is either a 'worker' (single run) or 'ralph' (loop).
 
-  # Run at specific time (HH:MM, 24-hour format)
-  swarm workflow run workflow.yaml --at "02:00"
+  Required Fields:
+    name: my-workflow           # Unique identifier
 
-  # Run after delay
-  swarm workflow run workflow.yaml --in "4h"
+  Optional Global Settings:
+    description: "..."          # Human description
+    schedule: "02:00"           # Default start time (HH:MM)
+    delay: "4h"                 # Alternative: start after delay
+    heartbeat: 4h               # Rate limit recovery interval
+    heartbeat-expire: 24h       # Stop heartbeat after duration
+    heartbeat-message: "..."    # Custom nudge message
+    worktree: true              # Git worktree isolation
+    cwd: ./path                 # Working directory
 
-  Note: --at schedules for the next occurrence of that time.
-  If 02:00 has passed today, it schedules for tomorrow at 02:00.
+  Stages (required, list):
+    stages:
+      - name: stage-name        # Required: stage identifier
+        type: worker            # Required: worker | ralph
+
+        # Prompt (exactly one required):
+        prompt: |               # Inline prompt
+          Your instructions...
+        prompt-file: ./file.md  # OR file path
+
+        # Completion (optional):
+        done-pattern: "/done"   # Regex to detect completion
+        timeout: 2h             # Max time before moving on
+
+        # Failure handling (optional):
+        on-failure: stop        # stop | retry | skip (default: stop)
+        max-retries: 3          # Attempts if on-failure: retry
+
+        # Ralph-specific (type: ralph only):
+        max-iterations: 50      # Required for ralph
+        inactivity-timeout: 60  # Seconds (default: 60)
+        check-done-continuous: true
+
+        # Stage overrides (optional):
+        heartbeat: 2h           # Override global
+        worktree: false         # Override global
+        env:
+          KEY: "value"
+        tags:
+          - my-tag
+
+        # Flow control (optional):
+        on-complete: next       # next | stop | goto:<stage>
+
+Minimal Example:
+  name: simple-task
+  stages:
+    - name: work
+      type: worker
+      prompt: |
+        Complete the task in TASK.md.
+        Say /done when finished.
+      done-pattern: "/done"
+      timeout: 1h
+
+Full Example:
+  name: feature-build
+  description: Plan, build, and validate a feature
+  heartbeat: 4h
+  heartbeat-expire: 24h
+  worktree: true
+
+  stages:
+    - name: plan
+      type: worker
+      prompt: |
+        Read TASK.md. Create implementation plan in PLAN.md.
+        Say /done when the plan is complete.
+      done-pattern: "/done"
+      timeout: 1h
+      on-complete: next
+
+    - name: build
+      type: ralph
+      prompt-file: ./prompts/build.md
+      max-iterations: 50
+      check-done-continuous: true
+      done-pattern: "ALL TASKS COMPLETE"
+      on-failure: retry
+      max-retries: 2
+      on-complete: next
+
+    - name: validate
+      type: ralph
+      prompt: |
+        Review implementation against PLAN.md.
+        Run tests: python -m pytest
+        Fix any failures. Say /done when all tests pass.
+      max-iterations: 20
+      done-pattern: "/done"
+      on-complete: stop
+
+Stage Type Reference:
+
+  worker (single-run agent):
+    - Spawns agent once
+    - Waits for done-pattern or timeout
+    - Good for: planning, review, one-shot tasks
+
+  ralph (looping agent):
+    - Spawns agent repeatedly (ralph loop)
+    - Continues until max-iterations or done-pattern
+    - Good for: implementation, multi-step tasks
+
+Failure Handling:
+
+  on-failure: stop    - Stop entire workflow (default)
+  on-failure: retry   - Retry stage up to max-retries times
+  on-failure: skip    - Skip stage, continue to next
+
+Flow Control:
+
+  on-complete: next       - Continue to next stage (default)
+  on-complete: stop       - End workflow successfully
+  on-complete: goto:name  - Jump to named stage (future)
 
 Examples:
   # Run workflow immediately
   swarm workflow run ./build-feature.yaml
 
-  # Run overnight
+  # Run overnight at 2am
   swarm workflow run ./overnight-work.yaml --at "02:00"
+
+  # Run after 4 hours
+  swarm workflow run ./workflow.yaml --in "4h"
 
   # Run with custom name
   swarm workflow run ./generic-build.yaml --name "auth-feature"
@@ -1512,33 +1625,45 @@ Examples:
   # Force overwrite existing workflow
   swarm workflow run ./build.yaml --force
 
-Duration Format (for --in):
+Scheduling Notes:
+  --at TIME     Schedule start time (HH:MM, 24-hour format)
+                If the time has passed today, schedules for tomorrow.
+  --in DURATION Schedule start delay (e.g., "4h", "30m", "1h30m")
+
+Duration Format:
   Accepts: "4h", "30m", "90s", "1h30m", or seconds as integer
 
-Workflow YAML Format:
-  See the full workflow YAML schema by creating a template:
+Tips:
+  - Keep prompts SHORT (<20 lines) to maximize context for work
+  - Use prompt-file for complex prompts with multiple instructions
+  - Set heartbeat for overnight/unattended workflows
+  - Always set timeout or max-iterations to prevent infinite runs
+  - Use done-pattern for reliable stage completion detection
 
-  name: my-workflow
-  stages:
-    - name: plan
-      type: worker
-      prompt: |
-        Create the plan. Say /done when finished.
-      done-pattern: "/done"
-      timeout: 1h
+Debugging:
+  swarm workflow validate file.yaml   # Check syntax without running
+  swarm workflow status <name>        # Check progress
+  swarm workflow logs <name>          # View all logs
+  swarm attach <workflow>-<stage>     # Attach to running stage
 
-  For complete YAML format documentation, see: specs/workflow.md
+Director Pattern (Agent-in-the-Loop):
+  For workflows that need monitoring/intervention, spawn a separate
+  "director" agent instead of building orchestration into the workflow:
 
-Monitoring:
-  After starting a workflow:
+    # Start workflow
+    swarm workflow run build.yaml &
 
-  swarm workflow status <name>    # Check progress
-  swarm workflow list             # List all workflows
-  swarm attach <workflow>-<stage> # Watch current stage
-  swarm workflow logs <name>      # View all logs
+    # Spawn director agent to monitor and intervene
+    swarm spawn --name director --tmux -- claude
+    swarm send director "Monitor workflow 'my-workflow'. Check status
+      every 10 min. Intervene with 'swarm send <worker> msg' if stuck."
 
-Cancellation:
-  swarm workflow cancel <name>    # Stop the workflow
+  The director uses existing commands (workflow status, send, attach,
+  pause, resume) to monitor and control the workflow.
+
+  Director can be a ralph loop for long-running monitoring:
+    swarm ralph spawn --name director --prompt-file director.md \\
+      --max-iterations 100 -- claude
 
 See Also:
   swarm workflow validate --help  # Validate YAML before running
@@ -1665,6 +1790,13 @@ to 'cancelled'.
 """
 
 WORKFLOW_CANCEL_HELP_EPILOG = """\
+Warnings:
+  - Cancellation is immediate - the current stage worker is killed
+  - If stage worker has uncommitted changes (e.g., in a worktree), they are
+    preserved but the agent stops working on them
+  - With --force, the worker is killed immediately without graceful shutdown
+  - Cancelled workflows cannot automatically resume - use 'workflow resume'
+
 Side Effects:
   - Sets workflow status to 'cancelled'
   - Kills the current stage worker (if any)
@@ -1672,14 +1804,18 @@ Side Effects:
   - Current stage is marked as 'failed' with exit_reason 'cancelled'
 
 Options:
-  --force         Kill workers without graceful shutdown (immediate SIGKILL)
+  --force         Kill workers without graceful shutdown (immediate SIGKILL).
+                  Use when the worker is unresponsive or hanging.
 
 Examples:
   # Cancel a running workflow
   swarm workflow cancel my-workflow
 
-  # Force-kill a stuck workflow
+  # Force-kill a stuck workflow (worker unresponsive)
   swarm workflow cancel my-workflow --force
+
+  # Cancel and verify
+  swarm workflow cancel my-workflow && swarm workflow status my-workflow
 
 Recovery:
   After cancelling, you can resume from a specific stage:
@@ -1687,6 +1823,9 @@ Recovery:
 
   Or clean up and start fresh:
     swarm workflow run workflow.yaml --force
+
+  Check for uncommitted work in worktrees:
+    git -C <repo>-worktrees/<workflow>-<stage> status
 
 What Gets Cancelled:
   - The running workflow transitions to 'cancelled' status
