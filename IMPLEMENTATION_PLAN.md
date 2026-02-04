@@ -190,7 +190,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - If scheduled, set status and return
   - Otherwise, start first stage
 
-- [ ] **3.6 Implement stage spawning logic**
+- [x] **3.6 Implement stage spawning logic**
   - For worker type: spawn with done-pattern detection
   - For ralph type: ralph spawn with configured options
   - Apply global settings (heartbeat, worktree, cwd, env)

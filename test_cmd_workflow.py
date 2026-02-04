@@ -2023,8 +2023,17 @@ class TestCmdWorkflowRunDirect(unittest.TestCase):
         path.write_text(content)
         return str(path)
 
-    def test_run_immediate_direct(self):
+    @patch('swarm.spawn_workflow_stage')
+    def test_run_immediate_direct(self, mock_spawn):
         """Test running workflow immediately via direct call."""
+        # Mock spawn to return a mock worker
+        mock_worker = MagicMock()
+        mock_worker.name = 'direct-workflow-work'
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = 'test-session'
+        mock_worker.tmux.window = 'direct-workflow-work'
+        mock_spawn.return_value = mock_worker
+
         yaml_path = self._write_yaml('direct.yaml', '''
 name: direct-workflow
 stages:
@@ -2053,8 +2062,17 @@ stages:
         self.assertIsNotNone(state)
         self.assertEqual(state.status, "running")
 
-    def test_run_with_name_override_direct(self):
+    @patch('swarm.spawn_workflow_stage')
+    def test_run_with_name_override_direct(self, mock_spawn):
         """Test running with --name override via direct call."""
+        # Mock spawn to return a mock worker
+        mock_worker = MagicMock()
+        mock_worker.name = 'custom-name-work'
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = 'test-session'
+        mock_worker.tmux.window = 'custom-name-work'
+        mock_spawn.return_value = mock_worker
+
         yaml_path = self._write_yaml('name-override.yaml', '''
 name: original
 stages:
@@ -2140,8 +2158,17 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_run_duplicate_error_direct(self):
+    @patch('swarm.spawn_workflow_stage')
+    def test_run_duplicate_error_direct(self, mock_spawn):
         """Test duplicate workflow error via direct call."""
+        # Mock spawn to return a mock worker
+        mock_worker = MagicMock()
+        mock_worker.name = 'duplicate-work'
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = 'test-session'
+        mock_worker.tmux.window = 'duplicate-work'
+        mock_spawn.return_value = mock_worker
+
         yaml_path = self._write_yaml('dup.yaml', '''
 name: duplicate
 stages:
@@ -2155,13 +2182,22 @@ stages:
         with patch('sys.stdout', io.StringIO()):
             swarm.cmd_workflow_run(args)
 
-        # Second run should fail
+        # Second run should fail (workflow already exists error, not spawn error)
         with self.assertRaises(SystemExit) as ctx:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_run_force_overwrite_direct(self):
+    @patch('swarm.spawn_workflow_stage')
+    def test_run_force_overwrite_direct(self, mock_spawn):
         """Test --force overwrites via direct call."""
+        # Mock spawn to return a mock worker
+        mock_worker = MagicMock()
+        mock_worker.name = 'force-test-work'
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = 'test-session'
+        mock_worker.tmux.window = 'force-test-work'
+        mock_spawn.return_value = mock_worker
+
         yaml_path = self._write_yaml('force.yaml', '''
 name: force-test
 stages:
@@ -2321,8 +2357,17 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_run_multi_stage_direct(self):
+    @patch('swarm.spawn_workflow_stage')
+    def test_run_multi_stage_direct(self, mock_spawn):
         """Test multi-stage workflow via direct call."""
+        # Mock spawn to return a mock worker
+        mock_worker = MagicMock()
+        mock_worker.name = 'multi-test-plan'
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = 'test-session'
+        mock_worker.tmux.window = 'multi-test-plan'
+        mock_spawn.return_value = mock_worker
+
         yaml_path = self._write_yaml('multi.yaml', '''
 name: multi-test
 stages:
@@ -2497,7 +2542,7 @@ class TestWorkflowRunCommand(unittest.TestCase):
         return str(path)
 
     def test_run_valid_workflow_immediate(self):
-        """Test running a valid workflow immediately."""
+        """Test running a valid workflow with scheduling (to avoid tmux dependency)."""
         yaml_path = self._write_yaml('valid.yaml', '''
 name: test-workflow
 stages:
@@ -2505,15 +2550,15 @@ stages:
     type: worker
     prompt: Create a plan
 ''')
+        # Use --at to schedule instead of running immediately (avoids tmux)
         result = subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("Workflow 'test-workflow' started", result.stdout)
-        self.assertIn("stage 1/1: plan", result.stdout)
+        self.assertIn("Workflow 'test-workflow' scheduled", result.stdout)
 
     def test_run_creates_workflow_state(self):
         """Test that running creates workflow state."""
@@ -2524,8 +2569,9 @@ stages:
     type: worker
     prompt: Do work
 ''')
+        # Use scheduling to avoid tmux dependency
         subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
@@ -2535,8 +2581,10 @@ stages:
         state = swarm.load_workflow_state("state-test-workflow")
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "state-test-workflow")
-        self.assertEqual(state.status, "running")
-        self.assertEqual(state.current_stage, "work")
+        # Status is scheduled since we used --at
+        self.assertEqual(state.status, "scheduled")
+        # Current stage is not set until workflow actually starts
+        self.assertIsNone(state.current_stage)
         self.assertEqual(state.current_stage_index, 0)
 
     def test_run_with_name_override(self):
@@ -2592,6 +2640,7 @@ stages:
 
     def test_run_with_force_overwrites(self):
         """Test --force overwrites existing workflow."""
+        # Use --at scheduling to avoid tmux dependency in tests
         yaml_path = self._write_yaml('force.yaml', '''
 name: force-workflow
 stages:
@@ -2599,9 +2648,9 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # First run
+        # First run with scheduling (no tmux needed)
         subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
@@ -2609,13 +2658,13 @@ stages:
 
         # Second run with --force should succeed
         result = subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--force'],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--force', '--at', '03:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("Workflow 'force-workflow' started", result.stdout)
+        self.assertIn("Workflow 'force-workflow' scheduled", result.stdout)
 
     def test_run_missing_file_error(self):
         """Test error when file doesn't exist."""
@@ -2814,7 +2863,7 @@ stages:
         self.assertIn("08:00", result.stdout)
 
     def test_run_multi_stage_workflow(self):
-        """Test running workflow with multiple stages."""
+        """Test running workflow with multiple stages (scheduled to avoid tmux)."""
         yaml_path = self._write_yaml('multi-stage.yaml', '''
 name: multi-stage-workflow
 stages:
@@ -2830,23 +2879,24 @@ stages:
     prompt: Validate
 ''')
         result = subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("stage 1/3: plan", result.stdout)
+        self.assertIn("scheduled", result.stdout.lower())
 
-        # Verify state has all stages
+        # Verify state has all stages initialized
         state = swarm.load_workflow_state("multi-stage-workflow")
         self.assertEqual(len(state.stages), 3)
-        self.assertEqual(state.stages["plan"].status, "running")
+        # All stages are pending since workflow is scheduled
+        self.assertEqual(state.stages["plan"].status, "pending")
         self.assertEqual(state.stages["build"].status, "pending")
         self.assertEqual(state.stages["validate"].status, "pending")
 
     def test_run_sets_worker_name(self):
-        """Test that running sets correct worker name for stage."""
+        """Test that workflow state has worker name placeholder (scheduled, no worker spawned yet)."""
         yaml_path = self._write_yaml('worker-name.yaml', '''
 name: worker-name-test
 stages:
@@ -2854,15 +2904,17 @@ stages:
     type: worker
     prompt: Do work
 ''')
+        # Use scheduling to avoid tmux - worker_name won't be set until stage starts
         subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
 
         state = swarm.load_workflow_state("worker-name-test")
-        self.assertEqual(state.stages["my-stage"].worker_name, "worker-name-test-my-stage")
+        # Worker name is not set until stage actually starts
+        self.assertIsNone(state.stages["my-stage"].worker_name)
 
     def test_run_copies_yaml_file(self):
         """Test that running copies the YAML file."""
@@ -2873,8 +2925,9 @@ stages:
     type: worker
     prompt: Do work
 ''')
+        # Use scheduling to avoid tmux
         subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
@@ -2893,8 +2946,9 @@ stages:
     type: worker
     prompt: Do work
 ''')
+        # Use scheduling to avoid tmux
         subprocess.run(
-            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
             capture_output=True,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
@@ -2903,6 +2957,669 @@ stages:
         # Verify logs directory was created
         logs_dir = swarm.get_workflow_logs_dir("logs-test-workflow")
         self.assertTrue(logs_dir.exists())
+
+
+class TestSpawnWorkflowStage(unittest.TestCase):
+    """Test spawn_workflow_stage function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_logs_dir = swarm.LOGS_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.STATE_FILE = swarm.SWARM_DIR / "state.json"
+        swarm.LOGS_DIR = swarm.SWARM_DIR / "logs"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.RALPH_DIR = swarm.SWARM_DIR / "ralph"
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+        swarm.SWARM_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        self.workflow_dir = Path(self.temp_dir)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.LOGS_DIR = self.original_logs_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_workflow_def(self, **kwargs):
+        """Create a basic workflow definition."""
+        defaults = {
+            'name': 'test-workflow',
+            'description': None,
+            'schedule': None,
+            'delay': None,
+            'heartbeat': None,
+            'heartbeat_expire': None,
+            'heartbeat_message': 'continue',
+            'worktree': False,
+            'cwd': None,
+            'stages': [],
+        }
+        defaults.update(kwargs)
+        return swarm.WorkflowDefinition(**defaults)
+
+    def _make_stage_def(self, **kwargs):
+        """Create a basic stage definition."""
+        defaults = {
+            'name': 'test-stage',
+            'type': 'worker',
+            'prompt': 'Test prompt',
+            'prompt_file': None,
+            'done_pattern': None,
+            'timeout': None,
+            'on_failure': 'stop',
+            'max_retries': 3,
+            'on_complete': 'next',
+            'max_iterations': None,
+            'inactivity_timeout': 60,
+            'check_done_continuous': False,
+            'heartbeat': None,
+            'heartbeat_expire': None,
+            'heartbeat_message': None,
+            'worktree': None,
+            'cwd': None,
+            'env': {},
+            'tags': [],
+        }
+        defaults.update(kwargs)
+        return swarm.StageDefinition(**defaults)
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_worker_stage_basic(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning a basic worker stage."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(name='my-workflow')
+        stage_def = self._make_stage_def(name='plan', prompt='Create a plan')
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='my-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify worker was created correctly
+        self.assertEqual(worker.name, 'my-workflow-plan')
+        self.assertEqual(worker.status, 'running')
+        self.assertIsNotNone(worker.tmux)
+        self.assertEqual(worker.tmux.session, 'test-session')
+        self.assertEqual(worker.tmux.window, 'my-workflow-plan')
+
+        # Verify tmux window was created
+        mock_create_tmux.assert_called_once()
+
+        # Verify prompt was sent
+        mock_send.assert_called_once()
+        call_args = mock_send.call_args
+        self.assertEqual(call_args[0][1], 'Create a plan')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_worker_stage_with_prompt_file(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning worker stage with prompt file."""
+        mock_session.return_value = "test-session"
+
+        # Create a prompt file
+        prompt_file = self.workflow_dir / 'prompts' / 'plan.md'
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text('This is the plan prompt from file.')
+
+        workflow_def = self._make_workflow_def(name='file-workflow')
+        stage_def = self._make_stage_def(
+            name='plan',
+            prompt=None,
+            prompt_file='prompts/plan.md'
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='file-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify prompt was read from file and sent
+        mock_send.assert_called_once()
+        call_args = mock_send.call_args
+        self.assertEqual(call_args[0][1], 'This is the plan prompt from file.')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_worker_stage_with_env_vars(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning worker stage with environment variables."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(name='env-workflow')
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work',
+            env={'DEBUG': 'true', 'API_KEY': 'secret'}
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='env-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        self.assertEqual(worker.env, {'DEBUG': 'true', 'API_KEY': 'secret'})
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_worker_stage_with_tags(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning worker stage with tags."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(name='tag-workflow')
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work',
+            tags=['planning', 'important']
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='tag-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        self.assertEqual(worker.tags, ['planning', 'important'])
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    def test_spawn_ralph_stage(self, mock_log, mock_save_ralph, mock_session, mock_send, mock_create_tmux):
+        """Test spawning a ralph-type stage."""
+        mock_session.return_value = "test-session"
+
+        # Create workflow state directory (needed for inline prompt temp file)
+        workflow_state_dir = swarm.get_workflow_state_dir('ralph-workflow')
+        workflow_state_dir.mkdir(parents=True, exist_ok=True)
+
+        workflow_def = self._make_workflow_def(name='ralph-workflow')
+        stage_def = self._make_stage_def(
+            name='build',
+            type='ralph',
+            prompt='Build the feature',
+            max_iterations=50,
+            inactivity_timeout=120,
+            done_pattern='/done',
+            check_done_continuous=True
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='ralph-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify worker was created as ralph
+        self.assertEqual(worker.name, 'ralph-workflow-build')
+        self.assertTrue(worker.metadata.get('ralph'))
+        self.assertEqual(worker.metadata.get('ralph_iteration'), 1)
+
+        # Verify ralph state was saved
+        mock_save_ralph.assert_called()
+        call_args = mock_save_ralph.call_args[0][0]
+        self.assertEqual(call_args.worker_name, 'ralph-workflow-build')
+        self.assertEqual(call_args.max_iterations, 50)
+        self.assertEqual(call_args.inactivity_timeout, 120)
+        self.assertEqual(call_args.done_pattern, '/done')
+        self.assertTrue(call_args.check_done_continuous)
+
+        # Verify iteration was logged
+        mock_log.assert_called()
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_worker_added_to_state(self, mock_session, mock_send, mock_create_tmux):
+        """Test that spawned worker is added to swarm state."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(name='state-workflow')
+        stage_def = self._make_stage_def(name='work', prompt='Do work')
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='state-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify worker is in state
+        state = swarm.State()
+        found = state.get_worker('state-workflow-work')
+        self.assertIsNotNone(found)
+        self.assertEqual(found.name, 'state-workflow-work')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_duplicate_worker_raises_error(self, mock_session, mock_send, mock_create_tmux):
+        """Test that spawning duplicate worker raises RuntimeError."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(name='dup-workflow')
+        stage_def = self._make_stage_def(name='work', prompt='Do work')
+
+        # Spawn first worker
+        swarm.spawn_workflow_stage(
+            workflow_name='dup-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Try to spawn again - should fail
+        with self.assertRaises(RuntimeError) as ctx:
+            swarm.spawn_workflow_stage(
+                workflow_name='dup-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+        self.assertIn("already exists", str(ctx.exception))
+
+    def test_spawn_no_prompt_raises_error(self):
+        """Test that spawning without prompt raises RuntimeError."""
+        workflow_def = self._make_workflow_def(name='no-prompt-workflow')
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt=None,
+            prompt_file=None
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            swarm.spawn_workflow_stage(
+                workflow_name='no-prompt-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+        self.assertIn("no prompt or prompt_file", str(ctx.exception))
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.save_heartbeat_state')
+    @patch('swarm.start_heartbeat_monitor')
+    def test_spawn_with_heartbeat(self, mock_start_hb, mock_save_hb, mock_session, mock_send, mock_create_tmux):
+        """Test spawning stage with heartbeat configuration."""
+        mock_session.return_value = "test-session"
+        mock_start_hb.return_value = 12345
+
+        workflow_def = self._make_workflow_def(
+            name='hb-workflow',
+            heartbeat='4h',
+            heartbeat_expire='24h',
+            heartbeat_message='keep going'
+        )
+        stage_def = self._make_stage_def(name='work', prompt='Do work')
+
+        swarm.spawn_workflow_stage(
+            workflow_name='hb-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify heartbeat was set up
+        mock_save_hb.assert_called()
+        mock_start_hb.assert_called_with('hb-workflow-work')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.save_heartbeat_state')
+    @patch('swarm.start_heartbeat_monitor')
+    def test_spawn_stage_heartbeat_overrides_global(self, mock_start_hb, mock_save_hb, mock_session, mock_send, mock_create_tmux):
+        """Test that stage heartbeat settings override global settings."""
+        mock_session.return_value = "test-session"
+        mock_start_hb.return_value = 12345
+
+        workflow_def = self._make_workflow_def(
+            name='override-workflow',
+            heartbeat='4h',
+            heartbeat_message='global'
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work',
+            heartbeat='2h',
+            heartbeat_message='stage'
+        )
+
+        swarm.spawn_workflow_stage(
+            workflow_name='override-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify stage heartbeat was used
+        mock_save_hb.assert_called()
+        call_args = mock_save_hb.call_args[0][0]
+        # 2h = 7200 seconds
+        self.assertEqual(call_args.interval_seconds, 7200)
+        self.assertEqual(call_args.message, 'stage')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_with_cwd_setting(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning stage with cwd setting."""
+        mock_session.return_value = "test-session"
+
+        # Create a cwd directory
+        cwd_dir = self.workflow_dir / 'work-dir'
+        cwd_dir.mkdir(parents=True, exist_ok=True)
+
+        workflow_def = self._make_workflow_def(
+            name='cwd-workflow',
+            cwd='work-dir'
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work'
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='cwd-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify cwd was set (relative path resolved against workflow_dir)
+        self.assertEqual(worker.cwd, str(self.workflow_dir / 'work-dir'))
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_with_stage_cwd_overrides_global(self, mock_session, mock_send, mock_create_tmux):
+        """Test that stage cwd overrides global cwd."""
+        mock_session.return_value = "test-session"
+
+        # Create cwd directories
+        global_cwd = self.workflow_dir / 'global-dir'
+        global_cwd.mkdir(parents=True, exist_ok=True)
+        stage_cwd = self.workflow_dir / 'stage-dir'
+        stage_cwd.mkdir(parents=True, exist_ok=True)
+
+        workflow_def = self._make_workflow_def(
+            name='cwd-override-workflow',
+            cwd='global-dir'
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work',
+            cwd='stage-dir'
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='cwd-override-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify stage cwd was used, not global
+        self.assertEqual(worker.cwd, str(self.workflow_dir / 'stage-dir'))
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.create_worktree')
+    @patch('swarm.get_git_root')
+    def test_spawn_with_worktree(self, mock_git_root, mock_create_wt, mock_session, mock_send, mock_create_tmux):
+        """Test spawning stage with worktree enabled."""
+        mock_session.return_value = "test-session"
+        mock_git_root.return_value = Path('/fake/repo')
+
+        workflow_def = self._make_workflow_def(
+            name='wt-workflow',
+            worktree=True
+        )
+        stage_def = self._make_stage_def(
+            name='build',
+            prompt='Build it'
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='wt-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify worktree was created
+        mock_create_wt.assert_called_once()
+        call_args = mock_create_wt.call_args[0]
+        self.assertIn('wt-workflow-build', str(call_args[0]))
+
+        # Verify worktree info was set
+        self.assertIsNotNone(worker.worktree)
+        self.assertEqual(worker.worktree.branch, 'wt-workflow-build')
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.get_git_root')
+    def test_spawn_worktree_not_in_git_repo(self, mock_git_root, mock_session, mock_create_tmux):
+        """Test that worktree fails when not in git repo."""
+        mock_session.return_value = "test-session"
+        mock_git_root.side_effect = subprocess.CalledProcessError(1, 'git')
+
+        workflow_def = self._make_workflow_def(
+            name='no-git-workflow',
+            worktree=True
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work'
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            swarm.spawn_workflow_stage(
+                workflow_name='no-git-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+        self.assertIn("not in a git repository", str(ctx.exception))
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.create_worktree')
+    @patch('swarm.get_git_root')
+    def test_spawn_worktree_creation_fails(self, mock_git_root, mock_create_wt, mock_session, mock_create_tmux):
+        """Test handling when worktree creation fails."""
+        mock_session.return_value = "test-session"
+        mock_git_root.return_value = Path('/fake/repo')
+        mock_create_wt.side_effect = subprocess.CalledProcessError(1, 'git worktree')
+
+        workflow_def = self._make_workflow_def(
+            name='wt-fail-workflow',
+            worktree=True
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work'
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            swarm.spawn_workflow_stage(
+                workflow_name='wt-fail-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+        self.assertIn("failed to create worktree", str(ctx.exception))
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.remove_worktree')
+    @patch('swarm.create_worktree')
+    @patch('swarm.get_git_root')
+    def test_spawn_tmux_fails_cleans_up_worktree(self, mock_git_root, mock_create_wt, mock_remove_wt, mock_session, mock_send, mock_create_tmux):
+        """Test that worktree is cleaned up when tmux fails."""
+        mock_session.return_value = "test-session"
+        mock_git_root.return_value = Path('/fake/repo')
+        mock_create_tmux.side_effect = subprocess.CalledProcessError(1, 'tmux')
+
+        workflow_def = self._make_workflow_def(
+            name='cleanup-workflow',
+            worktree=True
+        )
+        stage_def = self._make_stage_def(
+            name='work',
+            prompt='Do work'
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            swarm.spawn_workflow_stage(
+                workflow_name='cleanup-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+        self.assertIn("failed to create tmux window", str(ctx.exception))
+
+        # Verify worktree cleanup was attempted
+        mock_remove_wt.assert_called_once()
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    def test_spawn_ralph_stage_with_prompt_file(self, mock_log, mock_save_ralph, mock_session, mock_send, mock_create_tmux):
+        """Test spawning a ralph-type stage with prompt file (not inline)."""
+        mock_session.return_value = "test-session"
+
+        # Create a prompt file
+        prompt_file = self.workflow_dir / 'prompts' / 'build.md'
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text('Build the feature.')
+
+        # Create workflow state directory (needed for ralph)
+        workflow_state_dir = swarm.get_workflow_state_dir('ralph-file-workflow')
+        workflow_state_dir.mkdir(parents=True, exist_ok=True)
+
+        workflow_def = self._make_workflow_def(name='ralph-file-workflow')
+        stage_def = self._make_stage_def(
+            name='build',
+            type='ralph',
+            prompt=None,
+            prompt_file='prompts/build.md',
+            max_iterations=20
+        )
+
+        worker = swarm.spawn_workflow_stage(
+            workflow_name='ralph-file-workflow',
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # Verify ralph state was saved with the prompt file path
+        mock_save_ralph.assert_called()
+        call_args = mock_save_ralph.call_args[0][0]
+        self.assertIn('build.md', call_args.prompt_file)
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    def test_spawn_with_invalid_heartbeat_interval(self, mock_session, mock_send, mock_create_tmux):
+        """Test spawning with invalid heartbeat interval (logs warning but continues)."""
+        mock_session.return_value = "test-session"
+
+        workflow_def = self._make_workflow_def(
+            name='bad-hb-workflow',
+            heartbeat='invalid-duration'  # Invalid format
+        )
+        stage_def = self._make_stage_def(name='work', prompt='Do work')
+
+        import io
+        import sys
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            worker = swarm.spawn_workflow_stage(
+                workflow_name='bad-hb-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+
+        # Should still succeed (heartbeat failure is a warning, not error)
+        self.assertIsNotNone(worker)
+        self.assertEqual(worker.name, 'bad-hb-workflow-work')
+        # Warning should be logged
+        self.assertIn('invalid heartbeat interval', captured.getvalue())
+
+    @patch('swarm.create_tmux_window')
+    @patch('swarm.send_prompt_to_worker')
+    @patch('swarm.get_default_session_name')
+    @patch('swarm.save_heartbeat_state')
+    @patch('swarm.start_heartbeat_monitor')
+    def test_spawn_with_invalid_heartbeat_expire(self, mock_start_hb, mock_save_hb, mock_session, mock_send, mock_create_tmux):
+        """Test spawning with invalid heartbeat expire (logs warning but continues)."""
+        mock_session.return_value = "test-session"
+        mock_start_hb.return_value = 12345
+
+        workflow_def = self._make_workflow_def(
+            name='bad-expire-workflow',
+            heartbeat='1h',  # Valid interval
+            heartbeat_expire='invalid-duration'  # Invalid expire
+        )
+        stage_def = self._make_stage_def(name='work', prompt='Do work')
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            worker = swarm.spawn_workflow_stage(
+                workflow_name='bad-expire-workflow',
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                workflow_dir=self.workflow_dir,
+            )
+
+        # Should still succeed
+        self.assertIsNotNone(worker)
+        # Heartbeat should be set up (without expire)
+        mock_save_hb.assert_called()
+        # Warning should be logged
+        self.assertIn('invalid heartbeat-expire', captured.getvalue())
 
 
 if __name__ == "__main__":

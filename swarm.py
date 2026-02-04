@@ -6451,6 +6451,236 @@ def cmd_heartbeat_resume(args) -> None:
 # ==============================================================================
 
 
+def spawn_workflow_stage(
+    workflow_name: str,
+    workflow_def: WorkflowDefinition,
+    stage_def: StageDefinition,
+    workflow_dir: Path,
+) -> Worker:
+    """Spawn a worker for a workflow stage.
+
+    Creates and spawns a worker for the given stage, applying global workflow
+    settings and stage-specific overrides. Handles both 'worker' and 'ralph'
+    stage types.
+
+    Stage workers are named '<workflow>-<stage>' to avoid naming conflicts.
+
+    Args:
+        workflow_name: Name of the workflow
+        workflow_def: The parsed workflow definition (for global settings)
+        stage_def: The stage definition to spawn
+        workflow_dir: Directory containing the workflow YAML (for resolving relative paths)
+
+    Returns:
+        The created Worker object
+
+    Raises:
+        RuntimeError: If worker spawning fails
+    """
+    # Determine worker name: <workflow>-<stage>
+    worker_name = f"{workflow_name}-{stage_def.name}"
+
+    # Check for duplicate worker name
+    state = State()
+    if state.get_worker(worker_name) is not None:
+        raise RuntimeError(f"worker '{worker_name}' already exists")
+
+    # Resolve prompt content
+    if stage_def.prompt:
+        prompt_content = stage_def.prompt
+    elif stage_def.prompt_file:
+        # Resolve prompt file path relative to workflow directory
+        prompt_path = Path(stage_def.prompt_file)
+        if not prompt_path.is_absolute():
+            prompt_path = workflow_dir / prompt_path
+        prompt_content = prompt_path.read_text()
+    else:
+        raise RuntimeError(f"stage '{stage_def.name}' has no prompt or prompt_file")
+
+    # Determine working directory
+    # Stage cwd overrides global cwd
+    cwd_setting = stage_def.cwd if stage_def.cwd else workflow_def.cwd
+    if cwd_setting:
+        cwd = Path(cwd_setting)
+        if not cwd.is_absolute():
+            cwd = workflow_dir / cwd
+    else:
+        cwd = Path.cwd()
+
+    # Determine worktree setting (stage overrides global)
+    use_worktree = stage_def.worktree if stage_def.worktree is not None else workflow_def.worktree
+    worktree_info = None
+
+    if use_worktree:
+        # Get git root
+        try:
+            git_root = get_git_root()
+        except subprocess.CalledProcessError:
+            raise RuntimeError("not in a git repository (required for worktree)")
+
+        # Compute worktree path: <repo>-worktrees/<worker-name>
+        worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
+        worktree_path = worktree_dir / worker_name
+
+        # Use worker name as branch name
+        branch = worker_name
+
+        # Create worktree
+        try:
+            create_worktree(worktree_path, branch)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"failed to create worktree: {e}")
+
+        # Set cwd to worktree
+        cwd = worktree_path
+
+        # Store worktree info
+        worktree_info = WorktreeInfo(
+            path=str(worktree_path),
+            branch=branch,
+            base_repo=str(git_root)
+        )
+
+    # Build environment variables from stage definition
+    env_dict = dict(stage_def.env) if stage_def.env else {}
+
+    # Default command for workflow stages is 'claude' (the standard agent)
+    # In a real workflow, this would be configurable, but for now we use claude
+    cmd = ["claude"]
+
+    # Get tmux session name
+    session = get_default_session_name()
+
+    # Create tmux window
+    try:
+        create_tmux_window(session, worker_name, cwd, cmd, socket=None)
+        tmux_info = TmuxInfo(session=session, window=worker_name, socket=None)
+    except subprocess.CalledProcessError as e:
+        # Clean up worktree if we created one
+        if worktree_info:
+            try:
+                remove_worktree(Path(worktree_info.path), force=True)
+            except Exception:
+                pass
+        raise RuntimeError(f"failed to create tmux window: {e}")
+
+    # Build metadata
+    metadata = {}
+    if stage_def.type == "ralph":
+        metadata["ralph"] = True
+        metadata["ralph_iteration"] = 1
+
+    # Create Worker object
+    worker = Worker(
+        name=worker_name,
+        status="running",
+        cmd=cmd,
+        started=datetime.now().isoformat(),
+        cwd=str(cwd),
+        env=env_dict,
+        tags=list(stage_def.tags) if stage_def.tags else [],
+        tmux=tmux_info,
+        worktree=worktree_info,
+        pid=None,
+        metadata=metadata,
+    )
+
+    # Add to state
+    state.add_worker(worker)
+
+    # Handle type-specific setup
+    if stage_def.type == "ralph":
+        # Create ralph state for looping stages
+        # For inline prompts, we need to write to a temp file
+        if stage_def.prompt:
+            # Write inline prompt to workflow state directory
+            prompt_temp_path = get_workflow_state_dir(workflow_name) / f"{stage_def.name}-prompt.md"
+            prompt_temp_path.write_text(prompt_content)
+            prompt_file_path = str(prompt_temp_path)
+        else:
+            # Use resolved prompt file path
+            prompt_path = Path(stage_def.prompt_file)
+            if not prompt_path.is_absolute():
+                prompt_path = workflow_dir / prompt_path
+            prompt_file_path = str(prompt_path.resolve())
+
+        ralph_state = RalphState(
+            worker_name=worker_name,
+            prompt_file=prompt_file_path,
+            max_iterations=stage_def.max_iterations or 50,
+            current_iteration=1,
+            status="running",
+            started=datetime.now().isoformat(),
+            last_iteration_started=datetime.now().isoformat(),
+            inactivity_timeout=stage_def.inactivity_timeout,
+            done_pattern=stage_def.done_pattern,
+            check_done_continuous=stage_def.check_done_continuous,
+        )
+        save_ralph_state(ralph_state)
+
+        # Log the iteration start
+        log_ralph_iteration(
+            worker_name,
+            "START",
+            iteration=1,
+            max_iterations=ralph_state.max_iterations
+        )
+
+    # Send the prompt to the worker
+    send_prompt_to_worker(worker, prompt_content)
+
+    # Set up heartbeat if configured
+    # Stage heartbeat overrides global heartbeat
+    heartbeat_setting = stage_def.heartbeat if stage_def.heartbeat else workflow_def.heartbeat
+    heartbeat_expire_setting = stage_def.heartbeat_expire if stage_def.heartbeat_expire else workflow_def.heartbeat_expire
+    heartbeat_message_setting = stage_def.heartbeat_message if stage_def.heartbeat_message else workflow_def.heartbeat_message
+
+    if heartbeat_setting:
+        try:
+            interval_seconds = parse_duration(heartbeat_setting)
+        except ValueError:
+            # Log warning but don't fail - heartbeat is optional
+            print(f"swarm: warning: invalid heartbeat interval '{heartbeat_setting}' for stage {stage_def.name}", file=sys.stderr)
+            interval_seconds = None
+
+        if interval_seconds:
+            # Parse expiration
+            expire_at = None
+            if heartbeat_expire_setting:
+                try:
+                    expire_seconds = parse_duration(heartbeat_expire_setting)
+                    expire_at = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
+                    expire_at = expire_at.isoformat()
+                except ValueError:
+                    print(f"swarm: warning: invalid heartbeat-expire '{heartbeat_expire_setting}' for stage {stage_def.name}", file=sys.stderr)
+
+            # Create heartbeat state
+            now = datetime.now(timezone.utc).isoformat()
+            heartbeat_state = HeartbeatState(
+                worker_name=worker_name,
+                interval_seconds=interval_seconds,
+                message=heartbeat_message_setting or "continue",
+                expire_at=expire_at,
+                created_at=now,
+                last_beat_at=None,
+                beat_count=0,
+                status="active",
+                monitor_pid=None,
+            )
+
+            # Save heartbeat state
+            save_heartbeat_state(heartbeat_state)
+
+            # Start background monitor process
+            monitor_pid = start_heartbeat_monitor(worker_name)
+
+            # Update state with monitor PID
+            heartbeat_state.monitor_pid = monitor_pid
+            save_heartbeat_state(heartbeat_state)
+
+    return worker
+
+
 def cmd_workflow(args) -> None:
     """Workflow management commands.
 
@@ -6575,8 +6805,18 @@ def cmd_workflow_run(args) -> None:
         print(f"Error: workflow '{workflow_name}' already exists (use --force to overwrite)", file=sys.stderr)
         sys.exit(1)
 
-    # If --force and workflow exists, delete old state
+    # If --force and workflow exists, delete old state and cleanup workers
     if workflow_exists(workflow_name) and args.force:
+        # Load old workflow state to find workers to clean up
+        old_workflow_state = load_workflow_state(workflow_name)
+        if old_workflow_state:
+            state = State()
+            for stage_name, stage_state in old_workflow_state.stages.items():
+                if stage_state.worker_name:
+                    worker = state.get_worker(stage_state.worker_name)
+                    if worker:
+                        # Remove worker from state (don't kill process, just unregister)
+                        state.remove_worker(stage_state.worker_name)
         delete_workflow_state(workflow_name)
 
     # Validate --at and --in are mutually exclusive
@@ -6678,9 +6918,24 @@ def cmd_workflow_run(args) -> None:
         stage_count = len(workflow_def.stages)
         print(f"Workflow '{workflow_name}' started (stage 1/{stage_count}: {first_stage.name})")
 
-        # Note: Actually spawning the worker is task 3.6 - for now we just
-        # set up the state. The actual spawn will be implemented later.
-        print(f"Note: Stage worker spawning not yet implemented (task 3.6)")
+        # Spawn the first stage worker
+        try:
+            worker = spawn_workflow_stage(
+                workflow_name=workflow_name,
+                workflow_def=workflow_def,
+                stage_def=first_stage,
+                workflow_dir=workflow_dir,
+            )
+            print(f"Spawned worker '{worker.name}' (tmux: {worker.tmux.session}:{worker.tmux.window})")
+        except RuntimeError as e:
+            # Failed to spawn worker - update workflow state
+            workflow_state.status = "failed"
+            workflow_state.stages[first_stage.name].status = "failed"
+            workflow_state.stages[first_stage.name].exit_reason = "error"
+            workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+            save_workflow_state(workflow_state)
+            print(f"Error: failed to spawn stage worker: {e}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
