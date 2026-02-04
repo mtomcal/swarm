@@ -6931,6 +6931,647 @@ def _monitor_worker_stage_completion(
         time.sleep(poll_interval)
 
 
+@dataclass
+class StageTransitionResult:
+    """Result of a stage transition operation.
+
+    Captures what happened during a stage transition, including whether
+    the workflow should continue, what the next stage is (if any),
+    and the updated workflow state.
+    """
+    action: str  # "next_stage", "retry", "skip", "complete", "fail", "stop"
+    next_stage_name: Optional[str] = None  # Name of next stage (if action is "next_stage")
+    next_stage_index: int = -1  # Index of next stage (if action is "next_stage")
+    message: str = ""  # Human-readable message about what happened
+
+
+def handle_stage_transition(
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    completion_result: StageCompletionResult,
+    workflow_dir: Path,
+) -> StageTransitionResult:
+    """Handle the transition after a workflow stage completes.
+
+    Determines what to do after a stage completes based on the completion
+    result and the stage's on-failure/on-complete configuration:
+
+    For successful completion:
+    - on-complete: next -> advance to next stage
+    - on-complete: stop -> complete workflow
+    - on-complete: goto:<stage> -> jump to named stage
+
+    For failure:
+    - on-failure: stop -> fail workflow
+    - on-failure: retry -> retry stage (up to max-retries)
+    - on-failure: skip -> mark stage skipped, advance to next
+
+    Updates the workflow state and stage states accordingly.
+
+    Args:
+        workflow_state: Current workflow state (will be modified)
+        workflow_def: The parsed workflow definition
+        completion_result: How the stage completed
+        workflow_dir: Directory containing the workflow YAML
+
+    Returns:
+        StageTransitionResult indicating what action to take next
+    """
+    current_stage_name = workflow_state.current_stage
+    current_stage_index = workflow_state.current_stage_index
+
+    if current_stage_name is None or current_stage_index < 0:
+        return StageTransitionResult(
+            action="fail",
+            message="Workflow has no current stage",
+        )
+
+    # Get the stage definition
+    if current_stage_index >= len(workflow_def.stages):
+        return StageTransitionResult(
+            action="fail",
+            message=f"Stage index {current_stage_index} out of range",
+        )
+
+    stage_def = workflow_def.stages[current_stage_index]
+    stage_state = workflow_state.stages.get(current_stage_name)
+
+    if stage_state is None:
+        return StageTransitionResult(
+            action="fail",
+            message=f"Stage state for '{current_stage_name}' not found",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Handle based on whether the stage succeeded or failed
+    if completion_result.success:
+        # Stage completed successfully
+        return _handle_stage_success(
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            stage_state=stage_state,
+            current_stage_index=current_stage_index,
+            completion_result=completion_result,
+            now=now,
+        )
+    else:
+        # Stage failed
+        return _handle_stage_failure(
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            stage_state=stage_state,
+            current_stage_index=current_stage_index,
+            completion_result=completion_result,
+            workflow_dir=workflow_dir,
+            now=now,
+        )
+
+
+def _handle_stage_success(
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    stage_def: StageDefinition,
+    stage_state: StageState,
+    current_stage_index: int,
+    completion_result: StageCompletionResult,
+    now: str,
+) -> StageTransitionResult:
+    """Handle a successful stage completion.
+
+    Marks the stage as completed and determines the next action based on
+    the stage's on-complete configuration.
+
+    Args:
+        workflow_state: Current workflow state (will be modified)
+        workflow_def: The parsed workflow definition
+        stage_def: The stage definition
+        stage_state: The stage state (will be modified)
+        current_stage_index: Index of current stage in stages list
+        completion_result: How the stage completed
+        now: Current timestamp in ISO format
+
+    Returns:
+        StageTransitionResult indicating next action
+    """
+    # Mark stage as completed
+    stage_state.status = "completed"
+    stage_state.completed_at = now
+    stage_state.exit_reason = completion_result.reason
+
+    # Determine next action based on on-complete setting
+    on_complete = stage_def.on_complete
+
+    if on_complete == "stop":
+        # Workflow is complete
+        workflow_state.status = "completed"
+        workflow_state.completed_at = now
+        return StageTransitionResult(
+            action="complete",
+            message=f"Stage '{stage_def.name}' completed, workflow finished (on-complete: stop)",
+        )
+
+    elif on_complete == "next":
+        # Advance to next stage
+        next_index = current_stage_index + 1
+
+        if next_index >= len(workflow_def.stages):
+            # No more stages - workflow is complete
+            workflow_state.status = "completed"
+            workflow_state.completed_at = now
+            return StageTransitionResult(
+                action="complete",
+                message=f"Stage '{stage_def.name}' completed, all stages finished",
+            )
+
+        next_stage = workflow_def.stages[next_index]
+        return StageTransitionResult(
+            action="next_stage",
+            next_stage_name=next_stage.name,
+            next_stage_index=next_index,
+            message=f"Stage '{stage_def.name}' completed, starting '{next_stage.name}'",
+        )
+
+    elif on_complete.startswith("goto:"):
+        # Jump to a specific stage
+        target_name = on_complete[5:]  # Remove "goto:" prefix
+
+        # Find the target stage index
+        target_index = None
+        for i, stage in enumerate(workflow_def.stages):
+            if stage.name == target_name:
+                target_index = i
+                break
+
+        if target_index is None:
+            # This shouldn't happen if validation worked, but handle it
+            workflow_state.status = "failed"
+            workflow_state.completed_at = now
+            return StageTransitionResult(
+                action="fail",
+                message=f"Stage '{stage_def.name}': goto target '{target_name}' not found",
+            )
+
+        return StageTransitionResult(
+            action="next_stage",
+            next_stage_name=target_name,
+            next_stage_index=target_index,
+            message=f"Stage '{stage_def.name}' completed, jumping to '{target_name}'",
+        )
+
+    else:
+        # Unknown on-complete value (shouldn't happen after validation)
+        workflow_state.status = "failed"
+        workflow_state.completed_at = now
+        return StageTransitionResult(
+            action="fail",
+            message=f"Stage '{stage_def.name}': unknown on-complete value '{on_complete}'",
+        )
+
+
+def _handle_stage_failure(
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    stage_def: StageDefinition,
+    stage_state: StageState,
+    current_stage_index: int,
+    completion_result: StageCompletionResult,
+    workflow_dir: Path,
+    now: str,
+) -> StageTransitionResult:
+    """Handle a failed stage.
+
+    Determines the next action based on the stage's on-failure configuration:
+    - stop: Fail the workflow
+    - retry: Retry the stage (up to max-retries)
+    - skip: Mark stage as skipped and continue
+
+    Args:
+        workflow_state: Current workflow state (will be modified)
+        workflow_def: The parsed workflow definition
+        stage_def: The stage definition
+        stage_state: The stage state (will be modified)
+        current_stage_index: Index of current stage in stages list
+        completion_result: How the stage completed
+        workflow_dir: Directory containing the workflow YAML
+        now: Current timestamp in ISO format
+
+    Returns:
+        StageTransitionResult indicating next action
+    """
+    on_failure = stage_def.on_failure
+
+    if on_failure == "stop":
+        # Fail the workflow
+        stage_state.status = "failed"
+        stage_state.completed_at = now
+        stage_state.exit_reason = completion_result.reason
+        workflow_state.status = "failed"
+        workflow_state.completed_at = now
+
+        return StageTransitionResult(
+            action="fail",
+            message=f"Stage '{stage_def.name}' failed ({completion_result.reason}), workflow stopped",
+        )
+
+    elif on_failure == "retry":
+        # Check if we have retries left
+        max_retries = stage_def.max_retries
+        attempts = stage_state.attempts
+
+        if attempts < max_retries:
+            # Retry the stage
+            return StageTransitionResult(
+                action="retry",
+                next_stage_name=stage_def.name,
+                next_stage_index=current_stage_index,
+                message=f"Stage '{stage_def.name}' failed, retrying (attempt {attempts + 1}/{max_retries})",
+            )
+        else:
+            # Exhausted retries - fail the workflow
+            stage_state.status = "failed"
+            stage_state.completed_at = now
+            stage_state.exit_reason = completion_result.reason
+            workflow_state.status = "failed"
+            workflow_state.completed_at = now
+
+            return StageTransitionResult(
+                action="fail",
+                message=f"Stage '{stage_def.name}' failed after {attempts} attempts, workflow stopped",
+            )
+
+    elif on_failure == "skip":
+        # Skip the stage and continue
+        stage_state.status = "skipped"
+        stage_state.completed_at = now
+        stage_state.exit_reason = "skipped"
+
+        # Advance to next stage
+        next_index = current_stage_index + 1
+
+        if next_index >= len(workflow_def.stages):
+            # No more stages - workflow is complete
+            workflow_state.status = "completed"
+            workflow_state.completed_at = now
+            return StageTransitionResult(
+                action="complete",
+                message=f"Stage '{stage_def.name}' skipped ({completion_result.reason}), all stages finished",
+            )
+
+        next_stage = workflow_def.stages[next_index]
+        return StageTransitionResult(
+            action="skip",
+            next_stage_name=next_stage.name,
+            next_stage_index=next_index,
+            message=f"Stage '{stage_def.name}' skipped ({completion_result.reason}), starting '{next_stage.name}'",
+        )
+
+    else:
+        # Unknown on-failure value (shouldn't happen after validation)
+        stage_state.status = "failed"
+        stage_state.completed_at = now
+        stage_state.exit_reason = completion_result.reason
+        workflow_state.status = "failed"
+        workflow_state.completed_at = now
+
+        return StageTransitionResult(
+            action="fail",
+            message=f"Stage '{stage_def.name}': unknown on-failure value '{on_failure}'",
+        )
+
+
+def start_next_stage(
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    transition: StageTransitionResult,
+    workflow_dir: Path,
+    is_retry: bool = False,
+) -> Optional[Worker]:
+    """Start the next stage of a workflow after a transition.
+
+    Updates the workflow state to reflect the new stage and spawns the
+    worker for that stage.
+
+    Args:
+        workflow_state: Current workflow state (will be modified)
+        workflow_def: The parsed workflow definition
+        transition: The transition result indicating which stage to start
+        workflow_dir: Directory containing the workflow YAML
+        is_retry: Whether this is a retry attempt (affects attempt counting)
+
+    Returns:
+        The spawned Worker if successful, None if there's no next stage
+        or if spawning fails
+
+    Raises:
+        RuntimeError: If worker spawning fails
+    """
+    if transition.next_stage_name is None or transition.next_stage_index < 0:
+        return None
+
+    next_stage_name = transition.next_stage_name
+    next_stage_index = transition.next_stage_index
+    next_stage_def = workflow_def.stages[next_stage_index]
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Update workflow state
+    workflow_state.current_stage = next_stage_name
+    workflow_state.current_stage_index = next_stage_index
+
+    # Get or create stage state
+    if next_stage_name not in workflow_state.stages:
+        workflow_state.stages[next_stage_name] = StageState()
+
+    stage_state = workflow_state.stages[next_stage_name]
+    stage_state.status = "running"
+    stage_state.started_at = now
+    stage_state.worker_name = f"{workflow_state.name}-{next_stage_name}"
+
+    if is_retry:
+        # Increment attempt count for retry
+        stage_state.attempts += 1
+    else:
+        # First attempt (could be fresh start or skip to new stage)
+        stage_state.attempts = 1
+
+    # Save workflow state before spawning (in case spawn fails)
+    save_workflow_state(workflow_state)
+
+    # Spawn the stage worker
+    worker = spawn_workflow_stage(
+        workflow_name=workflow_state.name,
+        workflow_def=workflow_def,
+        stage_def=next_stage_def,
+        workflow_dir=workflow_dir,
+    )
+
+    return worker
+
+
+def run_workflow_monitor(
+    workflow_name: str,
+    workflow_def: WorkflowDefinition,
+    workflow_dir: Path,
+    poll_interval: float = 2.0,
+) -> None:
+    """Run the workflow monitor loop in foreground.
+
+    Manages the execution of a workflow from start to completion by:
+    1. Waiting for scheduled start time (if scheduled)
+    2. Monitoring the current stage for completion
+    3. Handling stage transitions (success, failure, retry, skip)
+    4. Starting the next stage or completing the workflow
+
+    This runs as a foreground process. Users can background it with & or nohup.
+
+    The monitor prints progress messages to stdout and saves workflow state
+    to disk after each transition.
+
+    Args:
+        workflow_name: Name of the workflow to monitor
+        workflow_def: The parsed workflow definition
+        workflow_dir: Directory containing the workflow YAML
+        poll_interval: Seconds between status checks (default 2.0)
+    """
+    while True:
+        # Load current workflow state
+        workflow_state = load_workflow_state(workflow_name)
+        if workflow_state is None:
+            print(f"swarm: workflow '{workflow_name}' not found, exiting monitor")
+            return
+
+        # Handle based on workflow status
+        if workflow_state.status == "scheduled":
+            # Wait for scheduled start time
+            if workflow_state.scheduled_for:
+                scheduled_time = datetime.fromisoformat(
+                    workflow_state.scheduled_for.replace('Z', '+00:00')
+                )
+                now = datetime.now(timezone.utc)
+                if now < scheduled_time:
+                    # Not yet time, sleep and check again
+                    # Sleep for shorter interval as we get closer
+                    remaining = (scheduled_time - now).total_seconds()
+                    sleep_time = min(poll_interval, remaining, 60)
+                    time.sleep(sleep_time)
+                    continue
+
+            # Time to start - transition to running
+            workflow_state.status = "running"
+            workflow_state.started_at = datetime.now(timezone.utc).isoformat()
+
+            # Start first stage
+            first_stage = workflow_def.stages[0]
+            workflow_state.current_stage = first_stage.name
+            workflow_state.current_stage_index = 0
+            workflow_state.stages[first_stage.name].status = "running"
+            workflow_state.stages[first_stage.name].started_at = workflow_state.started_at
+            workflow_state.stages[first_stage.name].attempts = 1
+            workflow_state.stages[first_stage.name].worker_name = f"{workflow_name}-{first_stage.name}"
+
+            save_workflow_state(workflow_state)
+
+            stage_count = len(workflow_def.stages)
+            print(f"swarm: workflow '{workflow_name}' starting (stage 1/{stage_count}: {first_stage.name})")
+
+            # Spawn the first stage worker
+            try:
+                worker = spawn_workflow_stage(
+                    workflow_name=workflow_name,
+                    workflow_def=workflow_def,
+                    stage_def=first_stage,
+                    workflow_dir=workflow_dir,
+                )
+                print(f"swarm: spawned worker '{worker.name}'")
+            except RuntimeError as e:
+                # Failed to spawn worker - update workflow state
+                workflow_state.status = "failed"
+                workflow_state.stages[first_stage.name].status = "failed"
+                workflow_state.stages[first_stage.name].exit_reason = "error"
+                workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+                save_workflow_state(workflow_state)
+                print(f"swarm: error: failed to spawn stage worker: {e}", file=sys.stderr)
+                return
+
+        elif workflow_state.status == "running":
+            # Monitor current stage for completion
+            current_stage_name = workflow_state.current_stage
+            current_stage_index = workflow_state.current_stage_index
+
+            if current_stage_name is None:
+                # Should not happen, but handle gracefully
+                print(f"swarm: error: workflow running but no current stage", file=sys.stderr)
+                workflow_state.status = "failed"
+                workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+                save_workflow_state(workflow_state)
+                return
+
+            # Get stage definition and state
+            stage_def = workflow_def.stages[current_stage_index]
+            stage_state = workflow_state.stages.get(current_stage_name)
+
+            if stage_state is None:
+                print(f"swarm: error: stage state for '{current_stage_name}' not found", file=sys.stderr)
+                workflow_state.status = "failed"
+                workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+                save_workflow_state(workflow_state)
+                return
+
+            # Get the worker for this stage
+            state = State()
+            worker = state.get_worker(stage_state.worker_name)
+
+            if worker is None:
+                # Worker doesn't exist - might have been killed externally
+                # Check if worker already completed (could have been removed after completion)
+                if stage_state.status == "completed":
+                    # Already completed, proceed with transition
+                    pass
+                else:
+                    # Worker killed externally - treat as failure
+                    print(f"swarm: stage worker '{stage_state.worker_name}' not found, treating as failure")
+                    completion_result = StageCompletionResult(
+                        completed=True,
+                        success=False,
+                        reason="error",
+                        details="Worker not found - may have been killed externally",
+                    )
+                    _handle_workflow_transition(
+                        workflow_name=workflow_name,
+                        workflow_state=workflow_state,
+                        workflow_def=workflow_def,
+                        stage_def=stage_def,
+                        completion_result=completion_result,
+                        workflow_dir=workflow_dir,
+                    )
+                    continue
+
+            # Monitor stage completion
+            completion_result = monitor_stage_completion(
+                workflow_name=workflow_name,
+                stage_def=stage_def,
+                worker=worker,
+                poll_interval=poll_interval,
+            )
+
+            # Stage completed - handle transition
+            _handle_workflow_transition(
+                workflow_name=workflow_name,
+                workflow_state=workflow_state,
+                workflow_def=workflow_def,
+                stage_def=stage_def,
+                completion_result=completion_result,
+                workflow_dir=workflow_dir,
+            )
+
+            # Reload state to check if workflow finished
+            workflow_state = load_workflow_state(workflow_name)
+            if workflow_state is None or workflow_state.status in ("completed", "failed", "cancelled"):
+                return
+
+        elif workflow_state.status in ("completed", "failed", "cancelled"):
+            # Workflow finished
+            return
+
+        elif workflow_state.status == "created":
+            # Workflow created but not started - shouldn't happen if called from cmd_workflow_run
+            # But handle by starting it
+            workflow_state.status = "running"
+            workflow_state.started_at = datetime.now(timezone.utc).isoformat()
+            save_workflow_state(workflow_state)
+            continue
+
+        else:
+            # Unknown status
+            print(f"swarm: unknown workflow status '{workflow_state.status}', exiting monitor", file=sys.stderr)
+            return
+
+
+def _handle_workflow_transition(
+    workflow_name: str,
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    stage_def: StageDefinition,
+    completion_result: StageCompletionResult,
+    workflow_dir: Path,
+) -> None:
+    """Handle workflow transition after stage completion.
+
+    Updates workflow state, logs transition, and spawns next stage if needed.
+
+    Args:
+        workflow_name: Name of the workflow
+        workflow_state: Current workflow state (will be reloaded for update)
+        workflow_def: The parsed workflow definition
+        stage_def: The stage that just completed
+        completion_result: How the stage completed
+        workflow_dir: Directory containing the workflow YAML
+    """
+    # Reload state with lock for update
+    workflow_state = load_workflow_state(workflow_name)
+    if workflow_state is None:
+        return
+
+    # Handle the transition
+    transition = handle_stage_transition(
+        workflow_state=workflow_state,
+        workflow_def=workflow_def,
+        completion_result=completion_result,
+        workflow_dir=workflow_dir,
+    )
+
+    # Log the transition
+    stage_count = len(workflow_def.stages)
+    current_index = workflow_state.current_stage_index + 1  # 1-based for display
+
+    if completion_result.success:
+        print(f"swarm: stage '{stage_def.name}' completed ({completion_result.reason})")
+    else:
+        print(f"swarm: stage '{stage_def.name}' failed ({completion_result.reason})")
+
+    print(f"swarm: {transition.message}")
+
+    # Save state after transition decision
+    save_workflow_state(workflow_state)
+
+    # Handle the action
+    if transition.action == "complete":
+        print(f"swarm: workflow '{workflow_name}' completed successfully")
+
+    elif transition.action == "fail":
+        print(f"swarm: workflow '{workflow_name}' failed")
+
+    elif transition.action in ("next_stage", "skip", "retry"):
+        # Start the next stage
+        is_retry = transition.action == "retry"
+        try:
+            worker = start_next_stage(
+                workflow_state=workflow_state,
+                workflow_def=workflow_def,
+                transition=transition,
+                workflow_dir=workflow_dir,
+                is_retry=is_retry,
+            )
+            if worker:
+                next_index = transition.next_stage_index + 1  # 1-based for display
+                print(f"swarm: started stage {next_index}/{stage_count}: '{transition.next_stage_name}'")
+                print(f"swarm: spawned worker '{worker.name}'")
+            else:
+                # Failed to spawn next stage
+                workflow_state.status = "failed"
+                workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+                save_workflow_state(workflow_state)
+                print(f"swarm: error: failed to start next stage", file=sys.stderr)
+        except RuntimeError as e:
+            workflow_state.status = "failed"
+            workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+            save_workflow_state(workflow_state)
+            print(f"swarm: error: failed to spawn stage worker: {e}", file=sys.stderr)
+
+
 def cmd_workflow(args) -> None:
     """Workflow management commands.
 
@@ -7149,6 +7790,13 @@ def cmd_workflow_run(args) -> None:
             time_str = f"in {args.in_delay}"
 
         print(f"Workflow '{workflow_name}' scheduled for {time_str}")
+
+        # Start monitor loop (will wait for scheduled time)
+        run_workflow_monitor(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            workflow_dir=workflow_dir,
+        )
     else:
         # Start immediately
         workflow_state.status = "running"
@@ -7186,6 +7834,13 @@ def cmd_workflow_run(args) -> None:
             save_workflow_state(workflow_state)
             print(f"Error: failed to spawn stage worker: {e}", file=sys.stderr)
             sys.exit(1)
+
+        # Start monitor loop to manage workflow execution
+        run_workflow_monitor(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            workflow_dir=workflow_dir,
+        )
 
 
 if __name__ == "__main__":

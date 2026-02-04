@@ -201,13 +201,13 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Handle timeout
   - Detect worker exit
 
-- [ ] **3.8 Implement stage transition logic**
+- [x] **3.8 Implement stage transition logic**
   - Mark stage completed/failed/skipped
   - Handle on-failure: stop/retry/skip
   - Handle on-complete: next/stop
   - Start next stage or complete workflow
 
-- [ ] **3.9 Implement workflow monitor loop**
+- [x] **3.9 Implement workflow monitor loop**
   - Background process managing workflow execution
   - Handle scheduled start times
   - Manage stage transitions

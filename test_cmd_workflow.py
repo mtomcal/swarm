@@ -4144,5 +4144,1131 @@ class TestMonitorStageCompletion(unittest.TestCase):
         self.assertIsNone(call_args.kwargs.get('timeout_seconds'))
 
 
+class TestStageTransitionResultDataclass(unittest.TestCase):
+    """Test StageTransitionResult dataclass creation and attributes."""
+
+    def test_create_next_stage_result(self):
+        """Test creating a next_stage transition result."""
+        result = swarm.StageTransitionResult(
+            action="next_stage",
+            next_stage_name="build",
+            next_stage_index=1,
+            message="Stage 'plan' completed, starting 'build'",
+        )
+        self.assertEqual(result.action, "next_stage")
+        self.assertEqual(result.next_stage_name, "build")
+        self.assertEqual(result.next_stage_index, 1)
+        self.assertEqual(result.message, "Stage 'plan' completed, starting 'build'")
+
+    def test_create_complete_result(self):
+        """Test creating a complete transition result."""
+        result = swarm.StageTransitionResult(
+            action="complete",
+            message="All stages finished",
+        )
+        self.assertEqual(result.action, "complete")
+        self.assertIsNone(result.next_stage_name)
+        self.assertEqual(result.next_stage_index, -1)
+
+    def test_create_retry_result(self):
+        """Test creating a retry transition result."""
+        result = swarm.StageTransitionResult(
+            action="retry",
+            next_stage_name="build",
+            next_stage_index=1,
+            message="Stage 'build' failed, retrying (attempt 2/3)",
+        )
+        self.assertEqual(result.action, "retry")
+        self.assertEqual(result.next_stage_name, "build")
+        self.assertEqual(result.next_stage_index, 1)
+
+    def test_create_fail_result(self):
+        """Test creating a fail transition result."""
+        result = swarm.StageTransitionResult(
+            action="fail",
+            message="Stage 'build' failed after 3 attempts",
+        )
+        self.assertEqual(result.action, "fail")
+        self.assertIsNone(result.next_stage_name)
+
+    def test_create_skip_result(self):
+        """Test creating a skip transition result."""
+        result = swarm.StageTransitionResult(
+            action="skip",
+            next_stage_name="validate",
+            next_stage_index=2,
+            message="Stage 'build' skipped (timeout), starting 'validate'",
+        )
+        self.assertEqual(result.action, "skip")
+        self.assertEqual(result.next_stage_name, "validate")
+        self.assertEqual(result.next_stage_index, 2)
+
+
+class TestHandleStageTransition(unittest.TestCase):
+    """Test handle_stage_transition function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workflow_dir = Path(self.temp_dir)
+
+        # Patch WORKFLOWS_DIR to use temp directory
+        self.workflows_dir_patcher = patch.object(swarm, 'WORKFLOWS_DIR', Path(self.temp_dir) / 'workflows')
+        self.workflows_dir_patcher.start()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.workflows_dir_patcher.stop()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_workflow_def(self, stages):
+        """Helper to create a WorkflowDefinition."""
+        return swarm.WorkflowDefinition(
+            name="test-workflow",
+            stages=stages,
+        )
+
+    def _make_stage_def(self, name, on_complete="next", on_failure="stop", max_retries=3):
+        """Helper to create a StageDefinition."""
+        return swarm.StageDefinition(
+            name=name,
+            type="worker",
+            prompt="Test prompt",
+            on_complete=on_complete,
+            on_failure=on_failure,
+            max_retries=max_retries,
+        )
+
+    def _make_workflow_state(self, name, current_stage, current_stage_index, stages_status):
+        """Helper to create a WorkflowState."""
+        stages = {}
+        for stage_name, status_dict in stages_status.items():
+            stages[stage_name] = swarm.StageState(
+                status=status_dict.get('status', 'pending'),
+                attempts=status_dict.get('attempts', 0),
+            )
+        return swarm.WorkflowState(
+            name=name,
+            status="running",
+            current_stage=current_stage,
+            current_stage_index=current_stage_index,
+            stages=stages,
+        )
+
+    # --- Success cases ---
+
+    def test_success_on_complete_next_advances_to_next_stage(self):
+        """Test successful completion with on-complete: next advances to next stage."""
+        stage1 = self._make_stage_def("plan", on_complete="next")
+        stage2 = self._make_stage_def("build", on_complete="next")
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="plan",
+            current_stage_index=0,
+            stages_status={"plan": {"status": "running", "attempts": 1}, "build": {"status": "pending"}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "next_stage")
+        self.assertEqual(result.next_stage_name, "build")
+        self.assertEqual(result.next_stage_index, 1)
+        self.assertEqual(workflow_state.stages["plan"].status, "completed")
+        self.assertEqual(workflow_state.stages["plan"].exit_reason, "done_pattern")
+
+    def test_success_on_complete_next_last_stage_completes_workflow(self):
+        """Test successful completion of last stage completes workflow."""
+        stage1 = self._make_stage_def("plan", on_complete="next")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="plan",
+            current_stage_index=0,
+            stages_status={"plan": {"status": "running", "attempts": 1}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "complete")
+        self.assertEqual(workflow_state.status, "completed")
+        self.assertIsNotNone(workflow_state.completed_at)
+
+    def test_success_on_complete_stop_completes_workflow(self):
+        """Test successful completion with on-complete: stop completes workflow."""
+        stage1 = self._make_stage_def("plan", on_complete="stop")
+        stage2 = self._make_stage_def("build", on_complete="next")  # Won't be reached
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="plan",
+            current_stage_index=0,
+            stages_status={"plan": {"status": "running", "attempts": 1}, "build": {"status": "pending"}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "complete")
+        self.assertEqual(workflow_state.status, "completed")
+        # Build stage should still be pending
+        self.assertEqual(workflow_state.stages["build"].status, "pending")
+
+    def test_success_on_complete_goto_jumps_to_stage(self):
+        """Test successful completion with on-complete: goto:<stage> jumps to stage."""
+        stage1 = self._make_stage_def("plan", on_complete="goto:validate")
+        stage2 = self._make_stage_def("build", on_complete="next")  # Will be skipped
+        stage3 = self._make_stage_def("validate", on_complete="stop")
+        workflow_def = self._make_workflow_def([stage1, stage2, stage3])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="plan",
+            current_stage_index=0,
+            stages_status={"plan": {"status": "running", "attempts": 1}, "build": {"status": "pending"}, "validate": {"status": "pending"}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "next_stage")
+        self.assertEqual(result.next_stage_name, "validate")
+        self.assertEqual(result.next_stage_index, 2)
+
+    # --- Failure cases ---
+
+    def test_failure_on_failure_stop_fails_workflow(self):
+        """Test failure with on-failure: stop fails workflow."""
+        stage1 = self._make_stage_def("build", on_failure="stop")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="build",
+            current_stage_index=0,
+            stages_status={"build": {"status": "running", "attempts": 1}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=False, reason="timeout"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "fail")
+        self.assertEqual(workflow_state.status, "failed")
+        self.assertEqual(workflow_state.stages["build"].status, "failed")
+        self.assertEqual(workflow_state.stages["build"].exit_reason, "timeout")
+
+    def test_failure_on_failure_retry_retries_stage(self):
+        """Test failure with on-failure: retry retries the stage."""
+        stage1 = self._make_stage_def("build", on_failure="retry", max_retries=3)
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="build",
+            current_stage_index=0,
+            stages_status={"build": {"status": "running", "attempts": 1}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=False, reason="worker_exit"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "retry")
+        self.assertEqual(result.next_stage_name, "build")
+        self.assertEqual(result.next_stage_index, 0)
+        # Workflow should still be running
+        self.assertEqual(workflow_state.status, "running")
+
+    def test_failure_on_failure_retry_exhausted_fails_workflow(self):
+        """Test failure with on-failure: retry fails workflow when retries exhausted."""
+        stage1 = self._make_stage_def("build", on_failure="retry", max_retries=3)
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="build",
+            current_stage_index=0,
+            stages_status={"build": {"status": "running", "attempts": 3}},  # Already at max
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=False, reason="worker_exit"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "fail")
+        self.assertEqual(workflow_state.status, "failed")
+        self.assertEqual(workflow_state.stages["build"].status, "failed")
+
+    def test_failure_on_failure_skip_skips_to_next_stage(self):
+        """Test failure with on-failure: skip skips to next stage."""
+        stage1 = self._make_stage_def("build", on_failure="skip")
+        stage2 = self._make_stage_def("validate", on_complete="stop")
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="build",
+            current_stage_index=0,
+            stages_status={"build": {"status": "running", "attempts": 1}, "validate": {"status": "pending"}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=False, reason="timeout"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "skip")
+        self.assertEqual(result.next_stage_name, "validate")
+        self.assertEqual(result.next_stage_index, 1)
+        self.assertEqual(workflow_state.stages["build"].status, "skipped")
+        self.assertEqual(workflow_state.stages["build"].exit_reason, "skipped")
+
+    def test_failure_on_failure_skip_last_stage_completes_workflow(self):
+        """Test failure with on-failure: skip on last stage completes workflow."""
+        stage1 = self._make_stage_def("validate", on_failure="skip")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="validate",
+            current_stage_index=0,
+            stages_status={"validate": {"status": "running", "attempts": 1}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=False, reason="timeout"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "complete")
+        self.assertEqual(workflow_state.status, "completed")
+        self.assertEqual(workflow_state.stages["validate"].status, "skipped")
+
+    # --- Edge cases ---
+
+    def test_no_current_stage_returns_fail(self):
+        """Test that missing current stage returns fail."""
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage=None,  # No current stage
+            current_stage_index=-1,
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "fail")
+        self.assertIn("no current stage", result.message.lower())
+
+    def test_stage_index_out_of_range_returns_fail(self):
+        """Test that stage index out of range returns fail."""
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="plan",
+            current_stage_index=5,  # Out of range
+            stages={"plan": swarm.StageState(status="running", attempts=1)},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="done_pattern"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(result.action, "fail")
+        self.assertIn("out of range", result.message.lower())
+
+    def test_success_preserves_exit_reason_in_stage_state(self):
+        """Test that successful completion preserves the exit reason."""
+        stage1 = self._make_stage_def("plan", on_complete="next")
+        stage2 = self._make_stage_def("build", on_complete="stop")
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        workflow_state = self._make_workflow_state(
+            name="test-workflow",
+            current_stage="plan",
+            current_stage_index=0,
+            stages_status={"plan": {"status": "running", "attempts": 1}, "build": {"status": "pending"}},
+        )
+
+        completion = swarm.StageCompletionResult(
+            completed=True, success=True, reason="ralph_complete",
+            details="Ralph loop completed after 25 iterations"
+        )
+
+        result = swarm.handle_stage_transition(
+            workflow_state, workflow_def, completion, self.workflow_dir
+        )
+
+        self.assertEqual(workflow_state.stages["plan"].exit_reason, "ralph_complete")
+
+
+class TestStartNextStage(unittest.TestCase):
+    """Test start_next_stage function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workflow_dir = Path(self.temp_dir)
+
+        # Patch WORKFLOWS_DIR to use temp directory
+        self.workflows_dir_patcher = patch.object(swarm, 'WORKFLOWS_DIR', Path(self.temp_dir) / 'workflows')
+        self.workflows_dir_patcher.start()
+
+        # Create workflows directory
+        (Path(self.temp_dir) / 'workflows').mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.workflows_dir_patcher.stop()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_workflow_def(self, stages):
+        """Helper to create a WorkflowDefinition."""
+        return swarm.WorkflowDefinition(
+            name="test-workflow",
+            stages=stages,
+        )
+
+    def _make_stage_def(self, name, on_complete="next"):
+        """Helper to create a StageDefinition."""
+        return swarm.StageDefinition(
+            name=name,
+            type="worker",
+            prompt="Test prompt",
+            on_complete=on_complete,
+        )
+
+    @patch('swarm.spawn_workflow_stage')
+    @patch('swarm.save_workflow_state')
+    def test_start_next_stage_updates_workflow_state(self, mock_save, mock_spawn):
+        """Test that start_next_stage updates workflow state correctly."""
+        mock_spawn.return_value = swarm.Worker(
+            name="test-workflow-build",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        stage2 = self._make_stage_def("build")
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={
+                "plan": swarm.StageState(status="completed"),
+                "build": swarm.StageState(status="pending"),
+            },
+        )
+
+        transition = swarm.StageTransitionResult(
+            action="next_stage",
+            next_stage_name="build",
+            next_stage_index=1,
+            message="Moving to build",
+        )
+
+        result = swarm.start_next_stage(
+            workflow_state, workflow_def, transition, self.workflow_dir
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(workflow_state.current_stage, "build")
+        self.assertEqual(workflow_state.current_stage_index, 1)
+        self.assertEqual(workflow_state.stages["build"].status, "running")
+        self.assertEqual(workflow_state.stages["build"].attempts, 1)
+        self.assertEqual(workflow_state.stages["build"].worker_name, "test-workflow-build")
+        mock_save.assert_called()
+
+    @patch('swarm.spawn_workflow_stage')
+    @patch('swarm.save_workflow_state')
+    def test_start_next_stage_with_retry_increments_attempts(self, mock_save, mock_spawn):
+        """Test that retry increments attempt count."""
+        mock_spawn.return_value = swarm.Worker(
+            name="test-workflow-build",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        stage1 = self._make_stage_def("build")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="build",
+            current_stage_index=0,
+            stages={
+                "build": swarm.StageState(status="running", attempts=1),
+            },
+        )
+
+        transition = swarm.StageTransitionResult(
+            action="retry",
+            next_stage_name="build",
+            next_stage_index=0,
+            message="Retrying build",
+        )
+
+        result = swarm.start_next_stage(
+            workflow_state, workflow_def, transition, self.workflow_dir, is_retry=True
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(workflow_state.stages["build"].attempts, 2)
+
+    def test_start_next_stage_with_no_next_stage_returns_none(self):
+        """Test that no next stage returns None."""
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="completed",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={"plan": swarm.StageState(status="completed")},
+        )
+
+        transition = swarm.StageTransitionResult(
+            action="complete",
+            next_stage_name=None,
+            next_stage_index=-1,
+            message="Workflow complete",
+        )
+
+        result = swarm.start_next_stage(
+            workflow_state, workflow_def, transition, self.workflow_dir
+        )
+
+        self.assertIsNone(result)
+
+    @patch('swarm.spawn_workflow_stage')
+    @patch('swarm.save_workflow_state')
+    def test_start_next_stage_creates_stage_state_if_missing(self, mock_save, mock_spawn):
+        """Test that start_next_stage creates stage state if missing."""
+        mock_spawn.return_value = swarm.Worker(
+            name="test-workflow-build",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        stage2 = self._make_stage_def("build")
+        workflow_def = self._make_workflow_def([stage1, stage2])
+
+        # Workflow state missing the "build" stage state
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={
+                "plan": swarm.StageState(status="completed"),
+                # "build" is missing
+            },
+        )
+
+        transition = swarm.StageTransitionResult(
+            action="next_stage",
+            next_stage_name="build",
+            next_stage_index=1,
+            message="Moving to build",
+        )
+
+        result = swarm.start_next_stage(
+            workflow_state, workflow_def, transition, self.workflow_dir
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("build", workflow_state.stages)
+        self.assertEqual(workflow_state.stages["build"].status, "running")
+
+
+class TestRunWorkflowMonitor(unittest.TestCase):
+    """Test run_workflow_monitor function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workflow_dir = Path(self.temp_dir)
+
+        # Patch WORKFLOWS_DIR to use temp directory
+        self.workflows_dir_patcher = patch.object(swarm, 'WORKFLOWS_DIR', Path(self.temp_dir) / 'workflows')
+        self.workflows_dir_patcher.start()
+
+        # Create workflows directory
+        (Path(self.temp_dir) / 'workflows').mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.workflows_dir_patcher.stop()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_workflow_def(self, stages):
+        """Helper to create a WorkflowDefinition."""
+        return swarm.WorkflowDefinition(
+            name="test-workflow",
+            stages=stages,
+        )
+
+    def _make_stage_def(self, name, stage_type="worker", on_complete="next", on_failure="stop"):
+        """Helper to create a StageDefinition."""
+        return swarm.StageDefinition(
+            name=name,
+            type=stage_type,
+            prompt="Test prompt",
+            done_pattern="/done",
+            on_complete=on_complete,
+            on_failure=on_failure,
+        )
+
+    def _setup_workflow_state(self, workflow_name, status, stages_dict):
+        """Helper to set up workflow state on disk."""
+        workflow_state = swarm.WorkflowState(
+            name=workflow_name,
+            status=status,
+            stages=stages_dict,
+        )
+        # Create workflow state directory and save
+        state_dir = Path(self.temp_dir) / 'workflows' / workflow_name
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = state_dir / 'state.json'
+        with open(state_path, 'w') as f:
+            json.dump(workflow_state.to_dict(), f)
+        return workflow_state
+
+    @patch('swarm.load_workflow_state')
+    def test_monitor_exits_when_workflow_not_found(self, mock_load):
+        """Test monitor exits when workflow state is not found."""
+        mock_load.return_value = None
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        # Should not raise, should exit gracefully
+        swarm.run_workflow_monitor("missing-workflow", workflow_def, self.workflow_dir)
+
+        mock_load.assert_called_once_with("missing-workflow")
+
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_exits_when_workflow_completed(self, mock_load, mock_save):
+        """Test monitor exits when workflow is already completed."""
+        mock_load.return_value = swarm.WorkflowState(
+            name="test-workflow",
+            status="completed",
+            stages={},
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        # Only one call to load_workflow_state, then exit
+        mock_load.assert_called_once()
+
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_exits_when_workflow_failed(self, mock_load, mock_save):
+        """Test monitor exits when workflow is already failed."""
+        mock_load.return_value = swarm.WorkflowState(
+            name="test-workflow",
+            status="failed",
+            stages={},
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        mock_load.assert_called_once()
+
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_exits_when_workflow_cancelled(self, mock_load, mock_save):
+        """Test monitor exits when workflow is cancelled."""
+        mock_load.return_value = swarm.WorkflowState(
+            name="test-workflow",
+            status="cancelled",
+            stages={},
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        mock_load.assert_called_once()
+
+    @patch('swarm.spawn_workflow_stage')
+    @patch('time.sleep')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_waits_for_scheduled_time(self, mock_load, mock_save, mock_sleep, mock_spawn):
+        """Test monitor waits until scheduled time before starting."""
+        # First call returns scheduled state, second call returns running state
+        future_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        scheduled_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="scheduled",
+            scheduled_for=future_time,
+            stages={"plan": swarm.StageState(status="pending")},
+        )
+        # After "sleeping", workflow becomes completed (simulating external completion)
+        completed_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="completed",
+            stages={"plan": swarm.StageState(status="completed")},
+        )
+        mock_load.side_effect = [scheduled_state, completed_state]
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        # Should have slept while waiting for scheduled time
+        mock_sleep.assert_called()
+
+    @patch('swarm.State')
+    @patch('swarm.monitor_stage_completion')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_handles_missing_worker(self, mock_load, mock_save, mock_monitor, mock_state_class):
+        """Test monitor handles case where worker is missing."""
+        # Workflow is running but worker is missing
+        running_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={
+                "plan": swarm.StageState(
+                    status="running",
+                    worker_name="test-workflow-plan",
+                )
+            },
+        )
+        # After handling missing worker, workflow is failed
+        failed_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="failed",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={
+                "plan": swarm.StageState(
+                    status="failed",
+                    worker_name="test-workflow-plan",
+                )
+            },
+        )
+        mock_load.side_effect = [running_state, running_state, failed_state]
+
+        # Mock State().get_worker returns None (worker not found)
+        mock_state_instance = MagicMock()
+        mock_state_instance.get_worker.return_value = None
+        mock_state_class.return_value = mock_state_instance
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        # Worker was not found
+        mock_state_instance.get_worker.assert_called_with("test-workflow-plan")
+
+    @patch('swarm.start_next_stage')
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.State')
+    @patch('swarm.monitor_stage_completion')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_monitor_handles_stage_completion(self, mock_load, mock_save, mock_monitor,
+                                               mock_state_class, mock_transition, mock_start_next):
+        """Test monitor handles stage completion and transitions."""
+        mock_worker = swarm.Worker(
+            name="test-workflow-plan",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        # First load: running workflow
+        running_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="plan",
+            current_stage_index=0,
+            stages={
+                "plan": swarm.StageState(
+                    status="running",
+                    worker_name="test-workflow-plan",
+                ),
+                "build": swarm.StageState(status="pending"),
+            },
+        )
+        # After transition: completed
+        completed_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="completed",
+            stages={
+                "plan": swarm.StageState(status="completed"),
+                "build": swarm.StageState(status="completed"),
+            },
+        )
+        mock_load.side_effect = [running_state, running_state, completed_state]
+
+        # Mock State().get_worker returns the worker
+        mock_state_instance = MagicMock()
+        mock_state_instance.get_worker.return_value = mock_worker
+        mock_state_class.return_value = mock_state_instance
+
+        # Stage completes successfully
+        mock_monitor.return_value = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+
+        # Transition to complete
+        mock_transition.return_value = swarm.StageTransitionResult(
+            action="complete",
+            message="Workflow completed",
+        )
+
+        stage1 = self._make_stage_def("plan", on_complete="stop")
+        workflow_def = self._make_workflow_def([stage1])
+
+        swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
+
+        # monitor_stage_completion was called
+        mock_monitor.assert_called_once()
+        # handle_stage_transition was called
+        mock_transition.assert_called_once()
+
+
+class TestHandleWorkflowTransition(unittest.TestCase):
+    """Test _handle_workflow_transition helper function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.workflow_dir = Path(self.temp_dir)
+
+        # Patch WORKFLOWS_DIR to use temp directory
+        self.workflows_dir_patcher = patch.object(swarm, 'WORKFLOWS_DIR', Path(self.temp_dir) / 'workflows')
+        self.workflows_dir_patcher.start()
+
+        # Create workflows directory
+        (Path(self.temp_dir) / 'workflows').mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.workflows_dir_patcher.stop()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_stage_def(self, name):
+        """Helper to create a StageDefinition."""
+        return swarm.StageDefinition(
+            name=name,
+            type="worker",
+            prompt="Test prompt",
+        )
+
+    @patch('swarm.start_next_stage')
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_handle_transition_for_complete_action(self, mock_load, mock_save, mock_transition, mock_start_next):
+        """Test _handle_workflow_transition with complete action."""
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            stages={"plan": swarm.StageState(status="running")},
+        )
+        mock_load.return_value = workflow_state
+
+        mock_transition.return_value = swarm.StageTransitionResult(
+            action="complete",
+            message="Workflow completed",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = swarm.WorkflowDefinition(name="test-workflow", stages=[stage1])
+
+        completion_result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+
+        swarm._handle_workflow_transition(
+            workflow_name="test-workflow",
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage1,
+            completion_result=completion_result,
+            workflow_dir=self.workflow_dir,
+        )
+
+        mock_transition.assert_called_once()
+        mock_save.assert_called()
+        # start_next_stage should NOT be called for complete action
+        mock_start_next.assert_not_called()
+
+    @patch('swarm.start_next_stage')
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_handle_transition_for_next_stage_action(self, mock_load, mock_save, mock_transition, mock_start_next):
+        """Test _handle_workflow_transition with next_stage action."""
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            stages={
+                "plan": swarm.StageState(status="running"),
+                "build": swarm.StageState(status="pending"),
+            },
+        )
+        mock_load.return_value = workflow_state
+
+        mock_transition.return_value = swarm.StageTransitionResult(
+            action="next_stage",
+            next_stage_name="build",
+            next_stage_index=1,
+            message="Starting build stage",
+        )
+
+        mock_start_next.return_value = swarm.Worker(
+            name="test-workflow-build",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        stage2 = self._make_stage_def("build")
+        workflow_def = swarm.WorkflowDefinition(name="test-workflow", stages=[stage1, stage2])
+
+        completion_result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+
+        swarm._handle_workflow_transition(
+            workflow_name="test-workflow",
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage1,
+            completion_result=completion_result,
+            workflow_dir=self.workflow_dir,
+        )
+
+        mock_transition.assert_called_once()
+        mock_start_next.assert_called_once()
+
+    @patch('swarm.start_next_stage')
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_handle_transition_for_retry_action(self, mock_load, mock_save, mock_transition, mock_start_next):
+        """Test _handle_workflow_transition with retry action."""
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            stages={"plan": swarm.StageState(status="running", attempts=1)},
+        )
+        mock_load.return_value = workflow_state
+
+        mock_transition.return_value = swarm.StageTransitionResult(
+            action="retry",
+            next_stage_name="plan",
+            next_stage_index=0,
+            message="Retrying plan stage",
+        )
+
+        mock_start_next.return_value = swarm.Worker(
+            name="test-workflow-plan",
+            status="running",
+            cmd=["claude"],
+            started=datetime.now().isoformat(),
+            cwd="/tmp/test",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = swarm.WorkflowDefinition(name="test-workflow", stages=[stage1])
+
+        completion_result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="timeout",
+        )
+
+        swarm._handle_workflow_transition(
+            workflow_name="test-workflow",
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage1,
+            completion_result=completion_result,
+            workflow_dir=self.workflow_dir,
+        )
+
+        mock_transition.assert_called_once()
+        # For retry, start_next_stage should be called with is_retry=True
+        mock_start_next.assert_called_once()
+        call_kwargs = mock_start_next.call_args
+        self.assertTrue(call_kwargs[1].get('is_retry', False))
+
+    @patch('swarm.start_next_stage')
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_handle_transition_for_fail_action(self, mock_load, mock_save, mock_transition, mock_start_next):
+        """Test _handle_workflow_transition with fail action."""
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            stages={"plan": swarm.StageState(status="running")},
+        )
+        mock_load.return_value = workflow_state
+
+        mock_transition.return_value = swarm.StageTransitionResult(
+            action="fail",
+            message="Workflow failed",
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = swarm.WorkflowDefinition(name="test-workflow", stages=[stage1])
+
+        completion_result = swarm.StageCompletionResult(
+            completed=True,
+            success=False,
+            reason="error",
+        )
+
+        swarm._handle_workflow_transition(
+            workflow_name="test-workflow",
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage1,
+            completion_result=completion_result,
+            workflow_dir=self.workflow_dir,
+        )
+
+        mock_transition.assert_called_once()
+        mock_save.assert_called()
+        # start_next_stage should NOT be called for fail action
+        mock_start_next.assert_not_called()
+
+    @patch('swarm.handle_stage_transition')
+    @patch('swarm.save_workflow_state')
+    @patch('swarm.load_workflow_state')
+    def test_handle_transition_exits_when_workflow_not_found(self, mock_load, mock_save, mock_transition):
+        """Test _handle_workflow_transition exits gracefully when workflow is not found."""
+        mock_load.return_value = None
+
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            stages={"plan": swarm.StageState(status="running")},
+        )
+
+        stage1 = self._make_stage_def("plan")
+        workflow_def = swarm.WorkflowDefinition(name="test-workflow", stages=[stage1])
+
+        completion_result = swarm.StageCompletionResult(
+            completed=True,
+            success=True,
+            reason="done_pattern",
+        )
+
+        # Should not raise
+        swarm._handle_workflow_transition(
+            workflow_name="test-workflow",
+            workflow_state=workflow_state,
+            workflow_def=workflow_def,
+            stage_def=stage1,
+            completion_result=completion_result,
+            workflow_dir=self.workflow_dir,
+        )
+
+        # handle_stage_transition should NOT be called
+        mock_transition.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
