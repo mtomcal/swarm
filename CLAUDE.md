@@ -63,7 +63,7 @@ Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is 
 
 ## Project Structure
 
-- `swarm.py` - Main implementation (~2900 lines)
+- `swarm.py` - Main implementation (~2876 lines)
 - `test_cmd_ralph.py` - Unit tests for ralph mode (203 tests)
 - `tests/test_integration_ralph.py` - Integration tests requiring tmux (17 tests)
 - `tests/test_tmux_isolation.py` - TmuxIsolatedTestCase base class for integration tests
