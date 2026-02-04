@@ -310,6 +310,20 @@ Examples:
   swarm workflow status feature-build
   swarm workflow cancel feature-build
   swarm workflow resume feature-build --from validate
+
+Director Pattern (Agent-in-the-Loop):
+  For monitored workflows, spawn a separate "director" agent that watches
+  and intervenes using existing swarm commands:
+
+    # Start workflow in background
+    swarm workflow run build.yaml &
+
+    # Spawn director to monitor
+    swarm spawn --name director --tmux -- claude
+    swarm send director "Monitor 'feature-build', intervene if stages fail"
+
+  The director uses: workflow status, send, attach, pause, resume, cancel.
+  See: swarm workflow run --help (Director Pattern section)
 ```
 
 ### Run Help Text
@@ -471,6 +485,27 @@ Debugging:
   swarm workflow status <name>        # Check progress
   swarm workflow logs <name>          # View all logs
   swarm attach <workflow>-<stage>     # Attach to running stage
+
+Director Pattern (Agent-in-the-Loop):
+  For workflows that need monitoring/intervention, spawn a separate
+  "director" agent instead of building orchestration into the workflow:
+
+    # Start workflow
+    swarm workflow run build.yaml &
+
+    # Spawn director agent to monitor and intervene
+    swarm spawn --name director --tmux -- claude
+    swarm send director "Monitor workflow 'my-workflow'. Check status
+      every 10 min. Intervene with 'swarm send <worker> msg' if stuck."
+
+  The director uses existing commands (workflow status, send, attach,
+  pause, resume) to monitor and control the workflow. This keeps the
+  workflow system simple while enabling sophisticated orchestration
+  through agent prompts.
+
+  Director can be a ralph loop for long-running monitoring:
+    swarm ralph spawn --name director --prompt-file director.md \
+      --max-iterations 100 -- claude
 ```
 
 ## Scenarios
@@ -593,6 +628,161 @@ swarm workflow cancel <name>           # Stop and mark cancelled
 swarm workflow list                    # Verify stopped
 ```
 
+## Director Pattern (Agent-in-the-Loop)
+
+Workflows run autonomously by default, but you may want an agent (or human) to monitor progress and intervene when needed. Rather than building orchestration into the workflow system, use the **Director Pattern**: spawn a separate agent that monitors and controls workflows using existing swarm primitives.
+
+### Concept
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Director Worker                        │
+│  (Agent monitoring workflow, can intervene)              │
+├─────────────────────────────────────────────────────────┤
+│  Uses existing commands:                                 │
+│  - swarm workflow status <name>    # Check progress      │
+│  - swarm workflow list             # See all workflows   │
+│  - swarm send <worker> "msg"       # Intervene in stage  │
+│  - swarm attach <worker>           # Watch stage live    │
+│  - swarm workflow pause <name>     # Pause workflow      │
+│  - swarm workflow resume <name>    # Resume workflow     │
+│  - swarm workflow cancel <name>    # Abort workflow      │
+└─────────────────────────────────────────────────────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+    ┌─────────┐         ┌─────────┐         ┌─────────┐
+    │  Plan   │   ───►  │  Build  │   ───►  │Validate │
+    │  Stage  │         │  Stage  │         │  Stage  │
+    └─────────┘         └─────────┘         └─────────┘
+```
+
+### Why This Approach
+
+1. **Unix philosophy**: Keep primitives simple, compose for complex behavior
+2. **No new features needed**: Director uses existing `swarm workflow`, `swarm send`, `swarm attach`
+3. **Flexible**: Director logic lives in the prompt, not the tool
+4. **Works for humans too**: Same commands work for manual intervention
+
+### Director Setup
+
+```bash
+# 1. Start the workflow (runs autonomously)
+swarm workflow run build.yaml &
+
+# 2. Spawn a director agent to monitor
+swarm spawn --name director --tmux -- claude
+
+# 3. Give director its instructions
+swarm send director "Monitor workflow 'feature-build'. Check status every 10 min.
+Intervene if a stage is stuck or failing. Use 'swarm send <worker> msg' to guide."
+```
+
+### Example Director Prompt
+
+```markdown
+# Director Agent
+
+You are orchestrating a multi-stage build workflow.
+
+## Your Job
+1. Monitor workflow progress: `swarm workflow status feature-build`
+2. Check status periodically (every 10-15 minutes)
+3. Watch for failures, stuck stages, or unexpected output
+4. Intervene when needed: `swarm send feature-build-<stage> "guidance..."`
+5. Report final status when workflow completes
+
+## Available Commands
+- `swarm workflow status <name>` - Check workflow progress
+- `swarm workflow list` - See all workflows
+- `swarm send <workflow>-<stage> "message"` - Send guidance to a stage worker
+- `swarm attach <workflow>-<stage>` - Watch stage output live (Ctrl-B D to detach)
+- `swarm workflow pause <name>` - Pause workflow between stages
+- `swarm workflow resume <name>` - Resume paused workflow
+- `swarm workflow cancel <name>` - Abort workflow entirely
+- `swarm logs <workflow>-<stage>` - View stage output history
+
+## Stage Worker Names
+Workers are named `<workflow>-<stage>`:
+- feature-build-plan
+- feature-build-build
+- feature-build-validate
+
+## When to Intervene
+- Stage running >1 hour without progress
+- Error patterns in output (check with `swarm logs`)
+- Stage completed but output looks incomplete
+- Rate limit or API errors
+
+## Intervention Examples
+```bash
+# Guide a stuck planning stage
+swarm send feature-build-plan "Focus on the authentication module first"
+
+# Help with a failing build
+swarm send feature-build-build "Try using the existing UserService instead"
+
+# Check what's happening in a stage
+swarm attach feature-build-validate
+# (Ctrl-B D to detach)
+```
+
+## Success Criteria
+Workflow completes with all stages successful. Report summary when done.
+```
+
+### Director as Ralph Loop
+
+For long-running workflows, run the director as a ralph loop so it survives context limits:
+
+```bash
+# director-prompt.md contains the director instructions above
+swarm ralph spawn --name director \
+  --prompt-file ./director-prompt.md \
+  --max-iterations 100 \
+  --inactivity-timeout 300 \
+  -- claude
+```
+
+The director will periodically check workflow status and intervene as needed, restarting with fresh context when the inactivity timeout triggers.
+
+### Human as Director
+
+The same commands work for manual human intervention:
+
+```bash
+# Check workflow progress
+swarm workflow status feature-build
+
+# Watch a stage live
+swarm attach feature-build-build
+
+# Send guidance to struggling stage
+swarm send feature-build-build "skip the optimization, just get tests passing"
+
+# Pause while you investigate
+swarm workflow pause feature-build
+
+# Resume when ready
+swarm workflow resume feature-build
+```
+
+### Scenarios
+
+#### Scenario: Director monitors and intervenes
+- **Given**: Workflow "feature-build" running, director agent spawned
+- **When**: Director runs `swarm workflow status feature-build` and sees stage "build" stuck
+- **Then**: Director runs `swarm send feature-build-build "try a different approach"`
+
+#### Scenario: Director pauses for human review
+- **Given**: Workflow running, director detects unusual output
+- **When**: Director runs `swarm workflow pause feature-build`
+- **Then**: Workflow pauses after current stage completes, director alerts human
+
+#### Scenario: Human takes over from director
+- **Given**: Director agent running, human wants to intervene directly
+- **When**: Human runs `swarm kill director` and `swarm attach feature-build-build`
+- **Then**: Human can directly observe and guide the stage
+
 ## Implementation Notes
 
 - Workflow monitor runs as foreground process (use `&` or nohup for background)
@@ -602,3 +792,4 @@ swarm workflow list                    # Verify stopped
 - Hash of original YAML stored to detect modifications
 - Repo-local `.swarm/workflows/` searched before global `~/.swarm/workflows/`
 - All times stored as UTC ISO8601 for consistency
+- Director pattern requires no workflow changes - uses existing primitives
