@@ -213,7 +213,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Manage stage transitions
   - Handle heartbeats
 
-- [ ] **3.10 Implement `swarm workflow status`**
+- [x] **3.10 Implement `swarm workflow status`**
   - Show overall workflow status
   - Show each stage status
   - Show current stage details

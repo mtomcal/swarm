@@ -1545,6 +1545,71 @@ See Also:
   swarm workflow status --help    # Check workflow progress
 """
 
+WORKFLOW_STATUS_HELP_DESCRIPTION = """\
+Show detailed status of a workflow.
+
+Displays the overall workflow status, current stage, and the status
+of each individual stage. Use this to monitor workflow progress and
+diagnose issues.
+"""
+
+WORKFLOW_STATUS_HELP_EPILOG = """\
+Output Fields:
+  Workflow      Workflow name
+  Status        created/scheduled/running/completed/failed/cancelled
+  Current       Currently executing stage (if running)
+  Started       When workflow started executing
+  Scheduled     When workflow is scheduled to start (if scheduled)
+  Completed     When workflow finished (if completed/failed/cancelled)
+  Source        Path to workflow YAML file
+
+Stage Fields:
+  Name          Stage identifier
+  Status        pending/running/completed/failed/skipped
+  Worker        Associated worker name (if started)
+  Attempts      Number of execution attempts
+  Started       When stage started
+  Completed     When stage finished
+  Exit Reason   How stage completed (done_pattern/timeout/error/skipped)
+
+Output Formats:
+  text (default)    Human-readable format with stages table
+  json              Machine-readable JSON object
+
+Examples:
+  # Show workflow status
+  swarm workflow status my-workflow
+
+  # Get JSON output for scripting
+  swarm workflow status my-workflow --format json
+
+  # Check current stage
+  swarm workflow status my-workflow | grep "Current"
+
+  # Monitor workflow in a loop
+  watch -n 10 swarm workflow status my-workflow
+
+Stage Status Values:
+  pending     Stage not yet started
+  running     Stage currently executing
+  completed   Stage finished successfully
+  failed      Stage failed (exhausted retries)
+  skipped     Stage skipped due to on-failure: skip
+
+Workflow Status Values:
+  created     Parsed but not started
+  scheduled   Waiting for scheduled start time
+  running     Currently executing stages
+  completed   All stages finished successfully
+  failed      Stage failed and on-failure: stop
+  cancelled   Manually cancelled
+
+See Also:
+  swarm workflow list --help      # List all workflows
+  swarm workflow logs --help      # View workflow logs
+  swarm attach <workflow>-<stage> # Attach to running stage
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -4057,6 +4122,18 @@ def main() -> None:
                                 help="Override workflow name from YAML")
     workflow_run_p.add_argument("--force", action="store_true",
                                 help="Overwrite existing workflow with same name")
+
+    # workflow status
+    workflow_status_p = workflow_subparsers.add_parser(
+        "status",
+        help="Show workflow status",
+        description=WORKFLOW_STATUS_HELP_DESCRIPTION,
+        epilog=WORKFLOW_STATUS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_status_p.add_argument("name", help="Workflow name")
+    workflow_status_p.add_argument("--format", choices=["text", "json"],
+                                   default="text", help="Output format (default: text)")
 
     args = parser.parse_args()
 
@@ -7578,7 +7655,7 @@ def cmd_workflow(args) -> None:
     Dispatches to workflow subcommands:
     - validate: Validate workflow YAML without running
     - run: Run a workflow from YAML file
-    - status: Show workflow status (to be implemented)
+    - status: Show workflow status
     - list: List all workflows (to be implemented)
     - cancel: Cancel a running workflow (to be implemented)
     - resume: Resume a failed/paused workflow (to be implemented)
@@ -7588,6 +7665,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_validate(args)
     elif args.workflow_command == "run":
         cmd_workflow_run(args)
+    elif args.workflow_command == "status":
+        cmd_workflow_status(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -7636,6 +7715,83 @@ def cmd_workflow_validate(args) -> None:
     stage_count = len(workflow.stages)
     stage_word = "stage" if stage_count == 1 else "stages"
     print(f"Workflow '{workflow.name}' is valid ({stage_count} {stage_word})")
+
+
+def cmd_workflow_status(args) -> None:
+    """Show detailed status of a workflow.
+
+    Displays the overall workflow status, current stage, and the status
+    of each individual stage. Supports both text and JSON output formats.
+
+    Args:
+        args: Namespace with status arguments:
+            - name: Workflow name
+            - format: Output format ('text' or 'json')
+
+    Exit codes:
+        0: Success
+        1: Workflow not found
+    """
+    workflow_name = args.name
+    output_format = args.format
+
+    # Load workflow state
+    workflow_state = load_workflow_state(workflow_name)
+    if workflow_state is None:
+        print(f"Error: workflow '{workflow_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    if output_format == "json":
+        # JSON output
+        output = workflow_state.to_dict()
+        print(json.dumps(output, indent=2))
+    else:
+        # Text output
+        print(f"Workflow: {workflow_state.name}")
+        print(f"Status: {workflow_state.status}")
+
+        if workflow_state.current_stage:
+            print(f"Current: {workflow_state.current_stage}")
+
+        if workflow_state.scheduled_for:
+            try:
+                scheduled_str = time_until(workflow_state.scheduled_for)
+                print(f"Scheduled: {workflow_state.scheduled_for} ({scheduled_str})")
+            except (ValueError, TypeError):
+                print(f"Scheduled: {workflow_state.scheduled_for}")
+
+        if workflow_state.started_at:
+            try:
+                started_str = relative_time(workflow_state.started_at)
+                print(f"Started: {workflow_state.started_at} ({started_str} ago)")
+            except (ValueError, TypeError):
+                print(f"Started: {workflow_state.started_at}")
+
+        if workflow_state.completed_at:
+            try:
+                completed_str = relative_time(workflow_state.completed_at)
+                print(f"Completed: {workflow_state.completed_at} ({completed_str} ago)")
+            except (ValueError, TypeError):
+                print(f"Completed: {workflow_state.completed_at}")
+
+        print(f"Source: {workflow_state.workflow_file}")
+
+        # Print stages table
+        if workflow_state.stages:
+            print()
+            print("Stages:")
+            print(f"  {'Name':<20} {'Status':<12} {'Worker':<30} {'Attempts':<8} {'Exit Reason'}")
+            print(f"  {'-'*20} {'-'*12} {'-'*30} {'-'*8} {'-'*15}")
+
+            # Get stage order from workflow definition if available, otherwise use dict order
+            stage_names = list(workflow_state.stages.keys())
+
+            for stage_name in stage_names:
+                stage_state = workflow_state.stages[stage_name]
+                worker_name = stage_state.worker_name or "-"
+                attempts = str(stage_state.attempts) if stage_state.attempts > 0 else "-"
+                exit_reason = stage_state.exit_reason or "-"
+                print(f"  {stage_name:<20} {stage_state.status:<12} {worker_name:<30} {attempts:<8} {exit_reason}")
 
 
 def cmd_workflow_run(args) -> None:

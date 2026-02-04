@@ -5270,5 +5270,327 @@ class TestHandleWorkflowTransition(unittest.TestCase):
         mock_transition.assert_not_called()
 
 
+class TestCmdWorkflowStatus(unittest.TestCase):
+    """Test cmd_workflow_status function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "running",
+            "current_stage": "plan",
+            "current_stage_index": 0,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": None,
+            "stages": {
+                "plan": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                ),
+                "build": swarm.StageState(
+                    status="pending",
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def test_status_workflow_not_found(self):
+        """Test status for non-existent workflow."""
+        args = Namespace(
+            name="nonexistent",
+            format="text"
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_status(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_status_text_format_running(self):
+        """Test text format output for running workflow."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            format="text"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow: test-workflow", output)
+        self.assertIn("Status: running", output)
+        self.assertIn("Current: plan", output)
+        self.assertIn("Started: 2026-02-04T10:00:00+00:00", output)
+        self.assertIn("Source: /path/to/workflow.yaml", output)
+        self.assertIn("Stages:", output)
+        self.assertIn("plan", output)
+        self.assertIn("build", output)
+
+    def test_status_text_format_scheduled(self):
+        """Test text format output for scheduled workflow."""
+        # Use a future timestamp for scheduled_for
+        future_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        self._create_workflow_state(
+            "scheduled-workflow",
+            status="scheduled",
+            current_stage=None,
+            started_at=None,
+            scheduled_for=future_time,
+            stages={},
+        )
+
+        args = Namespace(
+            name="scheduled-workflow",
+            format="text"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow: scheduled-workflow", output)
+        self.assertIn("Status: scheduled", output)
+        self.assertIn("Scheduled:", output)
+
+    def test_status_text_format_completed(self):
+        """Test text format output for completed workflow."""
+        self._create_workflow_state(
+            "completed-workflow",
+            status="completed",
+            current_stage=None,
+            completed_at="2026-02-04T12:00:00+00:00",
+            stages={
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T11:00:00+00:00",
+                    worker_name="completed-workflow-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T11:00:00+00:00",
+                    completed_at="2026-02-04T12:00:00+00:00",
+                    worker_name="completed-workflow-build",
+                    attempts=2,
+                    exit_reason="done_pattern",
+                ),
+            },
+        )
+
+        args = Namespace(
+            name="completed-workflow",
+            format="text"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow: completed-workflow", output)
+        self.assertIn("Status: completed", output)
+        self.assertIn("Completed: 2026-02-04T12:00:00+00:00", output)
+        self.assertIn("done_pattern", output)
+
+    def test_status_json_format(self):
+        """Test JSON format output."""
+        self._create_workflow_state("json-workflow")
+
+        args = Namespace(
+            name="json-workflow",
+            format="json"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+
+        self.assertEqual(data["name"], "json-workflow")
+        self.assertEqual(data["status"], "running")
+        self.assertEqual(data["current_stage"], "plan")
+        self.assertIn("plan", data["stages"])
+        self.assertIn("build", data["stages"])
+        self.assertEqual(data["stages"]["plan"]["status"], "running")
+        self.assertEqual(data["stages"]["plan"]["worker_name"], "json-workflow-plan")
+
+    def test_status_json_format_complete_structure(self):
+        """Test JSON format contains all expected fields."""
+        self._create_workflow_state(
+            "full-json-workflow",
+            status="failed",
+            current_stage="build",
+            current_stage_index=1,
+            completed_at="2026-02-04T14:00:00+00:00",
+            stages={
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T11:00:00+00:00",
+                    worker_name="full-json-workflow-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="failed",
+                    started_at="2026-02-04T11:00:00+00:00",
+                    completed_at="2026-02-04T14:00:00+00:00",
+                    worker_name="full-json-workflow-build",
+                    attempts=3,
+                    exit_reason="error",
+                ),
+            },
+        )
+
+        args = Namespace(
+            name="full-json-workflow",
+            format="json"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+
+        # Check all top-level fields
+        self.assertIn("name", data)
+        self.assertIn("status", data)
+        self.assertIn("current_stage", data)
+        self.assertIn("current_stage_index", data)
+        self.assertIn("created_at", data)
+        self.assertIn("started_at", data)
+        self.assertIn("scheduled_for", data)
+        self.assertIn("completed_at", data)
+        self.assertIn("stages", data)
+        self.assertIn("workflow_file", data)
+        self.assertIn("workflow_hash", data)
+
+        # Check stage fields
+        build_stage = data["stages"]["build"]
+        self.assertEqual(build_stage["status"], "failed")
+        self.assertEqual(build_stage["attempts"], 3)
+        self.assertEqual(build_stage["exit_reason"], "error")
+
+    def test_status_stages_table_format(self):
+        """Test that stages are shown in table format."""
+        self._create_workflow_state(
+            "table-workflow",
+            stages={
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T11:00:00+00:00",
+                    worker_name="table-workflow-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T11:00:00+00:00",
+                    worker_name="table-workflow-build",
+                    attempts=1,
+                ),
+                "validate": swarm.StageState(
+                    status="pending",
+                ),
+            },
+        )
+
+        args = Namespace(
+            name="table-workflow",
+            format="text"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        # Check table headers
+        self.assertIn("Name", output)
+        self.assertIn("Status", output)
+        self.assertIn("Worker", output)
+        self.assertIn("Attempts", output)
+        self.assertIn("Exit Reason", output)
+
+        # Check stage data
+        self.assertIn("plan", output)
+        self.assertIn("completed", output)
+        self.assertIn("table-workflow-plan", output)
+
+        self.assertIn("build", output)
+        self.assertIn("running", output)
+        self.assertIn("table-workflow-build", output)
+
+        self.assertIn("validate", output)
+        self.assertIn("pending", output)
+
+    def test_status_no_stages(self):
+        """Test status with empty stages."""
+        self._create_workflow_state(
+            "empty-stages-workflow",
+            status="created",
+            current_stage=None,
+            started_at=None,
+            stages={},
+        )
+
+        args = Namespace(
+            name="empty-stages-workflow",
+            format="text"
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_status(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow: empty-stages-workflow", output)
+        self.assertIn("Status: created", output)
+        # Should not have stages table if no stages
+        self.assertNotIn("Stages:", output)
+
+
 if __name__ == "__main__":
     unittest.main()
