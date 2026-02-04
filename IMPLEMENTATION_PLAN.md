@@ -182,7 +182,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Check prompt files exist
   - Report all errors
 
-- [ ] **3.5 Implement `swarm workflow run`**
+- [x] **3.5 Implement `swarm workflow run`**
   - Parse --at (time)
   - Parse --in (duration)
   - Parse --name (override)

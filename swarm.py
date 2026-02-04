@@ -1476,6 +1476,75 @@ See Also:
   swarm workflow run --help    # Run a workflow
 """
 
+WORKFLOW_RUN_HELP_DESCRIPTION = """\
+Run a workflow from a YAML definition file.
+
+A workflow defines sequential stages that execute one after another.
+Each stage can be a 'worker' (single run agent) or 'ralph' (looping agent).
+Workflows support scheduling, heartbeats for rate limit recovery, and
+configurable failure handling.
+"""
+
+WORKFLOW_RUN_HELP_EPILOG = """\
+Scheduling:
+  # Run immediately (default)
+  swarm workflow run workflow.yaml
+
+  # Run at specific time (HH:MM, 24-hour format)
+  swarm workflow run workflow.yaml --at "02:00"
+
+  # Run after delay
+  swarm workflow run workflow.yaml --in "4h"
+
+  Note: --at schedules for the next occurrence of that time.
+  If 02:00 has passed today, it schedules for tomorrow at 02:00.
+
+Examples:
+  # Run workflow immediately
+  swarm workflow run ./build-feature.yaml
+
+  # Run overnight
+  swarm workflow run ./overnight-work.yaml --at "02:00"
+
+  # Run with custom name
+  swarm workflow run ./generic-build.yaml --name "auth-feature"
+
+  # Force overwrite existing workflow
+  swarm workflow run ./build.yaml --force
+
+Duration Format (for --in):
+  Accepts: "4h", "30m", "90s", "1h30m", or seconds as integer
+
+Workflow YAML Format:
+  See the full workflow YAML schema by creating a template:
+
+  name: my-workflow
+  stages:
+    - name: plan
+      type: worker
+      prompt: |
+        Create the plan. Say /done when finished.
+      done-pattern: "/done"
+      timeout: 1h
+
+  For complete YAML format documentation, see: specs/workflow.md
+
+Monitoring:
+  After starting a workflow:
+
+  swarm workflow status <name>    # Check progress
+  swarm workflow list             # List all workflows
+  swarm attach <workflow>-<stage> # Watch current stage
+  swarm workflow logs <name>      # View all logs
+
+Cancellation:
+  swarm workflow cancel <name>    # Stop the workflow
+
+See Also:
+  swarm workflow validate --help  # Validate YAML before running
+  swarm workflow status --help    # Check workflow progress
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -2697,6 +2766,63 @@ def parse_duration(duration_str: str) -> int:
     return total_seconds
 
 
+def parse_schedule_time(time_str: str) -> datetime:
+    """Parse a schedule time string into a datetime.
+
+    Accepts HH:MM format (24-hour). If the time has already passed today,
+    schedules for tomorrow at that time.
+
+    Args:
+        time_str: Time string in HH:MM format (e.g., "02:00", "14:30")
+
+    Returns:
+        datetime: The next occurrence of that time (today or tomorrow)
+
+    Raises:
+        ValueError: If time format is invalid
+    """
+    if not time_str:
+        raise ValueError("empty time string")
+
+    time_str = time_str.strip()
+
+    # Parse HH:MM format
+    import re
+    match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+    if not match:
+        raise ValueError(f"invalid time format '{time_str}' (use HH:MM)")
+
+    try:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+    except ValueError:
+        raise ValueError(f"invalid time format '{time_str}' (use HH:MM)")
+
+    if hour < 0 or hour > 23:
+        raise ValueError(f"invalid hour {hour} (must be 0-23)")
+    if minute < 0 or minute > 59:
+        raise ValueError(f"invalid minute {minute} (must be 0-59)")
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+
+    # Create time for today at the specified hour:minute (in UTC)
+    scheduled = datetime(
+        year=today.year,
+        month=today.month,
+        day=today.day,
+        hour=hour,
+        minute=minute,
+        tzinfo=timezone.utc
+    )
+
+    # If the time has passed today, schedule for tomorrow
+    if scheduled <= now:
+        scheduled = scheduled + timedelta(days=1)
+
+    return scheduled
+
+
 def get_ralph_state_path(worker_name: str) -> Path:
     """Get the path to a worker's ralph state file."""
     return RALPH_DIR / worker_name / "state.json"
@@ -3913,6 +4039,24 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     workflow_validate_p.add_argument("file", help="Path to workflow YAML file")
+
+    # workflow run
+    workflow_run_p = workflow_subparsers.add_parser(
+        "run",
+        help="Run a workflow from YAML file",
+        description=WORKFLOW_RUN_HELP_DESCRIPTION,
+        epilog=WORKFLOW_RUN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_run_p.add_argument("file", help="Path to workflow YAML file")
+    workflow_run_p.add_argument("--at", dest="at_time", metavar="TIME",
+                                help='Schedule start time (HH:MM, 24h format). Example: --at "02:00"')
+    workflow_run_p.add_argument("--in", dest="in_delay", metavar="DURATION",
+                                help='Schedule start delay. Example: --in "4h"')
+    workflow_run_p.add_argument("--name",
+                                help="Override workflow name from YAML")
+    workflow_run_p.add_argument("--force", action="store_true",
+                                help="Overwrite existing workflow with same name")
 
     args = parser.parse_args()
 
@@ -6312,7 +6456,7 @@ def cmd_workflow(args) -> None:
 
     Dispatches to workflow subcommands:
     - validate: Validate workflow YAML without running
-    - run: Run a workflow from YAML file (to be implemented)
+    - run: Run a workflow from YAML file
     - status: Show workflow status (to be implemented)
     - list: List all workflows (to be implemented)
     - cancel: Cancel a running workflow (to be implemented)
@@ -6321,6 +6465,8 @@ def cmd_workflow(args) -> None:
     """
     if args.workflow_command == "validate":
         cmd_workflow_validate(args)
+    elif args.workflow_command == "run":
+        cmd_workflow_run(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -6369,6 +6515,172 @@ def cmd_workflow_validate(args) -> None:
     stage_count = len(workflow.stages)
     stage_word = "stage" if stage_count == 1 else "stages"
     print(f"Workflow '{workflow.name}' is valid ({stage_count} {stage_word})")
+
+
+def cmd_workflow_run(args) -> None:
+    """Run a workflow from a YAML definition file.
+
+    Parses the workflow YAML, validates it, creates workflow state, and either
+    schedules the workflow for later or starts running immediately.
+
+    Args:
+        args: Namespace with run arguments:
+            - file: Path to workflow YAML file
+            - at_time: Optional schedule time (HH:MM format)
+            - in_delay: Optional schedule delay (duration string)
+            - name: Optional name override
+            - force: Whether to overwrite existing workflow
+
+    Exit codes:
+        0: Workflow started or scheduled successfully
+        1: Error (validation failed, duplicate name, etc.)
+    """
+    yaml_path = args.file
+
+    # Read the raw YAML content (needed for hashing)
+    try:
+        with open(yaml_path, 'r') as f:
+            yaml_content = f.read()
+    except FileNotFoundError:
+        print(f"Error: workflow file not found: {yaml_path}", file=sys.stderr)
+        sys.exit(1)
+    except IOError as e:
+        print(f"Error: cannot read workflow file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse and validate the YAML structure
+    try:
+        workflow_def = parse_workflow_yaml(yaml_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except WorkflowValidationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate that all prompt files exist
+    workflow_dir = Path(yaml_path).parent
+    prompt_errors = validate_workflow_prompt_files(workflow_def, workflow_dir)
+    if prompt_errors:
+        print("Validation errors:", file=sys.stderr)
+        for error in prompt_errors:
+            print(f"  - {error}", file=sys.stderr)
+        sys.exit(1)
+
+    # Apply name override if provided
+    workflow_name = args.name if args.name else workflow_def.name
+
+    # Check for duplicate workflow name (unless --force)
+    if workflow_exists(workflow_name) and not args.force:
+        print(f"Error: workflow '{workflow_name}' already exists (use --force to overwrite)", file=sys.stderr)
+        sys.exit(1)
+
+    # If --force and workflow exists, delete old state
+    if workflow_exists(workflow_name) and args.force:
+        delete_workflow_state(workflow_name)
+
+    # Validate --at and --in are mutually exclusive
+    if args.at_time and args.in_delay:
+        print("Error: cannot use both --at and --in (choose one scheduling option)", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse scheduling options
+    scheduled_for = None
+    schedule_source = None  # Track where scheduling came from
+
+    if args.at_time:
+        try:
+            scheduled_for = parse_schedule_time(args.at_time)
+            schedule_source = "at"
+        except ValueError as e:
+            print(f"Error: invalid time format '{args.at_time}' (use HH:MM)", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.in_delay:
+        try:
+            delay_seconds = parse_duration(args.in_delay)
+            scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            schedule_source = "in"
+        except ValueError as e:
+            print(f"Error: invalid duration '{args.in_delay}'", file=sys.stderr)
+            sys.exit(1)
+
+    # Check if workflow YAML has schedule/delay and no CLI override
+    elif workflow_def.schedule:
+        try:
+            scheduled_for = parse_schedule_time(workflow_def.schedule)
+            schedule_source = "yaml"
+        except ValueError as e:
+            print(f"Error: invalid schedule time in workflow: '{workflow_def.schedule}' (use HH:MM)", file=sys.stderr)
+            sys.exit(1)
+
+    elif workflow_def.delay:
+        try:
+            delay_seconds = parse_duration(workflow_def.delay)
+            scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            schedule_source = "yaml"
+        except ValueError as e:
+            print(f"Error: invalid delay in workflow: '{workflow_def.delay}'", file=sys.stderr)
+            sys.exit(1)
+
+    # Create workflow definition with potentially overridden name
+    if args.name:
+        # Create a copy with the new name
+        workflow_def = WorkflowDefinition(
+            name=workflow_name,
+            description=workflow_def.description,
+            schedule=workflow_def.schedule,
+            delay=workflow_def.delay,
+            heartbeat=workflow_def.heartbeat,
+            heartbeat_expire=workflow_def.heartbeat_expire,
+            heartbeat_message=workflow_def.heartbeat_message,
+            worktree=workflow_def.worktree,
+            cwd=workflow_def.cwd,
+            stages=workflow_def.stages,
+        )
+
+    # Create the workflow state
+    workflow_state = create_workflow_state(workflow_def, yaml_path, yaml_content)
+
+    # Handle scheduling
+    if scheduled_for:
+        workflow_state.status = "scheduled"
+        workflow_state.scheduled_for = scheduled_for.isoformat()
+        save_workflow_state(workflow_state)
+
+        # Format the time nicely for output
+        time_str = scheduled_for.strftime("%H:%M")
+        if schedule_source == "at":
+            # Show if it's tomorrow
+            now = datetime.now(timezone.utc)
+            if scheduled_for.date() > now.date():
+                time_str = f"{time_str} tomorrow"
+        elif schedule_source == "in":
+            time_str = f"in {args.in_delay}"
+
+        print(f"Workflow '{workflow_name}' scheduled for {time_str}")
+    else:
+        # Start immediately
+        workflow_state.status = "running"
+        workflow_state.started_at = datetime.now(timezone.utc).isoformat()
+
+        # Set up first stage
+        first_stage = workflow_def.stages[0]
+        workflow_state.current_stage = first_stage.name
+        workflow_state.current_stage_index = 0
+        workflow_state.stages[first_stage.name].status = "running"
+        workflow_state.stages[first_stage.name].started_at = workflow_state.started_at
+        workflow_state.stages[first_stage.name].attempts = 1
+        workflow_state.stages[first_stage.name].worker_name = f"{workflow_name}-{first_stage.name}"
+
+        save_workflow_state(workflow_state)
+
+        stage_count = len(workflow_def.stages)
+        print(f"Workflow '{workflow_name}' started (stage 1/{stage_count}: {first_stage.name})")
+
+        # Note: Actually spawning the worker is task 3.6 - for now we just
+        # set up the state. The actual spawn will be implemented later.
+        print(f"Note: Stage worker spawning not yet implemented (task 3.6)")
 
 
 if __name__ == "__main__":

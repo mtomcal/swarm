@@ -1992,5 +1992,918 @@ stages:
         self.assertIn('empty', result.stderr.lower())
 
 
+# ==============================================================================
+# Workflow Run Command Tests
+# ==============================================================================
+
+
+class TestCmdWorkflowRunDirect(unittest.TestCase):
+    """Test cmd_workflow_run function directly (for coverage)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_yaml(self, filename, content):
+        """Write YAML content to a file in the temp directory."""
+        path = Path(self.temp_dir) / filename
+        path.write_text(content)
+        return str(path)
+
+    def test_run_immediate_direct(self):
+        """Test running workflow immediately via direct call."""
+        yaml_path = self._write_yaml('direct.yaml', '''
+name: direct-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+        # Capture stdout
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+
+        output = captured.getvalue()
+        self.assertIn("started", output.lower())
+
+        # Verify state
+        state = swarm.load_workflow_state("direct-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "running")
+
+    def test_run_with_name_override_direct(self):
+        """Test running with --name override via direct call."""
+        yaml_path = self._write_yaml('name-override.yaml', '''
+name: original
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time=None,
+            in_delay=None,
+            name="custom-name",
+            force=False
+        )
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+
+        state = swarm.load_workflow_state("custom-name")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.name, "custom-name")
+
+    def test_run_scheduled_with_at_direct(self):
+        """Test running scheduled workflow with --at via direct call."""
+        yaml_path = self._write_yaml('at-schedule.yaml', '''
+name: at-scheduled
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time="02:00",
+            in_delay=None,
+            name=None,
+            force=False
+        )
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+
+        state = swarm.load_workflow_state("at-scheduled")
+        self.assertEqual(state.status, "scheduled")
+        self.assertIsNotNone(state.scheduled_for)
+
+    def test_run_scheduled_with_in_direct(self):
+        """Test running scheduled workflow with --in via direct call."""
+        yaml_path = self._write_yaml('in-schedule.yaml', '''
+name: in-scheduled
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time=None,
+            in_delay="4h",
+            name=None,
+            force=False
+        )
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+
+        state = swarm.load_workflow_state("in-scheduled")
+        self.assertEqual(state.status, "scheduled")
+
+    def test_run_file_not_found_direct(self):
+        """Test file not found error via direct call."""
+        args = Namespace(
+            file="/nonexistent/path.yaml",
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_duplicate_error_direct(self):
+        """Test duplicate workflow error via direct call."""
+        yaml_path = self._write_yaml('dup.yaml', '''
+name: duplicate
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        # First run
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        import io
+        with patch('sys.stdout', io.StringIO()):
+            swarm.cmd_workflow_run(args)
+
+        # Second run should fail
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_force_overwrite_direct(self):
+        """Test --force overwrites via direct call."""
+        yaml_path = self._write_yaml('force.yaml', '''
+name: force-test
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        import io
+        with patch('sys.stdout', io.StringIO()):
+            swarm.cmd_workflow_run(args)
+
+        # Second run with force
+        args.force = True
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+        self.assertIn("started", captured.getvalue().lower())
+
+    def test_run_at_in_mutually_exclusive_direct(self):
+        """Test --at and --in mutually exclusive via direct call."""
+        yaml_path = self._write_yaml('both.yaml', '''
+name: both-test
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time="02:00",
+            in_delay="4h",
+            name=None,
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_invalid_at_direct(self):
+        """Test invalid --at time via direct call."""
+        yaml_path = self._write_yaml('bad-at.yaml', '''
+name: bad-at-test
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time="invalid",
+            in_delay=None,
+            name=None,
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_invalid_in_direct(self):
+        """Test invalid --in duration via direct call."""
+        yaml_path = self._write_yaml('bad-in.yaml', '''
+name: bad-in-test
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(
+            file=yaml_path,
+            at_time=None,
+            in_delay="invalid",
+            name=None,
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_yaml_schedule_direct(self):
+        """Test workflow with schedule in YAML via direct call."""
+        yaml_path = self._write_yaml('yaml-sched.yaml', '''
+name: yaml-sched-test
+schedule: "03:00"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        import io
+        with patch('sys.stdout', io.StringIO()):
+            swarm.cmd_workflow_run(args)
+
+        state = swarm.load_workflow_state("yaml-sched-test")
+        self.assertEqual(state.status, "scheduled")
+
+    def test_run_yaml_delay_direct(self):
+        """Test workflow with delay in YAML via direct call."""
+        yaml_path = self._write_yaml('yaml-delay.yaml', '''
+name: yaml-delay-test
+delay: "2h"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        import io
+        with patch('sys.stdout', io.StringIO()):
+            swarm.cmd_workflow_run(args)
+
+        state = swarm.load_workflow_state("yaml-delay-test")
+        self.assertEqual(state.status, "scheduled")
+
+    def test_run_invalid_yaml_schedule_direct(self):
+        """Test workflow with invalid schedule in YAML via direct call."""
+        yaml_path = self._write_yaml('bad-yaml-sched.yaml', '''
+name: bad-yaml-sched-test
+schedule: "invalid"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_invalid_yaml_delay_direct(self):
+        """Test workflow with invalid delay in YAML via direct call."""
+        yaml_path = self._write_yaml('bad-yaml-delay.yaml', '''
+name: bad-yaml-delay-test
+delay: "invalid"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_validation_errors_direct(self):
+        """Test prompt file validation errors via direct call."""
+        yaml_path = self._write_yaml('prompt-errors.yaml', '''
+name: prompt-errors-test
+stages:
+  - name: work
+    type: worker
+    prompt-file: ./nonexistent.md
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_run(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_run_multi_stage_direct(self):
+        """Test multi-stage workflow via direct call."""
+        yaml_path = self._write_yaml('multi.yaml', '''
+name: multi-test
+stages:
+  - name: plan
+    type: worker
+    prompt: Plan
+  - name: build
+    type: ralph
+    prompt: Build
+    max-iterations: 10
+  - name: test
+    type: worker
+    prompt: Test
+''')
+        args = Namespace(file=yaml_path, at_time=None, in_delay=None, name=None, force=False)
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_run(args)
+
+        self.assertIn("stage 1/3", captured.getvalue())
+        state = swarm.load_workflow_state("multi-test")
+        self.assertEqual(len(state.stages), 3)
+        self.assertEqual(state.stages["plan"].status, "running")
+        self.assertEqual(state.stages["build"].status, "pending")
+        self.assertEqual(state.stages["test"].status, "pending")
+
+
+class TestParseScheduleTime(unittest.TestCase):
+    """Test parse_schedule_time function."""
+
+    def test_parse_valid_time(self):
+        """Test parsing valid HH:MM time."""
+        # We can't test exact datetime, but we can test format validation
+        result = swarm.parse_schedule_time("02:00")
+        self.assertIsInstance(result, datetime)
+        self.assertEqual(result.hour, 2)
+        self.assertEqual(result.minute, 0)
+
+    def test_parse_afternoon_time(self):
+        """Test parsing afternoon time."""
+        result = swarm.parse_schedule_time("14:30")
+        self.assertEqual(result.hour, 14)
+        self.assertEqual(result.minute, 30)
+
+    def test_parse_midnight(self):
+        """Test parsing midnight."""
+        result = swarm.parse_schedule_time("00:00")
+        self.assertEqual(result.hour, 0)
+        self.assertEqual(result.minute, 0)
+
+    def test_parse_end_of_day(self):
+        """Test parsing end of day time."""
+        result = swarm.parse_schedule_time("23:59")
+        self.assertEqual(result.hour, 23)
+        self.assertEqual(result.minute, 59)
+
+    def test_parse_single_digit_hour(self):
+        """Test parsing time with single digit hour."""
+        result = swarm.parse_schedule_time("2:00")
+        self.assertEqual(result.hour, 2)
+        self.assertEqual(result.minute, 0)
+
+    def test_error_invalid_format(self):
+        """Test error on invalid format."""
+        with self.assertRaises(ValueError) as ctx:
+            swarm.parse_schedule_time("2:00pm")
+        self.assertIn("invalid time format", str(ctx.exception))
+
+    def test_error_invalid_hour(self):
+        """Test error on invalid hour."""
+        with self.assertRaises(ValueError) as ctx:
+            swarm.parse_schedule_time("25:00")
+        self.assertIn("invalid hour", str(ctx.exception))
+
+    def test_error_invalid_minute(self):
+        """Test error on invalid minute."""
+        with self.assertRaises(ValueError) as ctx:
+            swarm.parse_schedule_time("12:60")
+        self.assertIn("invalid minute", str(ctx.exception))
+
+    def test_error_empty_string(self):
+        """Test error on empty string."""
+        with self.assertRaises(ValueError) as ctx:
+            swarm.parse_schedule_time("")
+        self.assertIn("empty time string", str(ctx.exception))
+
+    def test_error_no_colon(self):
+        """Test error on time without colon."""
+        with self.assertRaises(ValueError) as ctx:
+            swarm.parse_schedule_time("1400")
+        self.assertIn("invalid time format", str(ctx.exception))
+
+    def test_returns_future_time(self):
+        """Test that returned time is always in the future."""
+        result = swarm.parse_schedule_time("02:00")
+        now = datetime.now(timezone.utc)
+        self.assertGreater(result, now)
+
+
+class TestWorkflowRunSubparser(unittest.TestCase):
+    """Test that workflow run subparser is correctly configured."""
+
+    def test_workflow_run_subcommand_exists(self):
+        """Test that 'workflow run' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('run', result.stdout.lower())
+
+    def test_workflow_run_help_has_description(self):
+        """Test that workflow run help has description."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Run a workflow', result.stdout)
+
+    def test_workflow_run_help_has_scheduling_options(self):
+        """Test that workflow run help shows scheduling options."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--at', result.stdout)
+        self.assertIn('--in', result.stdout)
+        self.assertIn('--name', result.stdout)
+        self.assertIn('--force', result.stdout)
+
+    def test_workflow_run_help_has_examples(self):
+        """Test that workflow run help has examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Examples:', result.stdout)
+
+
+class TestWorkflowRunCommand(unittest.TestCase):
+    """Test workflow run command functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_yaml(self, filename, content):
+        """Write YAML content to a file in the temp directory."""
+        path = Path(self.temp_dir) / filename
+        path.write_text(content)
+        return str(path)
+
+    def test_run_valid_workflow_immediate(self):
+        """Test running a valid workflow immediately."""
+        yaml_path = self._write_yaml('valid.yaml', '''
+name: test-workflow
+stages:
+  - name: plan
+    type: worker
+    prompt: Create a plan
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("Workflow 'test-workflow' started", result.stdout)
+        self.assertIn("stage 1/1: plan", result.stdout)
+
+    def test_run_creates_workflow_state(self):
+        """Test that running creates workflow state."""
+        yaml_path = self._write_yaml('state-test.yaml', '''
+name: state-test-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        # Verify state was created
+        state = swarm.load_workflow_state("state-test-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.name, "state-test-workflow")
+        self.assertEqual(state.status, "running")
+        self.assertEqual(state.current_stage, "work")
+        self.assertEqual(state.current_stage_index, 0)
+
+    def test_run_with_name_override(self):
+        """Test running with --name override."""
+        yaml_path = self._write_yaml('override.yaml', '''
+name: original-name
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--name', 'custom-name'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("Workflow 'custom-name' started", result.stdout)
+
+        # Verify state uses custom name
+        state = swarm.load_workflow_state("custom-name")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.name, "custom-name")
+
+    def test_run_duplicate_name_error(self):
+        """Test error when workflow with same name exists."""
+        yaml_path = self._write_yaml('dup.yaml', '''
+name: duplicate-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        # First run
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        # Second run should fail
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("already exists", result.stderr)
+        self.assertIn("--force", result.stderr)
+
+    def test_run_with_force_overwrites(self):
+        """Test --force overwrites existing workflow."""
+        yaml_path = self._write_yaml('force.yaml', '''
+name: force-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        # First run
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        # Second run with --force should succeed
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--force'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("Workflow 'force-workflow' started", result.stdout)
+
+    def test_run_missing_file_error(self):
+        """Test error when file doesn't exist."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', '/nonexistent/path.yaml'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('not found', result.stderr.lower())
+
+    def test_run_validation_error(self):
+        """Test error when YAML is invalid."""
+        yaml_path = self._write_yaml('invalid.yaml', '''
+name: invalid-workflow
+stages: []
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('at least one stage', result.stderr)
+
+    def test_run_with_at_schedule(self):
+        """Test running with --at schedule."""
+        yaml_path = self._write_yaml('scheduled.yaml', '''
+name: scheduled-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("scheduled", result.stdout.lower())
+        self.assertIn("02:00", result.stdout)
+
+        # Verify state is scheduled
+        state = swarm.load_workflow_state("scheduled-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
+        self.assertIsNotNone(state.scheduled_for)
+
+    def test_run_with_in_schedule(self):
+        """Test running with --in delay."""
+        yaml_path = self._write_yaml('delayed.yaml', '''
+name: delayed-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--in', '4h'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("scheduled", result.stdout.lower())
+        self.assertIn("in 4h", result.stdout)
+
+        # Verify state is scheduled
+        state = swarm.load_workflow_state("delayed-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
+        self.assertIsNotNone(state.scheduled_for)
+
+    def test_run_at_and_in_mutually_exclusive(self):
+        """Test that --at and --in are mutually exclusive."""
+        yaml_path = self._write_yaml('both.yaml', '''
+name: both-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00', '--in', '4h'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('cannot use both', result.stderr)
+
+    def test_run_invalid_at_time_error(self):
+        """Test error on invalid --at time format."""
+        yaml_path = self._write_yaml('bad-time.yaml', '''
+name: bad-time-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', 'invalid'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('invalid time format', result.stderr)
+
+    def test_run_invalid_in_duration_error(self):
+        """Test error on invalid --in duration."""
+        yaml_path = self._write_yaml('bad-duration.yaml', '''
+name: bad-duration-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--in', 'invalid'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('invalid duration', result.stderr)
+
+    def test_run_with_yaml_schedule(self):
+        """Test running workflow that has schedule in YAML."""
+        yaml_path = self._write_yaml('yaml-scheduled.yaml', '''
+name: yaml-scheduled-workflow
+schedule: "03:00"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("scheduled", result.stdout.lower())
+
+        # Verify state is scheduled
+        state = swarm.load_workflow_state("yaml-scheduled-workflow")
+        self.assertEqual(state.status, "scheduled")
+
+    def test_run_with_yaml_delay(self):
+        """Test running workflow that has delay in YAML."""
+        yaml_path = self._write_yaml('yaml-delayed.yaml', '''
+name: yaml-delayed-workflow
+delay: "2h"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("scheduled", result.stdout.lower())
+
+        # Verify state is scheduled
+        state = swarm.load_workflow_state("yaml-delayed-workflow")
+        self.assertEqual(state.status, "scheduled")
+
+    def test_run_cli_schedule_overrides_yaml(self):
+        """Test that CLI --at overrides YAML schedule."""
+        yaml_path = self._write_yaml('override-schedule.yaml', '''
+name: override-schedule-workflow
+schedule: "05:00"
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        # Run with --at should use CLI time
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '08:00'],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("08:00", result.stdout)
+
+    def test_run_multi_stage_workflow(self):
+        """Test running workflow with multiple stages."""
+        yaml_path = self._write_yaml('multi-stage.yaml', '''
+name: multi-stage-workflow
+stages:
+  - name: plan
+    type: worker
+    prompt: Create plan
+  - name: build
+    type: ralph
+    prompt: Build it
+    max-iterations: 10
+  - name: validate
+    type: worker
+    prompt: Validate
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        self.assertIn("stage 1/3: plan", result.stdout)
+
+        # Verify state has all stages
+        state = swarm.load_workflow_state("multi-stage-workflow")
+        self.assertEqual(len(state.stages), 3)
+        self.assertEqual(state.stages["plan"].status, "running")
+        self.assertEqual(state.stages["build"].status, "pending")
+        self.assertEqual(state.stages["validate"].status, "pending")
+
+    def test_run_sets_worker_name(self):
+        """Test that running sets correct worker name for stage."""
+        yaml_path = self._write_yaml('worker-name.yaml', '''
+name: worker-name-test
+stages:
+  - name: my-stage
+    type: worker
+    prompt: Do work
+''')
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        state = swarm.load_workflow_state("worker-name-test")
+        self.assertEqual(state.stages["my-stage"].worker_name, "worker-name-test-my-stage")
+
+    def test_run_copies_yaml_file(self):
+        """Test that running copies the YAML file."""
+        yaml_path = self._write_yaml('copy-test.yaml', '''
+name: copy-test-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        # Verify YAML was copied
+        yaml_copy_path = swarm.get_workflow_yaml_copy_path("copy-test-workflow")
+        self.assertTrue(yaml_copy_path.exists())
+
+    def test_run_creates_logs_directory(self):
+        """Test that running creates logs directory."""
+        yaml_path = self._write_yaml('logs-test.yaml', '''
+name: logs-test-workflow
+stages:
+  - name: work
+    type: worker
+    prompt: Do work
+''')
+        subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'HOME': self.temp_dir}
+        )
+
+        # Verify logs directory was created
+        logs_dir = swarm.get_workflow_logs_dir("logs-test-workflow")
+        self.assertTrue(logs_dir.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
