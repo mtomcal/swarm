@@ -6197,5 +6197,431 @@ class TestCmdWorkflowCancel(unittest.TestCase):
             mock_kill.assert_called_with(12345, signal.SIGKILL)
 
 
+class TestCmdWorkflowResume(unittest.TestCase):
+    """Test cmd_workflow_resume function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_state_file = swarm.STATE_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        swarm.STATE_FILE = swarm.SWARM_DIR / "state.json"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "failed",
+            "current_stage": "build",
+            "current_stage_index": 1,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": "2026-02-04T11:00:00+00:00",
+            "stages": {
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T10:30:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="failed",
+                    started_at="2026-02-04T10:30:00+00:00",
+                    completed_at="2026-02-04T11:00:00+00:00",
+                    worker_name=f"{name}-build",
+                    attempts=1,
+                    exit_reason="error",
+                ),
+                "validate": swarm.StageState(
+                    status="pending",
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def _create_workflow_yaml(self, name):
+        """Create a workflow YAML file in the state directory."""
+        yaml_content = f"""name: {name}
+stages:
+  - name: plan
+    type: worker
+    prompt: "Plan the work"
+    done-pattern: "/done"
+    timeout: 1h
+  - name: build
+    type: worker
+    prompt: "Build the feature"
+    done-pattern: "/done"
+    timeout: 2h
+  - name: validate
+    type: worker
+    prompt: "Validate the work"
+    done-pattern: "/done"
+    timeout: 1h
+"""
+        yaml_path = swarm.get_workflow_yaml_copy_path(name)
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(yaml_path, "w") as f:
+            f.write(yaml_content)
+        return yaml_path
+
+    def test_resume_workflow_not_found(self):
+        """Test resume for non-existent workflow."""
+        args = Namespace(
+            name="nonexistent",
+            from_stage=None
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_running_workflow_fails(self):
+        """Test that resuming a running workflow fails."""
+        self._create_workflow_state(
+            "running-workflow",
+            status="running",
+        )
+        self._create_workflow_yaml("running-workflow")
+
+        args = Namespace(
+            name="running-workflow",
+            from_stage=None
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_completed_workflow_fails(self):
+        """Test that resuming a completed workflow fails."""
+        self._create_workflow_state(
+            "completed-workflow",
+            status="completed",
+        )
+        self._create_workflow_yaml("completed-workflow")
+
+        args = Namespace(
+            name="completed-workflow",
+            from_stage=None
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_scheduled_workflow_fails(self):
+        """Test that resuming a scheduled workflow fails."""
+        self._create_workflow_state(
+            "scheduled-workflow",
+            status="scheduled",
+        )
+        self._create_workflow_yaml("scheduled-workflow")
+
+        args = Namespace(
+            name="scheduled-workflow",
+            from_stage=None
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_failed_workflow_from_current_stage(self):
+        """Test resuming a failed workflow from the current stage."""
+        self._create_workflow_state("failed-workflow")
+        self._create_workflow_yaml("failed-workflow")
+
+        args = Namespace(
+            name="failed-workflow",
+            from_stage=None
+        )
+
+        # Mock spawn_workflow_stage and run_workflow_monitor
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "failed-workflow-build"
+                mock_spawn.return_value = mock_worker
+
+                import io
+                captured = io.StringIO()
+                with patch('sys.stdout', captured):
+                    swarm.cmd_workflow_resume(args)
+
+                output = captured.getvalue()
+                self.assertIn("Workflow 'failed-workflow' resumed from stage 'build'", output)
+                self.assertIn("Spawned worker 'failed-workflow-build'", output)
+
+        # Verify workflow state was updated
+        workflow_state = swarm.load_workflow_state("failed-workflow")
+        self.assertEqual(workflow_state.status, "running")
+        self.assertEqual(workflow_state.current_stage, "build")
+        self.assertIsNone(workflow_state.completed_at)
+
+        # Verify build stage was reset to running
+        build_stage = workflow_state.stages["build"]
+        self.assertEqual(build_stage.status, "running")
+        self.assertIsNotNone(build_stage.started_at)
+        self.assertEqual(build_stage.worker_name, "failed-workflow-build")
+        self.assertEqual(build_stage.attempts, 2)  # Incremented from 1
+
+        # Verify validate stage was reset to pending
+        validate_stage = workflow_state.stages["validate"]
+        self.assertEqual(validate_stage.status, "pending")
+        self.assertEqual(validate_stage.attempts, 0)
+
+        # Verify plan stage was NOT modified (completed before resume point)
+        plan_stage = workflow_state.stages["plan"]
+        self.assertEqual(plan_stage.status, "completed")
+
+    def test_resume_cancelled_workflow(self):
+        """Test resuming a cancelled workflow."""
+        self._create_workflow_state(
+            "cancelled-workflow",
+            status="cancelled",
+        )
+        self._create_workflow_yaml("cancelled-workflow")
+
+        args = Namespace(
+            name="cancelled-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "cancelled-workflow-build"
+                mock_spawn.return_value = mock_worker
+
+                import io
+                captured = io.StringIO()
+                with patch('sys.stdout', captured):
+                    swarm.cmd_workflow_resume(args)
+
+                output = captured.getvalue()
+                self.assertIn("resumed from stage 'build'", output)
+
+        # Verify workflow is now running
+        workflow_state = swarm.load_workflow_state("cancelled-workflow")
+        self.assertEqual(workflow_state.status, "running")
+
+    def test_resume_from_specific_stage(self):
+        """Test resuming from a specified stage."""
+        self._create_workflow_state("test-workflow")
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage="plan"  # Resume from the first stage
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "test-workflow-plan"
+                mock_spawn.return_value = mock_worker
+
+                import io
+                captured = io.StringIO()
+                with patch('sys.stdout', captured):
+                    swarm.cmd_workflow_resume(args)
+
+                output = captured.getvalue()
+                self.assertIn("resumed from stage 'plan'", output)
+
+        # Verify workflow state was updated
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertEqual(workflow_state.current_stage, "plan")
+        self.assertEqual(workflow_state.current_stage_index, 0)
+
+        # All stages should be reset
+        plan_stage = workflow_state.stages["plan"]
+        self.assertEqual(plan_stage.status, "running")
+
+        build_stage = workflow_state.stages["build"]
+        self.assertEqual(build_stage.status, "pending")
+
+        validate_stage = workflow_state.stages["validate"]
+        self.assertEqual(validate_stage.status, "pending")
+
+    def test_resume_from_invalid_stage_fails(self):
+        """Test that resuming from an invalid stage fails."""
+        self._create_workflow_state("test-workflow")
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage="nonexistent-stage"
+        )
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_missing_yaml_fails(self):
+        """Test that resuming without YAML file fails."""
+        self._create_workflow_state("test-workflow")
+        # Intentionally don't create the YAML file
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_resume(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_preserves_attempt_count_on_resume_stage(self):
+        """Test that attempt count is preserved and incremented on the resume stage."""
+        self._create_workflow_state(
+            "test-workflow",
+            stages={
+                "plan": swarm.StageState(
+                    status="completed",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="failed",
+                    attempts=3,  # Multiple previous attempts
+                    exit_reason="error",
+                ),
+                "validate": swarm.StageState(
+                    status="pending",
+                    attempts=0,
+                ),
+            },
+        )
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "test-workflow-build"
+                mock_spawn.return_value = mock_worker
+                swarm.cmd_workflow_resume(args)
+
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        build_stage = workflow_state.stages["build"]
+        self.assertEqual(build_stage.attempts, 4)  # 3 + 1
+
+    def test_resume_clears_completed_at(self):
+        """Test that completed_at is cleared when resuming."""
+        self._create_workflow_state(
+            "test-workflow",
+            completed_at="2026-02-04T12:00:00+00:00",
+        )
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "test-workflow-build"
+                mock_spawn.return_value = mock_worker
+                swarm.cmd_workflow_resume(args)
+
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertIsNone(workflow_state.completed_at)
+
+    def test_resume_calls_spawn_workflow_stage(self):
+        """Test that resume spawns the stage worker correctly."""
+        self._create_workflow_state("test-workflow")
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "test-workflow-build"
+                mock_spawn.return_value = mock_worker
+                swarm.cmd_workflow_resume(args)
+
+                # Verify spawn was called with correct arguments
+                mock_spawn.assert_called_once()
+                call_kwargs = mock_spawn.call_args[1]
+                self.assertEqual(call_kwargs['workflow_name'], "test-workflow")
+                self.assertEqual(call_kwargs['stage_def'].name, "build")
+
+    def test_resume_calls_workflow_monitor(self):
+        """Test that resume starts the workflow monitor."""
+        self._create_workflow_state("test-workflow")
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                mock_worker = MagicMock()
+                mock_worker.name = "test-workflow-build"
+                mock_spawn.return_value = mock_worker
+                swarm.cmd_workflow_resume(args)
+
+                # Verify monitor was called
+                mock_monitor.assert_called_once()
+                call_kwargs = mock_monitor.call_args[1]
+                self.assertEqual(call_kwargs['workflow_name'], "test-workflow")
+
+    def test_resume_spawn_failure_updates_state(self):
+        """Test that spawn failure updates workflow state to failed."""
+        self._create_workflow_state("test-workflow")
+        self._create_workflow_yaml("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            from_stage=None
+        )
+
+        with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+            mock_spawn.side_effect = RuntimeError("Spawn failed")
+
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_workflow_resume(args)
+            self.assertEqual(ctx.exception.code, 1)
+
+        # Verify workflow state was updated to failed
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertEqual(workflow_state.status, "failed")
+        self.assertEqual(workflow_state.stages["build"].status, "failed")
+        self.assertEqual(workflow_state.stages["build"].exit_reason, "error")
+
+
 if __name__ == "__main__":
     unittest.main()

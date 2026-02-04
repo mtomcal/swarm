@@ -228,7 +228,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Stop heartbeats
   - Set status to cancelled
 
-- [ ] **3.13 Implement `swarm workflow resume`**
+- [x] **3.13 Implement `swarm workflow resume`**
   - Parse --from (stage name)
   - Restart from failed/specified stage
   - Reset attempt counts if needed

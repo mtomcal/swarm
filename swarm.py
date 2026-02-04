@@ -1701,6 +1701,55 @@ See Also:
   swarm heartbeat stop --help     # Manually stop heartbeats
 """
 
+WORKFLOW_RESUME_HELP_DESCRIPTION = """\
+Resume a failed or cancelled workflow.
+
+Restarts a workflow that was previously cancelled or failed. By default,
+resumes from the stage where the workflow stopped. Use --from to restart
+from a specific stage (useful for skipping problematic stages or re-running
+earlier stages after fixing issues).
+"""
+
+WORKFLOW_RESUME_HELP_EPILOG = """\
+Resumable States:
+  - failed: Workflow stopped due to stage failure
+  - cancelled: Workflow was manually cancelled
+
+Options:
+  --from STAGE    Resume from a specific stage (resets that stage and all
+                  subsequent stages to pending). Without this flag, resumes
+                  from the failed/current stage.
+
+Examples:
+  # Resume from where it stopped
+  swarm workflow resume my-workflow
+
+  # Resume from a specific stage (skips earlier stages)
+  swarm workflow resume my-workflow --from validate
+
+  # Re-run the entire workflow from the beginning
+  swarm workflow resume my-workflow --from plan
+
+What Gets Reset:
+  When resuming, the specified stage and all subsequent stages are reset:
+  - Stage status set to 'pending'
+  - Attempt counts preserved (for retry tracking)
+  - Previous stage results are kept
+
+  Completed stages before the resume point are NOT re-run.
+
+Typical Workflow:
+  1. Workflow fails: swarm workflow status my-workflow
+  2. Fix the issue (code, prompts, etc.)
+  3. Resume: swarm workflow resume my-workflow
+  4. Or restart from specific stage: swarm workflow resume my-workflow --from build
+
+See Also:
+  swarm workflow status <name>    # Check failure details
+  swarm workflow cancel <name>    # Cancel a running workflow
+  swarm workflow run --force      # Start fresh (deletes old state)
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -4248,6 +4297,18 @@ def main() -> None:
     workflow_cancel_p.add_argument("name", help="Workflow name")
     workflow_cancel_p.add_argument("--force", action="store_true",
                                    help="Kill workers without graceful shutdown")
+
+    # workflow resume
+    workflow_resume_p = workflow_subparsers.add_parser(
+        "resume",
+        help="Resume a failed/cancelled workflow",
+        description=WORKFLOW_RESUME_HELP_DESCRIPTION,
+        epilog=WORKFLOW_RESUME_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_resume_p.add_argument("name", help="Workflow name")
+    workflow_resume_p.add_argument("--from", dest="from_stage", metavar="STAGE",
+                                   help="Resume from a specific stage")
 
     args = parser.parse_args()
 
@@ -7772,7 +7833,7 @@ def cmd_workflow(args) -> None:
     - status: Show workflow status
     - list: List all workflows
     - cancel: Cancel a running workflow
-    - resume: Resume a failed/paused workflow (to be implemented)
+    - resume: Resume a failed/cancelled workflow
     - logs: View workflow logs (to be implemented)
     """
     if args.workflow_command == "validate":
@@ -7785,6 +7846,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_list(args)
     elif args.workflow_command == "cancel":
         cmd_workflow_cancel(args)
+    elif args.workflow_command == "resume":
+        cmd_workflow_resume(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -8062,6 +8125,154 @@ def cmd_workflow_cancel(args) -> None:
     save_workflow_state(workflow_state)
 
     print(f"Workflow '{workflow_name}' cancelled")
+
+
+def cmd_workflow_resume(args) -> None:
+    """Resume a failed or cancelled workflow.
+
+    Restarts a workflow from the failed/current stage or from a specified
+    stage using the --from flag. Resets the resume stage and all subsequent
+    stages to pending before starting.
+
+    Args:
+        args: Namespace with resume arguments:
+            - name: Workflow name
+            - from_stage: Optional stage name to resume from
+
+    Exit codes:
+        0: Workflow resumed successfully
+        1: Workflow not found, not in resumable state, or invalid stage name
+    """
+    workflow_name = args.name
+    from_stage = args.from_stage
+
+    # Load workflow state
+    workflow_state = load_workflow_state(workflow_name)
+    if workflow_state is None:
+        print(f"Error: workflow '{workflow_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if workflow is in a resumable state
+    if workflow_state.status not in ("failed", "cancelled"):
+        print(f"Error: workflow '{workflow_name}' is not in a resumable state (status: {workflow_state.status})", file=sys.stderr)
+        print("Only 'failed' or 'cancelled' workflows can be resumed.", file=sys.stderr)
+        sys.exit(1)
+
+    # Load the workflow definition from the stored YAML copy
+    yaml_copy_path = get_workflow_yaml_copy_path(workflow_name)
+    if not yaml_copy_path.exists():
+        print(f"Error: workflow definition not found at {yaml_copy_path}", file=sys.stderr)
+        print("The workflow state exists but the YAML definition is missing.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        workflow_def = parse_workflow_yaml(str(yaml_copy_path))
+    except (FileNotFoundError, WorkflowValidationError) as e:
+        print(f"Error: failed to parse workflow definition: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Get the workflow directory (parent of the original workflow file)
+    if workflow_state.workflow_file:
+        workflow_dir = Path(workflow_state.workflow_file).parent
+    else:
+        workflow_dir = yaml_copy_path.parent
+
+    # Determine which stage to resume from
+    stage_names = [s.name for s in workflow_def.stages]
+
+    if from_stage:
+        # Validate the specified stage exists
+        if from_stage not in stage_names:
+            print(f"Error: stage '{from_stage}' not found in workflow", file=sys.stderr)
+            print(f"Available stages: {', '.join(stage_names)}", file=sys.stderr)
+            sys.exit(1)
+        resume_stage_name = from_stage
+        resume_stage_index = stage_names.index(from_stage)
+    else:
+        # Resume from the failed/current stage
+        if workflow_state.current_stage and workflow_state.current_stage in stage_names:
+            resume_stage_name = workflow_state.current_stage
+            resume_stage_index = stage_names.index(resume_stage_name)
+        else:
+            # Fallback: find the first non-completed stage
+            resume_stage_index = 0
+            for i, stage_name in enumerate(stage_names):
+                stage_state = workflow_state.stages.get(stage_name)
+                if stage_state is None or stage_state.status != "completed":
+                    resume_stage_index = i
+                    break
+            resume_stage_name = stage_names[resume_stage_index]
+
+    # Reset the resume stage and all subsequent stages to pending
+    for i in range(resume_stage_index, len(stage_names)):
+        stage_name = stage_names[i]
+        if stage_name in workflow_state.stages:
+            stage_state = workflow_state.stages[stage_name]
+            # Keep attempt count for retry tracking
+            old_attempts = stage_state.attempts
+            # Reset stage state
+            stage_state.status = "pending"
+            stage_state.started_at = None
+            stage_state.completed_at = None
+            stage_state.worker_name = None
+            stage_state.exit_reason = None
+            # Preserve attempts for the resume stage (for retry tracking)
+            if i == resume_stage_index:
+                stage_state.attempts = old_attempts
+            else:
+                stage_state.attempts = 0
+        else:
+            # Create new stage state
+            workflow_state.stages[stage_name] = StageState(status="pending")
+
+    # Update workflow state to running
+    now = datetime.now(timezone.utc).isoformat()
+    workflow_state.status = "running"
+    workflow_state.completed_at = None  # Clear completion time
+
+    # Update started_at only if this is the first run
+    if not workflow_state.started_at:
+        workflow_state.started_at = now
+
+    # Set up the resume stage
+    resume_stage_def = workflow_def.stages[resume_stage_index]
+    workflow_state.current_stage = resume_stage_name
+    workflow_state.current_stage_index = resume_stage_index
+    workflow_state.stages[resume_stage_name].status = "running"
+    workflow_state.stages[resume_stage_name].started_at = now
+    workflow_state.stages[resume_stage_name].attempts += 1
+    workflow_state.stages[resume_stage_name].worker_name = f"{workflow_name}-{resume_stage_name}"
+
+    save_workflow_state(workflow_state)
+
+    stage_count = len(workflow_def.stages)
+    print(f"Workflow '{workflow_name}' resumed from stage '{resume_stage_name}'")
+
+    # Spawn the resume stage worker
+    try:
+        worker = spawn_workflow_stage(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            stage_def=resume_stage_def,
+            workflow_dir=workflow_dir,
+        )
+        print(f"Spawned worker '{worker.name}' (stage {resume_stage_index + 1}/{stage_count})")
+    except RuntimeError as e:
+        # Failed to spawn worker - update workflow state
+        workflow_state.status = "failed"
+        workflow_state.stages[resume_stage_name].status = "failed"
+        workflow_state.stages[resume_stage_name].exit_reason = "error"
+        workflow_state.completed_at = now
+        save_workflow_state(workflow_state)
+        print(f"Error: failed to spawn stage worker: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Start monitor loop to manage workflow execution
+    run_workflow_monitor(
+        workflow_name=workflow_name,
+        workflow_def=workflow_def,
+        workflow_dir=workflow_dir,
+    )
 
 
 def cmd_workflow_run(args) -> None:
