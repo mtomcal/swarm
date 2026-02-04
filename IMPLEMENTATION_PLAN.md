@@ -136,19 +136,19 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Next beat time calculation
   - JSON output format support
 
-- [ ] **2.8 Implement `swarm heartbeat pause/resume`**
+- [x] **2.8 Implement `swarm heartbeat pause/resume`**
   - Set status to paused/active
 
-- [ ] **2.9 Add --heartbeat flag to spawn**
+- [x] **2.9 Add --heartbeat flag to spawn**
   - Parse --heartbeat (duration)
   - Parse --heartbeat-expire (duration)
   - Parse --heartbeat-message (string)
   - Auto-start heartbeat after spawn
 
-- [ ] **2.10 Add heartbeat cleanup on kill**
+- [x] **2.10 Add heartbeat cleanup on kill**
   - When worker killed, stop associated heartbeat
 
-- [ ] **2.11 Add comprehensive heartbeat help text**
+- [x] **2.11 Add comprehensive heartbeat help text**
   - Follow cli-help-standards.md
   - Include duration format docs
   - Include rate limit recovery explanation

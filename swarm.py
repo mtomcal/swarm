@@ -1111,6 +1111,9 @@ HEARTBEAT_HELP_EPILOG = """\
 Quick Reference:
   swarm heartbeat start builder --interval 4h --expire 24h
   swarm heartbeat list
+  swarm heartbeat status builder
+  swarm heartbeat pause builder
+  swarm heartbeat resume builder
   swarm heartbeat stop builder
 
 Common Patterns:
@@ -1122,6 +1125,15 @@ Common Patterns:
 
   # Attach heartbeat at spawn time (see: swarm spawn --heartbeat)
   swarm spawn --name agent --tmux --heartbeat 4h --heartbeat-expire 24h -- claude
+
+Duration Format:
+  Accepts: "4h", "30m", "90s", "3600" (seconds), or combinations "1h30m"
+  Examples: "4h" = 4 hours, "30m" = 30 minutes, "1h30m" = 90 minutes
+
+See Also:
+  swarm heartbeat start --help   # Detailed start options
+  swarm spawn --help             # --heartbeat flag for spawn-time setup
+  swarm send --help              # Manual intervention
 """
 
 HEARTBEAT_START_HELP_DESCRIPTION = """\
@@ -1150,6 +1162,9 @@ Examples:
   # No expiration (manual stop required)
   swarm heartbeat start builder --interval 4h
 
+  # Replace an existing heartbeat with new settings
+  swarm heartbeat start builder --interval 2h --expire 12h --force
+
 Rate Limit Recovery:
   API rate limits often renew on fixed intervals. Set --interval to match
   your rate limit renewal period. The heartbeat will nudge the agent at
@@ -1164,40 +1179,101 @@ Safety:
     - Expiration time is reached
     - Worker is killed
     - Manual stop via: swarm heartbeat stop <worker>
+
+Tips:
+  - Set --interval to match your API's rate limit renewal period
+  - Use --expire slightly longer than your expected work duration
+  - The message "continue" works well for most AI agents
+  - Check status with: swarm heartbeat status <worker>
+  - Monitor beats sent to confirm heartbeat is working
+
+See Also:
+  swarm spawn --help             # --heartbeat flag for spawn-time setup
+  swarm heartbeat status --help  # Check heartbeat state
+  swarm heartbeat pause --help   # Temporarily pause beats
+"""
+
+HEARTBEAT_STOP_HELP_DESCRIPTION = """\
+Stop heartbeat for a worker permanently.
+
+Terminates the heartbeat monitor and sets status to "stopped".
+Unlike pause, stopped heartbeats cannot be resumed.
 """
 
 HEARTBEAT_STOP_HELP_EPILOG = """\
-Stop heartbeat for a worker.
+The heartbeat state file is preserved for inspection. If the heartbeat
+was already stopped, expired, or doesn't exist, this command is a no-op.
 
 Examples:
+  # Stop heartbeat for a specific worker
   swarm heartbeat stop builder
+
+  # Clean up after worker is killed (usually automatic)
+  swarm kill myworker
+  swarm heartbeat stop myworker
+
+  # Stop after work is complete
+  swarm wait myworker && swarm heartbeat stop myworker
+
+Tips:
+  - Heartbeats auto-stop when their worker is killed
+  - Use pause instead if you might want to resume later
+  - State file is preserved at ~/.swarm/heartbeats/<worker>.json
+
+See Also:
+  swarm heartbeat list --help      # Find active heartbeats
+  swarm heartbeat pause --help     # Pause without stopping
+"""
+
+HEARTBEAT_LIST_HELP_DESCRIPTION = """\
+List all heartbeats and their current status.
+
+Shows a table with all configured heartbeats, including active, paused,
+expired, and stopped heartbeats. Use --format json for scripting.
 """
 
 HEARTBEAT_LIST_HELP_EPILOG = """\
-List all active heartbeats with their status.
-
-Output includes:
-  - Worker name
-  - Interval between beats
-  - Time until next beat
-  - Expiration time
-  - Current status (active/paused/expired/stopped)
-  - Number of beats sent
+Output Columns:
+  WORKER     Worker name
+  INTERVAL   Time between beats
+  NEXT BEAT  Time until next beat (or status if not active)
+  EXPIRES    Expiration time (or "never")
+  STATUS     active/paused/expired/stopped
+  BEATS      Number of beats sent
 
 Examples:
-  swarm heartbeat list                   # Table view
-  swarm heartbeat list --format json     # JSON for scripting
+  # Show all heartbeats in table format
+  swarm heartbeat list
+
+  # Get JSON output for scripting
+  swarm heartbeat list --format json
+
+  # Count active heartbeats
+  swarm heartbeat list --format json | jq '[.[] | select(.status == "active")] | length'
+
+See Also:
+  swarm heartbeat status --help  # Detailed status for one heartbeat
+  swarm heartbeat start --help   # Start a new heartbeat
+"""
+
+HEARTBEAT_STATUS_HELP_DESCRIPTION = """\
+Show detailed status for a single heartbeat.
+
+Displays comprehensive information about a heartbeat's configuration,
+timing, and activity. Useful for monitoring and debugging.
 """
 
 HEARTBEAT_STATUS_HELP_EPILOG = """\
-Show detailed status for a single heartbeat.
-
-Displays comprehensive information including:
-  - Current status (active, paused, expired, stopped)
-  - Interval and message configuration
-  - Created time and expiration
-  - Last beat time and next scheduled beat
-  - Total beat count
+Output Fields:
+  Status        active/paused/expired/stopped
+  Worker        Target worker name
+  Interval      Time between beats
+  Message       Message sent on each beat
+  Created       When heartbeat was started
+  Expires       When heartbeat will expire (or "never")
+  Last beat     When last beat was sent
+  Next beat     When next beat is scheduled
+  Beat count    Total number of beats sent
 
 Output Formats:
   text (default)    Human-readable key-value pairs
@@ -1212,25 +1288,75 @@ Examples:
 
   # Check when next beat will occur
   swarm heartbeat status builder | grep "Next beat"
+
+  # Verify heartbeat is active
+  swarm heartbeat status builder --format json | jq -r '.status'
+
+See Also:
+  swarm heartbeat list --help    # List all heartbeats
+  swarm heartbeat pause --help   # Pause a heartbeat
+"""
+
+HEARTBEAT_PAUSE_HELP_DESCRIPTION = """\
+Pause heartbeat temporarily without stopping it.
+
+The heartbeat configuration is preserved but beats stop being sent.
+This is useful when you need to interact with a worker manually
+without heartbeat interference, then resume later.
 """
 
 HEARTBEAT_PAUSE_HELP_EPILOG = """\
-Pause heartbeat temporarily.
-
-The heartbeat remains configured but stops sending beats until resumed.
-Use 'swarm heartbeat resume <worker>' to continue.
-
 Examples:
+  # Pause heartbeat while debugging
   swarm heartbeat pause builder
+
+  # Pause, interact manually, then resume
+  swarm heartbeat pause builder
+  swarm send builder "let me check something"
+  # ... do manual work ...
+  swarm heartbeat resume builder
+
+  # Pause all heartbeats for maintenance
+  swarm heartbeat list --format json | jq -r '.[].worker_name' | \\
+    xargs -I{} swarm heartbeat pause {}
+
+Tips:
+  - Paused heartbeats don't count against expiration time
+  - Use 'swarm heartbeat status <worker>' to check if paused
+  - Prefer pause over stop when you want to resume later
+
+See Also:
+  swarm heartbeat resume --help  # Resume paused heartbeat
+  swarm heartbeat stop --help    # Permanently stop heartbeat
+"""
+
+HEARTBEAT_RESUME_HELP_DESCRIPTION = """\
+Resume a paused heartbeat.
+
+Continues sending beats at the configured interval. The next beat
+will be scheduled based on the interval from when resume is called.
 """
 
 HEARTBEAT_RESUME_HELP_EPILOG = """\
-Resume a paused heartbeat.
-
-Continues sending beats at the configured interval.
-
 Examples:
+  # Resume a paused heartbeat
   swarm heartbeat resume builder
+
+  # Check status then resume
+  swarm heartbeat status builder   # Verify it's paused
+  swarm heartbeat resume builder
+
+  # Resume and verify
+  swarm heartbeat resume builder && swarm heartbeat status builder
+
+Tips:
+  - Only works on paused heartbeats (not stopped or expired)
+  - The next beat is scheduled immediately from resume time
+  - Check status first if unsure: swarm heartbeat status <worker>
+
+See Also:
+  swarm heartbeat pause --help   # Pause a heartbeat
+  swarm heartbeat start --help   # Start a new heartbeat
 """
 
 
@@ -2512,6 +2638,19 @@ def main() -> None:
                         help="Timeout in seconds for --ready-wait. Default: 120 "
                              "(suitable for Claude Code startup). Worker created "
                              "regardless of timeout, but warning printed.")
+    spawn_p.add_argument("--heartbeat",
+                        help="Start heartbeat after spawn with this interval. "
+                             "Sends periodic nudges to help agent recover from "
+                             "rate limits. Format: '4h', '30m', '3600s'. "
+                             "Requires --tmux.")
+    spawn_p.add_argument("--heartbeat-expire",
+                        help="Stop heartbeat after this duration. Default: no "
+                             "expiration. Recommended for unattended work to "
+                             "prevent infinite nudging. Format: '24h', '8h'.")
+    spawn_p.add_argument("--heartbeat-message", default="continue",
+                        help="Message to send on each heartbeat. Default: "
+                             "'continue'. Use a custom message to prompt "
+                             "specific recovery behavior.")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to execute. Place after '--' separator. "
                              "Example: -- claude")
@@ -2887,6 +3026,7 @@ def main() -> None:
     heartbeat_stop_p = heartbeat_subparsers.add_parser(
         "stop",
         help="Stop heartbeat for a worker",
+        description=HEARTBEAT_STOP_HELP_DESCRIPTION,
         epilog=HEARTBEAT_STOP_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2896,6 +3036,7 @@ def main() -> None:
     heartbeat_list_p = heartbeat_subparsers.add_parser(
         "list",
         help="List all heartbeats",
+        description=HEARTBEAT_LIST_HELP_DESCRIPTION,
         epilog=HEARTBEAT_LIST_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2906,6 +3047,7 @@ def main() -> None:
     heartbeat_status_p = heartbeat_subparsers.add_parser(
         "status",
         help="Show heartbeat status",
+        description=HEARTBEAT_STATUS_HELP_DESCRIPTION,
         epilog=HEARTBEAT_STATUS_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2917,6 +3059,7 @@ def main() -> None:
     heartbeat_pause_p = heartbeat_subparsers.add_parser(
         "pause",
         help="Pause heartbeat temporarily",
+        description=HEARTBEAT_PAUSE_HELP_DESCRIPTION,
         epilog=HEARTBEAT_PAUSE_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2926,6 +3069,7 @@ def main() -> None:
     heartbeat_resume_p = heartbeat_subparsers.add_parser(
         "resume",
         help="Resume paused heartbeat",
+        description=HEARTBEAT_RESUME_HELP_DESCRIPTION,
         epilog=HEARTBEAT_RESUME_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -3091,6 +3235,65 @@ def cmd_spawn(args) -> None:
         print(f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
     else:
         print(f"spawned {args.name} (pid: {pid})")
+
+    # Start heartbeat if requested
+    if getattr(args, 'heartbeat', None):
+        if not tmux_info:
+            print(f"swarm: warning: --heartbeat requires --tmux, skipping heartbeat", file=sys.stderr)
+        else:
+            # Parse and validate heartbeat interval
+            try:
+                interval_seconds = parse_duration(args.heartbeat)
+            except ValueError:
+                print(f"swarm: error: invalid heartbeat interval '{args.heartbeat}'", file=sys.stderr)
+                sys.exit(1)
+
+            # Warn if interval is very short
+            if interval_seconds < 60:
+                print(f"swarm: warning: very short heartbeat interval ({args.heartbeat}), consider using at least 1m", file=sys.stderr)
+
+            # Parse expiration
+            expire_at = None
+            if args.heartbeat_expire:
+                try:
+                    expire_seconds = parse_duration(args.heartbeat_expire)
+                    expire_at = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
+                    expire_at = expire_at.isoformat()
+                except ValueError:
+                    print(f"swarm: error: invalid heartbeat-expire '{args.heartbeat_expire}'", file=sys.stderr)
+                    sys.exit(1)
+
+            # Create heartbeat state
+            now = datetime.now(timezone.utc).isoformat()
+            heartbeat_state = HeartbeatState(
+                worker_name=args.name,
+                interval_seconds=interval_seconds,
+                message=args.heartbeat_message,
+                expire_at=expire_at,
+                created_at=now,
+                last_beat_at=None,
+                beat_count=0,
+                status="active",
+                monitor_pid=None,
+            )
+
+            # Save heartbeat state
+            save_heartbeat_state(heartbeat_state)
+
+            # Start background monitor process
+            monitor_pid = start_heartbeat_monitor(args.name)
+
+            # Update state with monitor PID
+            heartbeat_state.monitor_pid = monitor_pid
+            save_heartbeat_state(heartbeat_state)
+
+            # Print heartbeat confirmation
+            interval_str = format_duration(interval_seconds)
+            if expire_at:
+                expire_str = format_duration(parse_duration(args.heartbeat_expire))
+                print(f"heartbeat started (every {interval_str}, expires in {expire_str})")
+            else:
+                print(f"heartbeat started (every {interval_str}, no expiration)")
 
 
 def cmd_ls(args) -> None:
@@ -3534,6 +3737,14 @@ def cmd_kill(args) -> None:
                 total_iterations=ralph_state.current_iteration,
                 reason="killed"
             )
+
+        # Stop heartbeat if active for this worker
+        heartbeat_state = load_heartbeat_state(worker.name)
+        if heartbeat_state and heartbeat_state.status in ("active", "paused"):
+            stop_heartbeat_monitor(heartbeat_state)
+            heartbeat_state.status = "stopped"
+            heartbeat_state.monitor_pid = None
+            save_heartbeat_state(heartbeat_state)
 
         print(f"killed {worker.name}")
 

@@ -567,5 +567,238 @@ class TestCmdSpawn(unittest.TestCase):
                     self.assertIn("did not become ready", output)
 
 
+class TestSpawnWithHeartbeat(unittest.TestCase):
+    """Test spawn command with --heartbeat flag."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.swarm_dir = Path(self.temp_dir) / ".swarm"
+        self.logs_dir = self.swarm_dir / "logs"
+        self.state_file = self.swarm_dir / "state.json"
+        self.heartbeats_dir = self.swarm_dir / "heartbeats"
+
+        # Patch constants
+        self.patcher_swarm_dir = patch.object(swarm, 'SWARM_DIR', self.swarm_dir)
+        self.patcher_state_file = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.patcher_logs_dir = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+        self.patcher_heartbeats_dir = patch.object(swarm, 'HEARTBEATS_DIR', self.heartbeats_dir)
+        self.patcher_swarm_dir.start()
+        self.patcher_state_file.start()
+        self.patcher_logs_dir.start()
+        self.patcher_heartbeats_dir.start()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.patcher_swarm_dir.stop()
+        self.patcher_state_file.stop()
+        self.patcher_logs_dir.stop()
+        self.patcher_heartbeats_dir.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_spawn_with_heartbeat_tmux(self):
+        """Test spawning with --heartbeat flag and tmux."""
+        args = Namespace(
+            name="hb-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="4h",
+            heartbeat_expire="24h",
+            heartbeat_message="continue"
+        )
+
+        with patch('swarm.create_tmux_window') as mock_tmux:
+            with patch('swarm.start_heartbeat_monitor', return_value=9999) as mock_hb_monitor:
+                with patch('builtins.print') as mock_print:
+                    swarm.cmd_spawn(args)
+
+                    # Verify heartbeat monitor was started
+                    mock_hb_monitor.assert_called_once_with("hb-worker")
+
+                    # Verify heartbeat state was saved
+                    hb_file = self.heartbeats_dir / "hb-worker.json"
+                    self.assertTrue(hb_file.exists())
+                    with open(hb_file) as f:
+                        hb_state = json.load(f)
+                        self.assertEqual(hb_state["worker_name"], "hb-worker")
+                        self.assertEqual(hb_state["interval_seconds"], 14400)  # 4h
+                        self.assertEqual(hb_state["message"], "continue")
+                        self.assertEqual(hb_state["status"], "active")
+                        self.assertEqual(hb_state["monitor_pid"], 9999)
+                        self.assertIsNotNone(hb_state["expire_at"])
+
+    def test_spawn_heartbeat_without_tmux_warning(self):
+        """Test that --heartbeat without --tmux shows warning."""
+        from io import StringIO
+
+        args = Namespace(
+            name="no-tmux-worker",
+            cmd=["--", "echo", "hello"],
+            tmux=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="4h",
+            heartbeat_expire=None,
+            heartbeat_message="continue"
+        )
+
+        stderr_output = StringIO()
+
+        with patch('swarm.spawn_process', return_value=12345):
+            with patch('builtins.print', side_effect=lambda *args, **kwargs:
+                       stderr_output.write(args[0] + '\n') if kwargs.get('file') else None):
+                swarm.cmd_spawn(args)
+
+                # Verify warning was printed
+                output = stderr_output.getvalue()
+                self.assertIn("--heartbeat requires --tmux", output)
+
+    def test_spawn_heartbeat_short_interval_warning(self):
+        """Test warning for very short heartbeat interval."""
+        from io import StringIO
+
+        args = Namespace(
+            name="short-hb-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="30s",  # Very short
+            heartbeat_expire=None,
+            heartbeat_message="continue"
+        )
+
+        stderr_output = StringIO()
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.start_heartbeat_monitor', return_value=9999):
+                with patch('builtins.print', side_effect=lambda *args, **kwargs:
+                           stderr_output.write(args[0] + '\n') if kwargs.get('file') else None):
+                    swarm.cmd_spawn(args)
+
+                    # Verify warning was printed
+                    output = stderr_output.getvalue()
+                    self.assertIn("very short heartbeat interval", output)
+
+    def test_spawn_heartbeat_invalid_interval(self):
+        """Test error for invalid heartbeat interval."""
+        args = Namespace(
+            name="invalid-hb-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="invalid",
+            heartbeat_expire=None,
+            heartbeat_message="continue"
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with self.assertRaises(SystemExit) as cm:
+                swarm.cmd_spawn(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_heartbeat_invalid_expire(self):
+        """Test error for invalid heartbeat expiration."""
+        args = Namespace(
+            name="invalid-expire-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="4h",
+            heartbeat_expire="invalid",
+            heartbeat_message="continue"
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with self.assertRaises(SystemExit) as cm:
+                swarm.cmd_spawn(args)
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_spawn_heartbeat_no_expiration(self):
+        """Test spawning with heartbeat but no expiration."""
+        args = Namespace(
+            name="no-expire-worker",
+            cmd=["--", "bash"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+            heartbeat="4h",
+            heartbeat_expire=None,
+            heartbeat_message="ping"
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.start_heartbeat_monitor', return_value=8888):
+                with patch('builtins.print') as mock_print:
+                    swarm.cmd_spawn(args)
+
+                    # Verify heartbeat state was saved without expiration
+                    hb_file = self.heartbeats_dir / "no-expire-worker.json"
+                    self.assertTrue(hb_file.exists())
+                    with open(hb_file) as f:
+                        hb_state = json.load(f)
+                        self.assertIsNone(hb_state["expire_at"])
+                        self.assertEqual(hb_state["message"], "ping")
+
+                    # Check output mentions no expiration
+                    calls = [str(call) for call in mock_print.call_args_list]
+                    heartbeat_msg = [c for c in calls if "heartbeat started" in c]
+                    self.assertTrue(len(heartbeat_msg) > 0)
+                    self.assertIn("no expiration", str(heartbeat_msg))
+
+
 if __name__ == "__main__":
     unittest.main()
