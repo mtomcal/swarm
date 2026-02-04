@@ -75,7 +75,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add "Warnings" section
   - Add examples with filters
 
-- [ ] **1.10 Enhance `swarm respawn --help`**
+- [x] **1.10 Enhance `swarm respawn --help`**
   - Add description of what's preserved
   - Add examples showing different scenarios
 

@@ -638,6 +638,82 @@ See Also:
   swarm ls --help        List all workers and their states
 """
 
+# Respawn command help
+RESPAWN_HELP_DESCRIPTION = """\
+Restart a stopped or dead worker using its original configuration.
+
+Re-spawns a worker preserving its original command, environment variables, tags,
+working directory, and worktree settings. If the worker is still running, it will
+be killed first. Useful for recovering crashed workers or restarting completed
+workers for additional iterations.
+
+What Gets Preserved:
+  - Full command with all arguments
+  - Environment variables (--env values from original spawn)
+  - Tags (--tag values from original spawn)
+  - Tmux session (new window created in same session)
+  - Worktree configuration (path, branch, base repo)
+
+What Gets Reset:
+  - Worker status (set to "running")
+  - Started timestamp (current time)
+  - Process ID (new PID assigned)
+"""
+
+RESPAWN_HELP_EPILOG = """\
+Examples:
+  # Respawn a stopped worker with original configuration
+  swarm respawn my-worker
+
+  # Respawn and recreate worktree from scratch (fresh checkout)
+  swarm respawn feature-auth --clean-first
+
+  # Force recreate worktree even with uncommitted changes (DATA LOSS!)
+  swarm respawn dirty-worker --clean-first --force-dirty
+
+Common Patterns:
+  Restart a crashed agent:
+    swarm status my-worker        # Check if really stopped
+    swarm respawn my-worker       # Restart with original config
+
+  Fresh restart with clean worktree:
+    swarm respawn feature-auth --clean-first
+
+  Iterate on a task (multiple runs with same config):
+    # First run
+    swarm spawn --name task-worker --tmux --worktree -- claude
+    # ... worker completes or crashes ...
+    # Restart for another iteration
+    swarm respawn task-worker
+
+Worktree Behavior:
+  - Without --clean-first: Reuses existing worktree (preserves local changes)
+  - With --clean-first: Removes and recreates worktree (fresh checkout)
+  - If worktree was deleted: Automatically recreated at original path
+
+Warnings:
+  - --force-dirty will DELETE UNCOMMITTED CHANGES permanently
+  - If worker is running, it will be killed before respawn
+  - Original worker is removed from state before new one is created
+  - If respawn fails midway, worker may be removed from state
+
+Recovery Commands:
+  # If respawn fails, re-spawn manually:
+  swarm spawn --name <name> --tmux --worktree -- <original-command>
+
+  # Check worktree status if unsure about changes:
+  cd /path/to/worktree && git status
+
+  # List all worktrees to find paths:
+  git worktree list
+
+See Also:
+  swarm spawn --help     Create new workers
+  swarm kill --help      Stop running workers
+  swarm clean --help     Remove stopped workers from state
+  swarm status --help    Check worker details before respawn
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1800,12 +1876,27 @@ def main() -> None:
                              "with a warning. Cannot be combined with a worker name.")
 
     # respawn
-    respawn_p = subparsers.add_parser("respawn", help="Respawn a dead worker")
-    respawn_p.add_argument("name", help="Worker name")
+    respawn_p = subparsers.add_parser(
+        "respawn",
+        help="Restart a stopped worker with original config",
+        description=RESPAWN_HELP_DESCRIPTION,
+        epilog=RESPAWN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    respawn_p.add_argument("name",
+                          help="Worker name to respawn. Must exist in swarm state. "
+                               "Worker can be stopped or running (running workers "
+                               "are killed first).")
     respawn_p.add_argument("--clean-first", action="store_true",
-                          help="Run clean before respawn")
+                          help="Remove existing worktree before respawning for a fresh "
+                               "checkout. Default: false (reuse existing worktree). "
+                               "Fails if worktree has uncommitted changes unless "
+                               "--force-dirty is also specified.")
     respawn_p.add_argument("--force-dirty", action="store_true",
-                          help="Force removal of worktree even with uncommitted changes")
+                          help="Force removal of worktree even with uncommitted changes. "
+                               "Requires --clean-first. WARNING: This permanently deletes "
+                               "uncommitted work! Only use when you're sure changes are "
+                               "not needed.")
 
     # init
     init_p = subparsers.add_parser("init", help="Initialize swarm in project")
