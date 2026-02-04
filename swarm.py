@@ -27,6 +27,7 @@ STATE_FILE = SWARM_DIR / "state.json"
 STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"
 RALPH_DIR = SWARM_DIR / "ralph"  # Ralph loop state directory
+HEARTBEATS_DIR = SWARM_DIR / "heartbeats"  # Heartbeat state directory
 
 # Agent instructions template for AGENTS.md/CLAUDE.md injection
 # Marker string 'Process Management (swarm)' used for idempotent detection
@@ -1213,6 +1214,50 @@ class RalphState:
             done_pattern=d.get("done_pattern"),
             inactivity_timeout=d.get("inactivity_timeout", 60),
             check_done_continuous=d.get("check_done_continuous", False),
+        )
+
+
+@dataclass
+class HeartbeatState:
+    """Heartbeat state for periodic nudges to a worker.
+
+    Heartbeat sends messages to workers on a schedule to help them recover
+    from API rate limits or other blocking states.
+    """
+    worker_name: str
+    interval_seconds: int
+    message: str = "continue"
+    expire_at: Optional[str] = None  # ISO 8601 timestamp, None = no expiration
+    created_at: str = ""  # ISO 8601 timestamp
+    last_beat_at: Optional[str] = None  # ISO 8601 timestamp of last beat, None if no beats yet
+    beat_count: int = 0
+    status: str = "active"  # active, paused, expired, stopped
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "worker_name": self.worker_name,
+            "interval_seconds": self.interval_seconds,
+            "message": self.message,
+            "expire_at": self.expire_at,
+            "created_at": self.created_at,
+            "last_beat_at": self.last_beat_at,
+            "beat_count": self.beat_count,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HeartbeatState":
+        """Create HeartbeatState from dictionary."""
+        return cls(
+            worker_name=d["worker_name"],
+            interval_seconds=d["interval_seconds"],
+            message=d.get("message", "continue"),
+            expire_at=d.get("expire_at"),
+            created_at=d.get("created_at", ""),
+            last_beat_at=d.get("last_beat_at"),
+            beat_count=d.get("beat_count", 0),
+            status=d.get("status", "active"),
         )
 
 

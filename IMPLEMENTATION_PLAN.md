@@ -98,7 +98,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 ### Phase 2: Heartbeat Implementation
 
-- [ ] **2.1 Add HeartbeatState dataclass**
+- [x] **2.1 Add HeartbeatState dataclass**
   - Fields: worker_name, interval_seconds, expire_at, message, created_at, last_beat_at, beat_count, status
   - Add to data-structures section of swarm.py
 
