@@ -79,7 +79,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of what's preserved
   - Add examples showing different scenarios
 
-- [ ] **1.11 Enhance `swarm interrupt --help`**
+- [x] **1.11 Enhance `swarm interrupt --help`**
   - Add description of Ctrl-C behavior
   - Add examples and use cases
 

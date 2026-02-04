@@ -714,6 +714,67 @@ See Also:
   swarm status --help    Check worker details before respawn
 """
 
+# Interrupt command help
+INTERRUPT_HELP_DESCRIPTION = """\
+Send Ctrl-C (interrupt signal) to a tmux worker to stop a running command.
+
+Sends the interrupt signal (SIGINT) to the process running in a worker's tmux
+window. This is equivalent to pressing Ctrl-C in the terminal. Useful for
+stopping long-running commands, canceling agent operations, or recovering
+from stuck states without killing the entire worker.
+
+The worker remains running after interrupt - only the currently executing
+command receives the signal. The agent or shell will typically return to
+its prompt, ready for new input.
+"""
+
+INTERRUPT_HELP_EPILOG = """\
+Examples:
+  # Interrupt a single worker
+  swarm interrupt my-worker
+
+  # Interrupt all running tmux workers
+  swarm interrupt --all
+
+  # Stop a stuck agent and send new instructions
+  swarm interrupt my-agent
+  swarm send my-agent "Let's try a different approach."
+
+Use Cases:
+  Stop a long-running build or test:
+    swarm interrupt build-worker
+
+  Cancel an agent's current task without killing it:
+    swarm interrupt my-agent
+
+  Emergency stop all agents:
+    swarm interrupt --all
+
+  Recover from stuck state:
+    swarm interrupt stuck-worker
+    swarm logs stuck-worker           # Check what happened
+    swarm send stuck-worker "continue"
+
+Behavior Notes:
+  - Only works on tmux workers (not background process workers)
+  - Worker must be in "running" status
+  - --all silently skips non-tmux and non-running workers
+  - Multiple interrupts may be needed for some commands
+  - Does NOT kill the worker, just sends Ctrl-C
+
+If Interrupt Doesn't Work:
+  Some processes ignore SIGINT. Options:
+  1. Send interrupt again: swarm interrupt <name>
+  2. Send EOF (Ctrl-D): swarm eof <name>
+  3. Kill the worker: swarm kill <name>
+
+See Also:
+  swarm eof --help        Send Ctrl-D (EOF) to worker
+  swarm send --help       Send text input to worker
+  swarm kill --help       Forcefully stop worker
+  swarm logs --help       View worker output
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1775,9 +1836,20 @@ def main() -> None:
                             "used with a worker name.")
 
     # interrupt
-    int_p = subparsers.add_parser("interrupt", help="Send Ctrl-C to worker")
-    int_p.add_argument("name", nargs="?", help="Worker name")
-    int_p.add_argument("--all", action="store_true", help="Send to all workers")
+    int_p = subparsers.add_parser(
+        "interrupt",
+        help="Send Ctrl-C (interrupt) to worker",
+        description=INTERRUPT_HELP_DESCRIPTION,
+        epilog=INTERRUPT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    int_p.add_argument("name", nargs="?",
+                       help="Worker name to interrupt. Required unless --all is used. "
+                            "Worker must be a tmux worker and currently running.")
+    int_p.add_argument("--all", action="store_true",
+                       help="Send interrupt to all running tmux workers. Non-tmux "
+                            "workers and non-running workers are silently skipped. "
+                            "Cannot be used with a worker name.")
 
     # eof
     eof_p = subparsers.add_parser("eof", help="Send Ctrl-D to worker")
