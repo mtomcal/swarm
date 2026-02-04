@@ -177,7 +177,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Copy workflow YAML to state directory
   - Store workflow hash for change detection
 
-- [ ] **3.4 Implement `swarm workflow validate`**
+- [x] **3.4 Implement `swarm workflow validate`**
   - Parse and validate YAML
   - Check prompt files exist
   - Report all errors

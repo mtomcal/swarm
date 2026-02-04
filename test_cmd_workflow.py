@@ -1667,5 +1667,330 @@ class TestCreateWorkflowState(unittest.TestCase):
             self.assertIsNone(stage_state.exit_reason)
 
 
+# ==============================================================================
+# CLI Command Tests
+# ==============================================================================
+
+
+class TestWorkflowSubparser(unittest.TestCase):
+    """Test that workflow subparser is correctly configured."""
+
+    def test_workflow_subparser_exists(self):
+        """Test that 'workflow' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('workflow', result.stdout.lower())
+
+    def test_workflow_validate_subcommand_exists(self):
+        """Test that 'workflow validate' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('validate', result.stdout.lower())
+
+    def test_workflow_help_description(self):
+        """Test that workflow help contains description."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Multi-stage agent pipelines', result.stdout)
+        self.assertIn('scheduling', result.stdout.lower())
+
+    def test_workflow_validate_help_has_examples(self):
+        """Test that workflow validate help has examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Examples:', result.stdout)
+
+
+class TestWorkflowValidateCommand(unittest.TestCase):
+    """Test workflow validate command functionality."""
+
+    def setUp(self):
+        """Create a temporary directory for test files."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_yaml(self, filename, content):
+        """Write YAML content to a file in the temp directory."""
+        path = Path(self.temp_dir) / filename
+        path.write_text(content)
+        return str(path)
+
+    def test_validate_valid_workflow(self):
+        """Test validating a valid workflow file."""
+        yaml_path = self._write_yaml('valid.yaml', '''
+name: test-workflow
+description: A test workflow
+
+stages:
+  - name: plan
+    type: worker
+    prompt: Create a plan
+    done-pattern: "/done"
+
+  - name: build
+    type: ralph
+    prompt: Build it
+    max-iterations: 50
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Workflow 'test-workflow' is valid", result.stdout)
+        self.assertIn('2 stages', result.stdout)
+
+    def test_validate_single_stage(self):
+        """Test validating a workflow with a single stage."""
+        yaml_path = self._write_yaml('single.yaml', '''
+name: single-stage
+stages:
+  - name: work
+    type: worker
+    prompt: Do the work
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('1 stage', result.stdout)
+
+    def test_validate_missing_file(self):
+        """Test that missing file shows error."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', '/nonexistent/path.yaml'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('workflow file not found', result.stderr.lower())
+
+    def test_validate_missing_name(self):
+        """Test that missing name field shows error."""
+        yaml_path = self._write_yaml('missing-name.yaml', '''
+stages:
+  - name: plan
+    type: worker
+    prompt: test
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing required field 'name'", result.stderr)
+
+    def test_validate_missing_stages(self):
+        """Test that missing stages field shows error."""
+        yaml_path = self._write_yaml('missing-stages.yaml', '''
+name: test
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing required field 'stages'", result.stderr)
+
+    def test_validate_empty_stages(self):
+        """Test that empty stages list shows error."""
+        yaml_path = self._write_yaml('empty-stages.yaml', '''
+name: test
+stages: []
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('must have at least one stage', result.stderr)
+
+    def test_validate_invalid_stage_type(self):
+        """Test that invalid stage type shows error."""
+        yaml_path = self._write_yaml('invalid-type.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: invalid
+    prompt: test
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("invalid type 'invalid'", result.stderr)
+
+    def test_validate_ralph_missing_max_iterations(self):
+        """Test that ralph stage without max-iterations shows error."""
+        yaml_path = self._write_yaml('ralph-no-max.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: ralph
+    prompt: test
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('ralph stage', result.stderr)
+        self.assertIn('requires max-iterations', result.stderr)
+
+    def test_validate_invalid_on_failure(self):
+        """Test that invalid on-failure value shows error."""
+        yaml_path = self._write_yaml('invalid-on-failure.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: worker
+    prompt: test
+    on-failure: invalid
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("invalid on-failure 'invalid'", result.stderr)
+
+    def test_validate_duplicate_stage_names(self):
+        """Test that duplicate stage names show error."""
+        yaml_path = self._write_yaml('duplicate-names.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: worker
+    prompt: test1
+  - name: plan
+    type: worker
+    prompt: test2
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("duplicate stage name: 'plan'", result.stderr)
+
+    def test_validate_unknown_goto_target(self):
+        """Test that unknown goto target shows error."""
+        yaml_path = self._write_yaml('unknown-goto.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: worker
+    prompt: test
+    on-complete: goto:nonexistent
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown stage in goto: 'nonexistent'", result.stderr)
+
+    def test_validate_circular_goto(self):
+        """Test that circular goto reference shows error."""
+        yaml_path = self._write_yaml('circular-goto.yaml', '''
+name: test
+stages:
+  - name: a
+    type: worker
+    prompt: test
+    on-complete: goto:b
+  - name: b
+    type: worker
+    prompt: test
+    on-complete: goto:a
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('circular stage reference', result.stderr)
+
+    def test_validate_missing_prompt_file(self):
+        """Test that missing prompt file shows error."""
+        yaml_path = self._write_yaml('missing-prompt-file.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: worker
+    prompt-file: ./nonexistent-prompt.md
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('prompt file not found', result.stderr)
+
+    def test_validate_existing_prompt_file(self):
+        """Test that existing prompt file is validated successfully."""
+        # Create prompt file
+        prompt_path = Path(self.temp_dir) / 'prompt.md'
+        prompt_path.write_text('This is the prompt')
+
+        yaml_path = self._write_yaml('with-prompt-file.yaml', '''
+name: test
+stages:
+  - name: plan
+    type: worker
+    prompt-file: ./prompt.md
+''')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_validate_empty_file(self):
+        """Test that empty file shows error."""
+        yaml_path = self._write_yaml('empty.yaml', '')
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'validate', yaml_path],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('empty', result.stderr.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1362,6 +1362,121 @@ See Also:
 """
 
 
+# ==============================================================================
+# Workflow Help Text
+# ==============================================================================
+
+WORKFLOW_HELP_DESCRIPTION = """\
+Multi-stage agent pipelines with scheduling and rate limit recovery.
+
+Workflow orchestrates sequential agent stages (plan → build → validate)
+defined in YAML. Each stage can be a one-shot worker or a ralph loop.
+Workflows support scheduling, heartbeats for rate limit recovery, and
+configurable failure handling.
+"""
+
+WORKFLOW_HELP_EPILOG = """\
+Quick Start:
+  1. Create workflow.yaml (see: swarm workflow run --help for format)
+  2. Run: swarm workflow run workflow.yaml
+  3. Monitor: swarm workflow status my-workflow
+
+Scheduling:
+  # Run at 2am tonight
+  swarm workflow run workflow.yaml --at "02:00"
+
+  # Run in 4 hours
+  swarm workflow run workflow.yaml --in 4h
+
+Rate Limit Recovery:
+  Set heartbeat in workflow.yaml to automatically nudge agents when
+  they might be stuck on rate limits:
+
+    heartbeat: 4h           # Nudge every 4 hours
+    heartbeat-expire: 24h   # Stop after 24 hours
+
+Storage:
+  Workflow state: ~/.swarm/workflows/<name>/
+  Repo-local definitions: .swarm/workflows/ (searched first)
+  Global definitions: ~/.swarm/workflows/
+
+Examples:
+  swarm workflow run ./build-feature.yaml
+  swarm workflow run ./overnight-work.yaml --at "02:00"
+  swarm workflow status feature-build
+  swarm workflow cancel feature-build
+  swarm workflow resume feature-build --from validate
+
+Director Pattern (Agent-in-the-Loop):
+  For monitored workflows, spawn a separate "director" agent that watches
+  and intervenes using existing swarm commands:
+
+    # Start workflow in background
+    swarm workflow run build.yaml &
+
+    # Spawn director to monitor
+    swarm spawn --name director --tmux -- claude
+    swarm send director "Monitor 'feature-build', intervene if stages fail"
+
+  The director uses: workflow status, send, attach, pause, resume, cancel.
+  See: swarm workflow run --help (Director Pattern section)
+"""
+
+WORKFLOW_VALIDATE_HELP_DESCRIPTION = """\
+Validate workflow YAML without running it.
+
+Checks the workflow definition for syntax errors, missing required fields,
+invalid values, and verifies that all prompt files exist. Use this to
+catch errors before attempting to run a workflow.
+"""
+
+WORKFLOW_VALIDATE_HELP_EPILOG = """\
+Validation Checks:
+  - YAML syntax is valid
+  - Required fields present (name, stages, stage type, prompt)
+  - Stage types are valid (worker or ralph)
+  - on-failure values are valid (stop, retry, skip)
+  - on-complete values are valid (next, stop, goto:<stage>)
+  - ralph stages have max-iterations
+  - No duplicate stage names
+  - No circular goto references
+  - All prompt files exist and are readable
+
+Examples:
+  # Validate a workflow file
+  swarm workflow validate ./build-feature.yaml
+
+  # Validate before running
+  swarm workflow validate ./workflow.yaml && swarm workflow run ./workflow.yaml
+
+  # Check multiple files
+  for f in workflows/*.yaml; do swarm workflow validate "$f"; done
+
+Output:
+  On success: "Workflow '<name>' is valid (N stages)"
+  On failure: Lists all validation errors found
+
+Common Errors:
+  "workflow missing required field 'name'"
+    → Add 'name: my-workflow' to YAML
+
+  "stage 'build' missing required field 'type'"
+    → Add 'type: worker' or 'type: ralph' to stage
+
+  "stage 'build' requires prompt or prompt-file"
+    → Add inline 'prompt:' or 'prompt-file:' path
+
+  "ralph stage 'build' requires max-iterations"
+    → Add 'max-iterations: 50' to ralph stages
+
+  "prompt file not found: ./prompts/build.md"
+    → Create the file or fix the path
+
+See Also:
+  swarm workflow run --help    # Run a workflow
+"""
+
+
 @dataclass
 class TmuxInfo:
     """Tmux window information."""
@@ -3779,6 +3894,26 @@ def main() -> None:
     )
     heartbeat_resume_p.add_argument("worker", help="Worker name")
 
+    # workflow - multi-stage pipelines
+    workflow_p = subparsers.add_parser(
+        "workflow",
+        help="Multi-stage agent pipelines with scheduling",
+        description=WORKFLOW_HELP_DESCRIPTION,
+        epilog=WORKFLOW_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_subparsers = workflow_p.add_subparsers(dest="workflow_command", required=True)
+
+    # workflow validate
+    workflow_validate_p = workflow_subparsers.add_parser(
+        "validate",
+        help="Validate workflow YAML without running",
+        description=WORKFLOW_VALIDATE_HELP_DESCRIPTION,
+        epilog=WORKFLOW_VALIDATE_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_validate_p.add_argument("file", help="Path to workflow YAML file")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -3812,6 +3947,8 @@ def main() -> None:
         cmd_ralph(args)
     elif args.command == "heartbeat":
         cmd_heartbeat(args)
+    elif args.command == "workflow":
+        cmd_workflow(args)
 
 
 # Command stubs - to be implemented in subsequent tasks
@@ -6163,6 +6300,75 @@ def cmd_heartbeat_resume(args) -> None:
 
     save_heartbeat_state(heartbeat_state)
     print(f"Heartbeat resumed for {worker_name}")
+
+
+# ==============================================================================
+# Workflow Commands
+# ==============================================================================
+
+
+def cmd_workflow(args) -> None:
+    """Workflow management commands.
+
+    Dispatches to workflow subcommands:
+    - validate: Validate workflow YAML without running
+    - run: Run a workflow from YAML file (to be implemented)
+    - status: Show workflow status (to be implemented)
+    - list: List all workflows (to be implemented)
+    - cancel: Cancel a running workflow (to be implemented)
+    - resume: Resume a failed/paused workflow (to be implemented)
+    - logs: View workflow logs (to be implemented)
+    """
+    if args.workflow_command == "validate":
+        cmd_workflow_validate(args)
+    else:
+        print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_workflow_validate(args) -> None:
+    """Validate workflow YAML without running it.
+
+    Checks the workflow definition for syntax errors, missing required fields,
+    invalid values, and verifies that all prompt files exist.
+
+    Args:
+        args: Namespace with validate arguments (file: path to YAML file)
+
+    Exit codes:
+        0: Validation passed
+        1: Validation failed (errors printed to stderr)
+    """
+    yaml_path = args.file
+    errors = []
+
+    # Parse and validate the YAML structure
+    try:
+        workflow = parse_workflow_yaml(yaml_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except WorkflowValidationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate that all prompt files exist
+    # Use the directory containing the workflow file as the base path
+    workflow_dir = Path(yaml_path).parent
+    prompt_errors = validate_workflow_prompt_files(workflow, workflow_dir)
+    errors.extend(prompt_errors)
+
+    # If there are errors, report them and exit with error
+    if errors:
+        print("Validation errors:", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        sys.exit(1)
+
+    # Success message
+    stage_count = len(workflow.stages)
+    stage_word = "stage" if stage_count == 1 else "stages"
+    print(f"Workflow '{workflow.name}' is valid ({stage_count} {stage_word})")
 
 
 if __name__ == "__main__":
