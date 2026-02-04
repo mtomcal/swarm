@@ -87,7 +87,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of Ctrl-D behavior
   - Add examples and use cases
 
-- [ ] **1.13 Enhance `swarm attach --help`**
+- [x] **1.13 Enhance `swarm attach --help`**
   - Add description of tmux attachment
   - Add detach instructions
   - Add examples

@@ -835,6 +835,60 @@ See Also:
   swarm status --help       Check worker status
 """
 
+ATTACH_HELP_DESCRIPTION = """\
+Attach to a tmux worker's terminal window for live interaction.
+
+Opens the worker's tmux window in your terminal, allowing you to observe the
+agent's output in real-time and interact directly with the session. This is
+useful for watching long-running tasks, debugging agent behavior, or taking
+manual control when needed.
+
+Your terminal will be replaced by the tmux session. To detach (return to your
+shell without stopping the worker), press Ctrl-B then D.
+"""
+
+ATTACH_HELP_EPILOG = """\
+Examples:
+  # Attach to a worker's tmux window
+  swarm attach my-worker
+
+  # Watch an agent work on a feature
+  swarm attach feature-auth
+
+  # Debug a stuck worker
+  swarm attach stuck-worker
+
+Detaching from Tmux:
+  Press Ctrl-B then D to detach from the session and return to your shell.
+  The worker continues running in the background after detachment.
+
+  Other useful tmux key bindings while attached:
+    Ctrl-B D          Detach from session (return to shell)
+    Ctrl-B [          Enter scroll/copy mode (q to exit)
+    Ctrl-B PageUp     Scroll up through output history
+    Ctrl-B c          Create new window in session
+    Ctrl-B n/p        Next/previous window
+
+Tips:
+  - Use 'swarm logs --follow' if you just want to watch output without attaching
+  - Attach is useful when you need to manually type commands to the agent
+  - Custom tmux sockets (from --socket) are handled automatically
+  - Worker must be running; use 'swarm status <name>' to check first
+
+Common Workflow:
+  1. Spawn worker:    swarm spawn --name dev --tmux --worktree -- claude
+  2. Send initial:    swarm send dev "implement login feature"
+  3. Watch progress:  swarm attach dev
+  4. (Ctrl-B D to detach when satisfied)
+  5. Check later:     swarm logs dev --follow
+
+See Also:
+  swarm logs --help       View worker output without attaching
+  swarm send --help       Send commands to worker
+  swarm status --help     Check worker status
+  swarm spawn --help      Create new workers
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1924,8 +1978,16 @@ def main() -> None:
                             "and currently running. Use 'swarm ls' to see available workers.")
 
     # attach
-    attach_p = subparsers.add_parser("attach", help="Attach to worker tmux window")
-    attach_p.add_argument("name", help="Worker name")
+    attach_p = subparsers.add_parser(
+        "attach",
+        help="Attach to worker tmux window",
+        description=ATTACH_HELP_DESCRIPTION,
+        epilog=ATTACH_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    attach_p.add_argument("name",
+                          help="Worker name to attach to. Worker must be a tmux worker "
+                               "and currently running. Use 'swarm ls' to see available workers.")
 
     # logs
     logs_p = subparsers.add_parser(
