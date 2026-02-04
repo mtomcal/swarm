@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import time
+import yaml
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
@@ -1619,6 +1620,339 @@ class WorkflowState:
             workflow_file=d.get("workflow_file", ""),
             workflow_hash=d.get("workflow_hash", ""),
         )
+
+
+@dataclass
+class StageDefinition:
+    """Definition of a workflow stage from YAML.
+
+    Represents the configuration for a single stage in a workflow,
+    including its type, prompt, completion criteria, and failure handling.
+    """
+    name: str
+    type: str  # "worker" or "ralph"
+    prompt: Optional[str] = None  # Inline prompt
+    prompt_file: Optional[str] = None  # Path to prompt file
+    done_pattern: Optional[str] = None  # Regex to detect completion
+    timeout: Optional[str] = None  # Duration string e.g. "2h"
+    on_failure: str = "stop"  # stop, retry, skip
+    max_retries: int = 3  # Attempts if on_failure: retry
+    on_complete: str = "next"  # next, stop, goto:<stage-name>
+
+    # Ralph-specific options
+    max_iterations: Optional[int] = None  # Required for ralph type
+    inactivity_timeout: int = 60  # Seconds
+    check_done_continuous: bool = False
+
+    # Stage-specific overrides
+    heartbeat: Optional[str] = None  # Override global heartbeat
+    heartbeat_expire: Optional[str] = None  # Override global heartbeat-expire
+    heartbeat_message: Optional[str] = None  # Override global heartbeat-message
+    worktree: Optional[bool] = None  # Override global worktree
+    cwd: Optional[str] = None  # Override global cwd
+    env: dict[str, str] = field(default_factory=dict)  # Environment variables
+    tags: list[str] = field(default_factory=list)  # Worker tags
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "type": self.type,
+            "prompt": self.prompt,
+            "prompt_file": self.prompt_file,
+            "done_pattern": self.done_pattern,
+            "timeout": self.timeout,
+            "on_failure": self.on_failure,
+            "max_retries": self.max_retries,
+            "on_complete": self.on_complete,
+            "max_iterations": self.max_iterations,
+            "inactivity_timeout": self.inactivity_timeout,
+            "check_done_continuous": self.check_done_continuous,
+            "heartbeat": self.heartbeat,
+            "heartbeat_expire": self.heartbeat_expire,
+            "heartbeat_message": self.heartbeat_message,
+            "worktree": self.worktree,
+            "cwd": self.cwd,
+            "env": self.env,
+            "tags": self.tags,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StageDefinition":
+        """Create StageDefinition from dictionary."""
+        return cls(
+            name=d["name"],
+            type=d["type"],
+            prompt=d.get("prompt"),
+            prompt_file=d.get("prompt_file") or d.get("prompt-file"),
+            done_pattern=d.get("done_pattern") or d.get("done-pattern"),
+            timeout=d.get("timeout"),
+            on_failure=d.get("on_failure") or d.get("on-failure", "stop"),
+            max_retries=d.get("max_retries") or d.get("max-retries", 3),
+            on_complete=d.get("on_complete") or d.get("on-complete", "next"),
+            max_iterations=d.get("max_iterations") or d.get("max-iterations"),
+            inactivity_timeout=d.get("inactivity_timeout") or d.get("inactivity-timeout", 60),
+            check_done_continuous=d.get("check_done_continuous") or d.get("check-done-continuous", False),
+            heartbeat=d.get("heartbeat"),
+            heartbeat_expire=d.get("heartbeat_expire") or d.get("heartbeat-expire"),
+            heartbeat_message=d.get("heartbeat_message") or d.get("heartbeat-message"),
+            worktree=d.get("worktree"),
+            cwd=d.get("cwd"),
+            env=d.get("env", {}),
+            tags=d.get("tags", []),
+        )
+
+
+@dataclass
+class WorkflowDefinition:
+    """Definition of a workflow from YAML.
+
+    Represents the complete configuration for a workflow including
+    global settings and all stage definitions.
+    """
+    name: str
+    description: Optional[str] = None
+    schedule: Optional[str] = None  # Start time (HH:MM, 24h format)
+    delay: Optional[str] = None  # Start delay duration string
+
+    # Global settings
+    heartbeat: Optional[str] = None  # Nudge interval
+    heartbeat_expire: Optional[str] = None  # Stop heartbeat after duration
+    heartbeat_message: str = "continue"  # Message to send
+    worktree: bool = False  # Use git worktrees
+    cwd: Optional[str] = None  # Working directory
+
+    # Stage definitions
+    stages: list[StageDefinition] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "schedule": self.schedule,
+            "delay": self.delay,
+            "heartbeat": self.heartbeat,
+            "heartbeat_expire": self.heartbeat_expire,
+            "heartbeat_message": self.heartbeat_message,
+            "worktree": self.worktree,
+            "cwd": self.cwd,
+            "stages": [s.to_dict() for s in self.stages],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WorkflowDefinition":
+        """Create WorkflowDefinition from dictionary."""
+        stages = []
+        for stage_dict in d.get("stages", []):
+            stages.append(StageDefinition.from_dict(stage_dict))
+        return cls(
+            name=d["name"],
+            description=d.get("description"),
+            schedule=d.get("schedule"),
+            delay=d.get("delay"),
+            heartbeat=d.get("heartbeat"),
+            heartbeat_expire=d.get("heartbeat_expire") or d.get("heartbeat-expire"),
+            heartbeat_message=d.get("heartbeat_message") or d.get("heartbeat-message", "continue"),
+            worktree=d.get("worktree", False),
+            cwd=d.get("cwd"),
+            stages=stages,
+        )
+
+
+class WorkflowValidationError(Exception):
+    """Raised when workflow YAML validation fails."""
+    pass
+
+
+def parse_workflow_yaml(yaml_path: str) -> WorkflowDefinition:
+    """Parse and validate a workflow YAML file.
+
+    Args:
+        yaml_path: Path to the workflow YAML file
+
+    Returns:
+        WorkflowDefinition: Parsed and validated workflow definition
+
+    Raises:
+        WorkflowValidationError: If validation fails
+        FileNotFoundError: If the YAML file doesn't exist
+        yaml.YAMLError: If YAML parsing fails
+    """
+    path = Path(yaml_path)
+
+    # Check file exists
+    if not path.exists():
+        raise FileNotFoundError(f"workflow file not found: {yaml_path}")
+
+    # Parse YAML
+    try:
+        with open(path, 'r') as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise WorkflowValidationError(f"invalid workflow YAML: {e}")
+
+    if data is None:
+        raise WorkflowValidationError("workflow file is empty")
+
+    if not isinstance(data, dict):
+        raise WorkflowValidationError("workflow must be a YAML mapping")
+
+    # Validate required fields
+    if "name" not in data:
+        raise WorkflowValidationError("workflow missing required field 'name'")
+
+    if "stages" not in data:
+        raise WorkflowValidationError("workflow missing required field 'stages'")
+
+    if not isinstance(data["stages"], list):
+        raise WorkflowValidationError("'stages' must be a list")
+
+    if len(data["stages"]) == 0:
+        raise WorkflowValidationError("workflow must have at least one stage")
+
+    # Validate each stage
+    seen_stage_names = set()
+    stage_names = []  # For goto validation
+
+    for i, stage_data in enumerate(data["stages"]):
+        if not isinstance(stage_data, dict):
+            raise WorkflowValidationError(f"stage {i + 1} must be a YAML mapping")
+
+        # Check required stage fields
+        if "name" not in stage_data:
+            raise WorkflowValidationError(f"stage {i + 1} missing required field 'name'")
+
+        stage_name = stage_data["name"]
+        stage_names.append(stage_name)
+
+        # Check for duplicate stage names
+        if stage_name in seen_stage_names:
+            raise WorkflowValidationError(f"duplicate stage name: '{stage_name}'")
+        seen_stage_names.add(stage_name)
+
+        if "type" not in stage_data:
+            raise WorkflowValidationError(f"stage '{stage_name}' missing required field 'type'")
+
+        stage_type = stage_data["type"]
+
+        # Validate stage type
+        if stage_type not in ("worker", "ralph"):
+            raise WorkflowValidationError(
+                f"stage '{stage_name}' has invalid type '{stage_type}' (must be 'worker' or 'ralph')"
+            )
+
+        # Check prompt/prompt-file (exactly one required)
+        has_prompt = "prompt" in stage_data and stage_data["prompt"]
+        has_prompt_file = ("prompt_file" in stage_data and stage_data["prompt_file"]) or \
+                          ("prompt-file" in stage_data and stage_data["prompt-file"])
+
+        if has_prompt and has_prompt_file:
+            raise WorkflowValidationError(f"stage '{stage_name}' has both prompt and prompt-file")
+
+        if not has_prompt and not has_prompt_file:
+            raise WorkflowValidationError(f"stage '{stage_name}' requires prompt or prompt-file")
+
+        # Validate ralph-specific requirements
+        if stage_type == "ralph":
+            max_iterations = stage_data.get("max_iterations") or stage_data.get("max-iterations")
+            if max_iterations is None:
+                raise WorkflowValidationError(f"ralph stage '{stage_name}' requires max-iterations")
+            if not isinstance(max_iterations, int) or max_iterations < 1:
+                raise WorkflowValidationError(
+                    f"stage '{stage_name}': max-iterations must be a positive integer"
+                )
+
+        # Validate on-failure
+        on_failure = stage_data.get("on_failure") or stage_data.get("on-failure", "stop")
+        if on_failure not in ("stop", "retry", "skip"):
+            raise WorkflowValidationError(
+                f"stage '{stage_name}' has invalid on-failure '{on_failure}' (must be 'stop', 'retry', or 'skip')"
+            )
+
+        # Validate max-retries if on-failure is retry
+        if on_failure == "retry":
+            max_retries = stage_data.get("max_retries") or stage_data.get("max-retries", 3)
+            if not isinstance(max_retries, int) or max_retries < 1:
+                raise WorkflowValidationError(
+                    f"stage '{stage_name}': max-retries must be a positive integer"
+                )
+
+        # Validate on-complete
+        on_complete = stage_data.get("on_complete") or stage_data.get("on-complete", "next")
+        if on_complete not in ("next", "stop") and not on_complete.startswith("goto:"):
+            raise WorkflowValidationError(
+                f"stage '{stage_name}' has invalid on-complete '{on_complete}' (must be 'next', 'stop', or 'goto:<stage>')"
+            )
+
+    # Validate goto targets after all stages are collected
+    for stage_data in data["stages"]:
+        stage_name = stage_data["name"]
+        on_complete = stage_data.get("on_complete") or stage_data.get("on-complete", "next")
+        if on_complete.startswith("goto:"):
+            target = on_complete[5:]  # Remove "goto:" prefix
+            if target not in stage_names:
+                raise WorkflowValidationError(f"unknown stage in goto: '{target}'")
+
+    # Check for circular goto references (simple cycle detection)
+    # Build a graph of goto relationships and check for cycles
+    goto_graph = {}
+    for stage_data in data["stages"]:
+        stage_name = stage_data["name"]
+        on_complete = stage_data.get("on_complete") or stage_data.get("on-complete", "next")
+        if on_complete.startswith("goto:"):
+            target = on_complete[5:]
+            goto_graph[stage_name] = target
+
+    # DFS to detect cycles
+    def detect_cycle(start, visited, path):
+        if start not in goto_graph:
+            return False
+        target = goto_graph[start]
+        if target in path:
+            return True
+        if target in visited:
+            return False
+        visited.add(target)
+        path.add(target)
+        result = detect_cycle(target, visited, path)
+        path.remove(target)
+        return result
+
+    for stage_name in goto_graph:
+        visited = {stage_name}
+        path = {stage_name}
+        if detect_cycle(stage_name, visited, path):
+            raise WorkflowValidationError("circular stage reference detected")
+
+    # Create and return the WorkflowDefinition
+    return WorkflowDefinition.from_dict(data)
+
+
+def validate_workflow_prompt_files(workflow: WorkflowDefinition, base_path: Optional[Path] = None) -> list[str]:
+    """Validate that all prompt files in a workflow exist.
+
+    Args:
+        workflow: The workflow definition to validate
+        base_path: Base path for resolving relative prompt file paths.
+                   If None, uses current working directory.
+
+    Returns:
+        List of error messages (empty if all files exist)
+    """
+    errors = []
+    if base_path is None:
+        base_path = Path.cwd()
+
+    for stage in workflow.stages:
+        if stage.prompt_file:
+            prompt_path = Path(stage.prompt_file)
+            if not prompt_path.is_absolute():
+                prompt_path = base_path / prompt_path
+            if not prompt_path.exists():
+                errors.append(f"prompt file not found: {stage.prompt_file}")
+
+    return errors
 
 
 # Heartbeat state lock file path

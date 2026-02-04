@@ -165,7 +165,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - WorkflowState: name, status, current_stage, stages dict, timestamps
   - StageState: status, worker_name, attempts, timestamps, exit_reason
 
-- [ ] **3.2 Implement YAML parser for workflow definitions**
+- [x] **3.2 Implement YAML parser for workflow definitions**
   - Parse all fields from workflow.md spec
   - Validate required fields
   - Validate stage types
