@@ -233,7 +233,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Restart from failed/specified stage
   - Reset attempt counts if needed
 
-- [ ] **3.14 Implement `swarm workflow logs`**
+- [x] **3.14 Implement `swarm workflow logs`**
   - Parse --stage (filter)
   - Show aggregated logs
   - Per-stage log viewing

@@ -1750,6 +1750,66 @@ See Also:
   swarm workflow run --force      # Start fresh (deletes old state)
 """
 
+WORKFLOW_LOGS_HELP_DESCRIPTION = """\
+View logs from workflow stages.
+
+Shows output from stage workers that have run or are currently running.
+Stage workers are named '<workflow>-<stage>', and their logs are captured
+from tmux panes (for tmux workers) or log files (for non-tmux workers).
+"""
+
+WORKFLOW_LOGS_HELP_EPILOG = """\
+Options:
+  --stage STAGE   Show logs only for a specific stage. Without this flag,
+                  shows logs from all stages in execution order.
+  --follow        Continuously poll for new output (like tail -f). Only
+                  works when viewing a single stage (use --stage).
+  --lines N       Number of history lines to show (default: 1000).
+
+Output Format:
+  Logs are displayed with stage headers:
+
+    === Stage: plan (worker: my-workflow-plan) ===
+    [stage output...]
+
+    === Stage: build (worker: my-workflow-build) ===
+    [stage output...]
+
+  For pending stages (no worker spawned yet), a placeholder is shown.
+
+Examples:
+  # View all stage logs
+  swarm workflow logs my-workflow
+
+  # View logs for a specific stage
+  swarm workflow logs my-workflow --stage build
+
+  # Follow logs for a running stage (Ctrl-C to stop)
+  swarm workflow logs my-workflow --stage validate --follow
+
+  # Show more history lines
+  swarm workflow logs my-workflow --lines 5000
+
+Worker Log Sources:
+  - tmux workers: Captured from tmux pane scrollback buffer
+  - Non-tmux workers: Read from ~/.swarm/logs/<worker>.stdout.log
+
+  For running stages, logs show current tmux pane content plus history.
+  For completed stages, logs show the captured output from when the
+  stage was running (if worker still exists in state).
+
+Troubleshooting:
+  If a stage shows "no logs available", the worker may have been:
+  - Cleaned up (use 'swarm clean' carefully)
+  - Never spawned (stage still pending)
+  - A non-tmux worker without a log file
+
+See Also:
+  swarm workflow status <name>    # Check which stages have run
+  swarm logs <worker>             # View logs for individual workers
+  swarm attach <worker>           # Attach to running tmux worker
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -4309,6 +4369,22 @@ def main() -> None:
     workflow_resume_p.add_argument("name", help="Workflow name")
     workflow_resume_p.add_argument("--from", dest="from_stage", metavar="STAGE",
                                    help="Resume from a specific stage")
+
+    # workflow logs
+    workflow_logs_p = workflow_subparsers.add_parser(
+        "logs",
+        help="View logs from workflow stages",
+        description=WORKFLOW_LOGS_HELP_DESCRIPTION,
+        epilog=WORKFLOW_LOGS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_logs_p.add_argument("name", help="Workflow name")
+    workflow_logs_p.add_argument("--stage", metavar="STAGE",
+                                 help="Show logs only for a specific stage")
+    workflow_logs_p.add_argument("--follow", "-f", action="store_true",
+                                 help="Continuously poll for new output (requires --stage)")
+    workflow_logs_p.add_argument("--lines", "-n", type=int, default=1000,
+                                 help="Number of history lines to show (default: 1000)")
 
     args = parser.parse_args()
 
@@ -7834,7 +7910,7 @@ def cmd_workflow(args) -> None:
     - list: List all workflows
     - cancel: Cancel a running workflow
     - resume: Resume a failed/cancelled workflow
-    - logs: View workflow logs (to be implemented)
+    - logs: View workflow logs
     """
     if args.workflow_command == "validate":
         cmd_workflow_validate(args)
@@ -7848,6 +7924,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_cancel(args)
     elif args.workflow_command == "resume":
         cmd_workflow_resume(args)
+    elif args.workflow_command == "logs":
+        cmd_workflow_logs(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -8273,6 +8351,152 @@ def cmd_workflow_resume(args) -> None:
         workflow_def=workflow_def,
         workflow_dir=workflow_dir,
     )
+
+
+def cmd_workflow_logs(args) -> None:
+    """View logs from workflow stages.
+
+    Shows output from stage workers that have run or are currently running.
+    Logs are retrieved from tmux panes (for tmux workers) or log files
+    (for non-tmux workers).
+
+    Args:
+        args: Namespace with logs arguments:
+            - name: Workflow name
+            - stage: Optional stage name to filter
+            - follow: Whether to continuously poll for new output
+            - lines: Number of history lines to show
+
+    Exit codes:
+        0: Success
+        1: Workflow not found or invalid stage
+    """
+    workflow_name = args.name
+    stage_filter = args.stage
+    follow = args.follow
+    history_lines = args.lines
+
+    # Validate follow mode requires a specific stage
+    if follow and not stage_filter:
+        print("Error: --follow requires --stage to be specified", file=sys.stderr)
+        sys.exit(1)
+
+    # Load workflow state
+    workflow_state = load_workflow_state(workflow_name)
+    if workflow_state is None:
+        print(f"Error: workflow '{workflow_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Get ordered list of stage names
+    stage_names = list(workflow_state.stages.keys())
+
+    # Validate stage filter if provided
+    if stage_filter and stage_filter not in stage_names:
+        print(f"Error: stage '{stage_filter}' not found in workflow", file=sys.stderr)
+        print(f"Available stages: {', '.join(stage_names)}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine which stages to show
+    stages_to_show = [stage_filter] if stage_filter else stage_names
+
+    # Load worker state for looking up workers
+    state = State()
+
+    if follow:
+        # Follow mode: poll a single stage's logs continuously
+        stage_name = stages_to_show[0]
+        stage_state = workflow_state.stages.get(stage_name)
+        worker_name = stage_state.worker_name if stage_state else None
+
+        if not worker_name:
+            print(f"Error: stage '{stage_name}' has no worker (stage may be pending)", file=sys.stderr)
+            sys.exit(1)
+
+        worker = state.get_worker(worker_name)
+        if not worker:
+            print(f"Error: worker '{worker_name}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        if not worker.tmux:
+            # Non-tmux worker: use tail -f
+            log_path = LOGS_DIR / f"{worker.name}.stdout.log"
+            if not log_path.exists():
+                print(f"Error: no log file found for worker '{worker_name}'", file=sys.stderr)
+                sys.exit(1)
+            os.execvp("tail", ["tail", "-f", str(log_path)])
+        else:
+            # Tmux worker: poll and redraw
+            try:
+                socket = worker.tmux.socket if worker.tmux else None
+                while True:
+                    output = tmux_capture_pane(
+                        worker.tmux.session,
+                        worker.tmux.window,
+                        history_lines=history_lines,
+                        socket=socket
+                    )
+
+                    # Clear screen and print
+                    print("\033[2J\033[H", end="")  # ANSI clear
+                    print(f"=== Stage: {stage_name} (worker: {worker_name}) ===")
+                    lines = output.strip().split('\n')
+                    print('\n'.join(lines[-30:]))
+
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                # Clean exit on Ctrl-C
+                pass
+    else:
+        # Normal mode: show logs for each stage
+        for stage_name in stages_to_show:
+            stage_state = workflow_state.stages.get(stage_name)
+            worker_name = stage_state.worker_name if stage_state else None
+
+            # Print stage header
+            if worker_name:
+                print(f"=== Stage: {stage_name} (worker: {worker_name}) ===")
+            else:
+                print(f"=== Stage: {stage_name} (no worker - stage pending) ===")
+                print()
+                continue
+
+            # Try to get logs for this worker
+            worker = state.get_worker(worker_name)
+            if not worker:
+                print(f"(worker '{worker_name}' not found in state - may have been cleaned up)")
+                print()
+                continue
+
+            # Get logs based on worker type
+            if worker.tmux:
+                socket = worker.tmux.socket if worker.tmux else None
+                try:
+                    output = tmux_capture_pane(
+                        worker.tmux.session,
+                        worker.tmux.window,
+                        history_lines=history_lines,
+                        socket=socket
+                    )
+                    print(output, end="")
+                except Exception as e:
+                    print(f"(error capturing tmux pane: {e})")
+            else:
+                # Non-tmux worker: read from log file
+                log_path = LOGS_DIR / f"{worker.name}.stdout.log"
+                if log_path.exists():
+                    try:
+                        content = log_path.read_text()
+                        # Apply line limit if needed
+                        if history_lines > 0:
+                            lines = content.split('\n')
+                            content = '\n'.join(lines[-history_lines:])
+                        print(content, end="")
+                    except Exception as e:
+                        print(f"(error reading log file: {e})")
+                else:
+                    print(f"(no log file found at {log_path})")
+
+            print()  # Blank line between stages
 
 
 def cmd_workflow_run(args) -> None:

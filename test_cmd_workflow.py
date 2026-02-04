@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for swarm workflow command - TDD tests for workflow dataclasses and commands."""
 
+import io
 import json
 import os
 import shutil
@@ -6621,6 +6622,332 @@ stages:
         self.assertEqual(workflow_state.status, "failed")
         self.assertEqual(workflow_state.stages["build"].status, "failed")
         self.assertEqual(workflow_state.stages["build"].exit_reason, "error")
+
+
+class TestCmdWorkflowLogs(unittest.TestCase):
+    """Test cmd_workflow_logs function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_logs_dir = swarm.LOGS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.LOGS_DIR = swarm.SWARM_DIR / "logs"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.LOGS_DIR = self.original_logs_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "running",
+            "current_stage": "plan",
+            "current_stage_index": 0,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": None,
+            "stages": {
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T10:30:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T10:30:00+00:00",
+                    worker_name=f"{name}-build",
+                    attempts=1,
+                ),
+                "validate": swarm.StageState(
+                    status="pending",
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def test_logs_workflow_not_found(self):
+        """Test logs for non-existent workflow."""
+        args = Namespace(
+            name="nonexistent",
+            stage=None,
+            follow=False,
+            lines=1000
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_logs(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_logs_invalid_stage(self):
+        """Test logs for invalid stage name."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="nonexistent",
+            follow=False,
+            lines=1000
+        )
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_logs(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_logs_follow_requires_stage(self):
+        """Test that --follow requires --stage."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage=None,
+            follow=True,
+            lines=1000
+        )
+
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            with self.assertRaises(SystemExit) as ctx:
+                swarm.cmd_workflow_logs(args)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("--follow requires --stage", captured.getvalue())
+
+    def test_logs_shows_all_stages(self):
+        """Test that logs shows all stages by default."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage=None,
+            follow=False,
+            lines=1000
+        )
+
+        # Mock State to return no workers (simulating workers not in state)
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        # Should show headers for all stages
+        self.assertIn("=== Stage: plan", output)
+        self.assertIn("=== Stage: build", output)
+        self.assertIn("=== Stage: validate", output)
+        # Pending stage should show "no worker"
+        self.assertIn("no worker - stage pending", output)
+
+    def test_logs_single_stage(self):
+        """Test viewing logs for a specific stage."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Mock State to return no workers
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        # Should only show the build stage
+        self.assertIn("=== Stage: build", output)
+        self.assertNotIn("=== Stage: plan", output)
+        self.assertNotIn("=== Stage: validate", output)
+
+    def test_logs_with_tmux_worker(self):
+        """Test viewing logs for a tmux worker."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Create a mock tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = "swarm"
+        mock_worker.tmux.window = "build"
+        mock_worker.tmux.socket = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch.object(swarm, 'tmux_capture_pane', return_value="Hello from tmux\n"):
+                    swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("=== Stage: build (worker: test-workflow-build) ===", output)
+        self.assertIn("Hello from tmux", output)
+
+    def test_logs_with_non_tmux_worker(self):
+        """Test viewing logs for a non-tmux worker with log file."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a log file for the worker
+        log_path = swarm.LOGS_DIR / "test-workflow-build.stdout.log"
+        log_path.write_text("Line 1\nLine 2\nLine 3\n")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Create a mock non-tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("=== Stage: build (worker: test-workflow-build) ===", output)
+        self.assertIn("Line 1", output)
+        self.assertIn("Line 2", output)
+        self.assertIn("Line 3", output)
+
+    def test_logs_missing_worker(self):
+        """Test handling when worker is not in state (cleaned up)."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="plan",
+            follow=False,
+            lines=1000
+        )
+
+        # Mock State to return no workers
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("may have been cleaned up", output)
+
+    def test_logs_pending_stage_no_worker(self):
+        """Test handling pending stage with no worker."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="validate",  # This stage is pending
+            follow=False,
+            lines=1000
+        )
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("no worker - stage pending", output)
+
+
+class TestWorkflowLogsSubparser(unittest.TestCase):
+    """Test workflow logs subparser configuration."""
+
+    def test_workflow_logs_subcommand_exists(self):
+        """Test that 'workflow logs' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'logs', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('logs', result.stdout.lower())
+
+    def test_workflow_logs_help_has_description(self):
+        """Test that logs help has description."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'logs', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('View logs from workflow stages', result.stdout)
+
+    def test_workflow_logs_help_has_options(self):
+        """Test that logs help has options documented."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'logs', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--stage', result.stdout)
+        self.assertIn('--follow', result.stdout)
+        self.assertIn('--lines', result.stdout)
+
+    def test_workflow_logs_help_has_examples(self):
+        """Test that logs help has examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'logs', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Examples:', result.stdout)
+        self.assertIn('swarm workflow logs my-workflow', result.stdout)
+
+    def test_workflow_logs_constants_exist(self):
+        """Test that help constants are defined."""
+        self.assertIn("View logs from workflow stages", swarm.WORKFLOW_LOGS_HELP_DESCRIPTION)
+        self.assertIn("--stage", swarm.WORKFLOW_LOGS_HELP_EPILOG)
+        self.assertIn("--follow", swarm.WORKFLOW_LOGS_HELP_EPILOG)
 
 
 if __name__ == "__main__":
