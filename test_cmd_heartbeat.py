@@ -300,14 +300,16 @@ class TestCmdHeartbeatStart(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 1)
 
+    @patch('swarm.start_heartbeat_monitor')
     @patch('swarm.State')
-    def test_start_creates_heartbeat_state(self, mock_state_cls):
+    def test_start_creates_heartbeat_state(self, mock_state_cls, mock_start_monitor):
         """Test starting heartbeat creates state file."""
         mock_worker = MagicMock()
         mock_worker.tmux = MagicMock()
         mock_state = MagicMock()
         mock_state.get_worker.return_value = mock_worker
         mock_state_cls.return_value = mock_state
+        mock_start_monitor.return_value = 12345  # Fake PID
 
         args = Namespace(
             worker='builder',
@@ -333,15 +335,21 @@ class TestCmdHeartbeatStart(unittest.TestCase):
         self.assertEqual(data['status'], 'active')
         self.assertEqual(data['beat_count'], 0)
         self.assertIsNotNone(data['expire_at'])
+        self.assertEqual(data['monitor_pid'], 12345)
 
+        # Verify monitor was started
+        mock_start_monitor.assert_called_once_with('builder')
+
+    @patch('swarm.start_heartbeat_monitor')
     @patch('swarm.State')
-    def test_start_without_expiration(self, mock_state_cls):
+    def test_start_without_expiration(self, mock_state_cls, mock_start_monitor):
         """Test starting heartbeat without expiration."""
         mock_worker = MagicMock()
         mock_worker.tmux = MagicMock()
         mock_state = MagicMock()
         mock_state.get_worker.return_value = mock_worker
         mock_state_cls.return_value = mock_state
+        mock_start_monitor.return_value = 12345  # Fake PID
 
         args = Namespace(
             worker='builder',
@@ -391,8 +399,10 @@ class TestCmdHeartbeatStart(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 1)
 
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.stop_heartbeat_monitor')
     @patch('swarm.State')
-    def test_start_existing_heartbeat_replaced_with_force(self, mock_state_cls):
+    def test_start_existing_heartbeat_replaced_with_force(self, mock_state_cls, mock_stop_monitor, mock_start_monitor):
         """Test starting heartbeat when one exists succeeds with --force."""
         # Create existing heartbeat
         existing_state = swarm.HeartbeatState(
@@ -401,6 +411,7 @@ class TestCmdHeartbeatStart(unittest.TestCase):
             message='old message',
             created_at=datetime.now(timezone.utc).isoformat(),
             status='active',
+            monitor_pid=9999,  # Old monitor PID
         )
         swarm.save_heartbeat_state(existing_state)
 
@@ -409,6 +420,7 @@ class TestCmdHeartbeatStart(unittest.TestCase):
         mock_state = MagicMock()
         mock_state.get_worker.return_value = mock_worker
         mock_state_cls.return_value = mock_state
+        mock_start_monitor.return_value = 12345  # New monitor PID
 
         args = Namespace(
             worker='builder',
@@ -420,6 +432,9 @@ class TestCmdHeartbeatStart(unittest.TestCase):
 
         swarm.cmd_heartbeat_start(args)
 
+        # Verify old monitor was stopped
+        mock_stop_monitor.assert_called_once()
+
         # Load and verify state was replaced
         state_path = swarm.HEARTBEATS_DIR / "builder.json"
         with open(state_path) as f:
@@ -427,6 +442,7 @@ class TestCmdHeartbeatStart(unittest.TestCase):
 
         self.assertEqual(data['message'], 'new message')
         self.assertEqual(data['interval_seconds'], 14400)
+        self.assertEqual(data['monitor_pid'], 12345)
 
 
 class TestCmdHeartbeatStop(unittest.TestCase):
@@ -633,6 +649,506 @@ class TestCmdHeartbeatPauseResume(unittest.TestCase):
             swarm.cmd_heartbeat_resume(args)
 
         self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_restarts_monitor_if_dead(self):
+        """Test resuming restarts monitor if process died."""
+        # Create paused heartbeat with non-existent PID
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+            monitor_pid=99999999,  # Non-existent PID
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+
+        with patch('swarm.start_heartbeat_monitor', return_value=12345) as mock_start:
+            swarm.cmd_heartbeat_resume(args)
+            mock_start.assert_called_once_with('builder')
+
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'active')
+        self.assertEqual(updated.monitor_pid, 12345)
+
+
+class TestHeartbeatMonitorFunctions(unittest.TestCase):
+    """Test heartbeat monitor helper functions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_stop_heartbeat_monitor_no_pid(self):
+        """Test stopping monitor when no PID stored."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        result = swarm.stop_heartbeat_monitor(state)
+        self.assertFalse(result)
+
+    def test_stop_heartbeat_monitor_process_not_running(self):
+        """Test stopping monitor when process not running."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=99999999,  # Non-existent PID
+        )
+        result = swarm.stop_heartbeat_monitor(state)
+        self.assertFalse(result)
+
+    @patch('os.kill')
+    def test_stop_heartbeat_monitor_terminates_process(self, mock_kill):
+        """Test stopping monitor terminates the process."""
+        # First call (signal 0) succeeds, second call (SIGTERM) succeeds
+        mock_kill.return_value = None
+
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=12345,
+        )
+        result = swarm.stop_heartbeat_monitor(state)
+        self.assertTrue(result)
+
+        # Verify os.kill was called with signal 0 (check) and SIGTERM
+        calls = mock_kill.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], ((12345, 0),))
+        self.assertEqual(calls[1], ((12345, swarm.signal.SIGTERM),))
+
+    def test_heartbeat_state_monitor_pid_serialization(self):
+        """Test HeartbeatState serializes monitor_pid correctly."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=12345,
+        )
+        swarm.save_heartbeat_state(state)
+
+        loaded = swarm.load_heartbeat_state('builder')
+        self.assertEqual(loaded.monitor_pid, 12345)
+
+    def test_heartbeat_state_monitor_pid_none_serialization(self):
+        """Test HeartbeatState serializes None monitor_pid correctly."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(state)
+
+        loaded = swarm.load_heartbeat_state('builder')
+        self.assertIsNone(loaded.monitor_pid)
+
+
+class TestRunHeartbeatMonitor(unittest.TestCase):
+    """Test run_heartbeat_monitor function logic."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        self.original_state_file = swarm.STATE_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.STATE_FILE = swarm.SWARM_DIR / "state.json"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        swarm.STATE_LOCK_FILE = swarm.SWARM_DIR / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        swarm.STATE_LOCK_FILE = swarm.SWARM_DIR / "state.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm.time.sleep')
+    def test_monitor_exits_when_state_deleted(self, mock_sleep):
+        """Test monitor exits when heartbeat state file is deleted."""
+        # Create heartbeat state
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        # Delete state after first sleep
+        def delete_state_on_sleep(seconds):
+            swarm.delete_heartbeat_state('builder')
+
+        mock_sleep.side_effect = delete_state_on_sleep
+
+        # Monitor should exit gracefully
+        swarm.run_heartbeat_monitor('builder')
+
+        mock_sleep.assert_called_once_with(30)
+
+    @patch('swarm.time.sleep')
+    def test_monitor_exits_when_status_stopped(self, mock_sleep):
+        """Test monitor exits when status is stopped."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+        )
+        swarm.save_heartbeat_state(state)
+
+        swarm.run_heartbeat_monitor('builder')
+
+        mock_sleep.assert_called_once_with(30)
+
+    @patch('swarm.time.sleep')
+    def test_monitor_exits_when_status_expired(self, mock_sleep):
+        """Test monitor exits when status is expired."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='expired',
+        )
+        swarm.save_heartbeat_state(state)
+
+        swarm.run_heartbeat_monitor('builder')
+
+        mock_sleep.assert_called_once_with(30)
+
+    @patch('swarm.time.sleep')
+    def test_monitor_continues_when_paused(self, mock_sleep):
+        """Test monitor continues but doesn't send beats when paused."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+        )
+        swarm.save_heartbeat_state(state)
+
+        call_count = [0]
+        def sleep_and_stop(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                # Change to stopped after second iteration
+                loaded = swarm.load_heartbeat_state('builder')
+                loaded.status = 'stopped'
+                swarm.save_heartbeat_state(loaded)
+
+        mock_sleep.side_effect = sleep_and_stop
+
+        swarm.run_heartbeat_monitor('builder')
+
+        self.assertEqual(call_count[0], 2)
+
+    @patch('swarm.time.sleep')
+    def test_monitor_sets_expired_when_past_expire_time(self, mock_sleep):
+        """Test monitor sets status to expired when expire_at is passed."""
+        # Create heartbeat with expire_at in the past
+        past_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at=past_time.isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # Verify status changed to expired
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'expired')
+
+    @patch('swarm.State')
+    @patch('swarm.time.sleep')
+    def test_monitor_stops_when_worker_not_found(self, mock_sleep, mock_state_cls):
+        """Test monitor stops when worker is not in state."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+        mock_state_cls.return_value = mock_state
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # Verify status changed to stopped
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.State')
+    @patch('swarm.time.sleep')
+    def test_monitor_stops_when_worker_not_running(self, mock_sleep, mock_state_cls, mock_refresh):
+        """Test monitor stops when worker is not running."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_worker = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'stopped'
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # Verify status changed to stopped
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+
+    @patch('swarm.tmux_send')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.State')
+    @patch('swarm.time.monotonic')
+    @patch('swarm.time.sleep')
+    def test_monitor_sends_beat_at_interval(self, mock_sleep, mock_monotonic, mock_state_cls, mock_refresh, mock_tmux_send):
+        """Test monitor sends beat when interval elapsed."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_worker = MagicMock()
+        mock_worker.tmux.session = 'session'
+        mock_worker.tmux.window = 'window'
+        mock_worker.tmux.socket = None
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+
+        # Simulate time progression: start=0, after sleep=100 (past 60s interval), then 100 for reset
+        monotonic_values = [0, 100, 100]  # First call for init, then for elapsed check, then for reset
+        mock_monotonic.side_effect = monotonic_values
+
+        call_count = [0]
+        def sleep_and_continue(seconds):
+            call_count[0] += 1
+            # Don't stop in sleep callback - let the beat happen first
+            # Stop after 2nd sleep to allow beat processing
+            if call_count[0] >= 2:
+                loaded = swarm.load_heartbeat_state('builder')
+                loaded.status = 'stopped'
+                swarm.save_heartbeat_state(loaded)
+
+        mock_sleep.side_effect = sleep_and_continue
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # Verify tmux_send was called
+        mock_tmux_send.assert_called_once_with(
+            'session', 'window', 'continue', enter=True, socket=None
+        )
+
+    @patch('swarm.tmux_send')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.State')
+    @patch('swarm.time.monotonic')
+    @patch('swarm.time.sleep')
+    def test_monitor_handles_tmux_send_failure(self, mock_sleep, mock_monotonic, mock_state_cls, mock_refresh, mock_tmux_send):
+        """Test monitor continues when tmux_send fails."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_worker = MagicMock()
+        mock_worker.tmux.session = 'session'
+        mock_worker.tmux.window = 'window'
+        mock_worker.tmux.socket = None
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+
+        # Simulate time progression past interval
+        mock_monotonic.side_effect = [0, 100]
+
+        # tmux_send raises exception
+        mock_tmux_send.side_effect = Exception("tmux error")
+
+        call_count = [0]
+        def sleep_and_stop(seconds):
+            call_count[0] += 1
+            # Stop after 2nd sleep to allow beat attempt
+            if call_count[0] >= 2:
+                loaded = swarm.load_heartbeat_state('builder')
+                loaded.status = 'stopped'
+                swarm.save_heartbeat_state(loaded)
+
+        mock_sleep.side_effect = sleep_and_stop
+
+        # Should not raise, just continue
+        swarm.run_heartbeat_monitor('builder')
+
+        mock_tmux_send.assert_called_once()
+
+
+class TestStartHeartbeatMonitor(unittest.TestCase):
+    """Test start_heartbeat_monitor function."""
+
+    @patch('swarm.os.fork')
+    def test_parent_returns_pid(self, mock_fork):
+        """Test parent process returns child PID."""
+        mock_fork.return_value = 12345
+
+        result = swarm.start_heartbeat_monitor('builder')
+
+        self.assertEqual(result, 12345)
+        mock_fork.assert_called_once()
+
+    @patch('swarm.run_heartbeat_monitor')
+    @patch('swarm.os._exit')
+    @patch('swarm.os.close')
+    @patch('swarm.os.dup2')
+    @patch('swarm.os.open')
+    @patch('swarm.sys.stderr')
+    @patch('swarm.sys.stdout')
+    @patch('swarm.sys.stdin')
+    @patch('swarm.os.setsid')
+    @patch('swarm.os.fork')
+    def test_child_process_becomes_daemon(self, mock_fork, mock_setsid,
+                                          mock_stdin, mock_stdout, mock_stderr,
+                                          mock_open, mock_dup2, mock_close,
+                                          mock_exit, mock_run_monitor):
+        """Test child process performs daemon setup."""
+        # First fork returns 0 (child), second fork returns 0 (grandchild)
+        mock_fork.side_effect = [0, 0]
+        mock_open.return_value = 3  # File descriptor for /dev/null
+
+        swarm.start_heartbeat_monitor('builder')
+
+        # Verify daemon setup
+        self.assertEqual(mock_fork.call_count, 2)
+        mock_setsid.assert_called_once()
+        mock_stdin.close.assert_called_once()
+        mock_stdout.close.assert_called_once()
+        mock_stderr.close.assert_called_once()
+        mock_run_monitor.assert_called_once_with('builder')
+        mock_exit.assert_called_with(0)
+
+    @patch('swarm.os._exit')
+    @patch('swarm.os.setsid')
+    @patch('swarm.os.fork')
+    def test_first_child_exits(self, mock_fork, mock_setsid, mock_exit):
+        """Test first child process exits after second fork."""
+        # First fork returns 0 (child), second fork returns 9999 (grandchild PID)
+        mock_fork.side_effect = [0, 9999]
+        # Make _exit raise SystemExit to simulate process termination
+        mock_exit.side_effect = SystemExit(0)
+
+        with self.assertRaises(SystemExit):
+            swarm.start_heartbeat_monitor('builder')
+
+        mock_setsid.assert_called_once()
+        mock_exit.assert_called_with(0)
+
+
+class TestHeartbeatStopWithMonitor(unittest.TestCase):
+    """Test cmd_heartbeat_stop terminates monitor process."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch('swarm.stop_heartbeat_monitor')
+    def test_stop_calls_stop_monitor(self, mock_stop_monitor):
+        """Test cmd_heartbeat_stop calls stop_heartbeat_monitor."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=12345,
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+        swarm.cmd_heartbeat_stop(args)
+
+        mock_stop_monitor.assert_called_once()
+        # Verify state was updated
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+        self.assertIsNone(updated.monitor_pid)
 
 
 if __name__ == '__main__':

@@ -116,7 +116,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Create heartbeat state
   - Start background monitor thread
 
-- [ ] **2.4 Implement heartbeat monitor thread**
+- [x] **2.4 Implement heartbeat monitor thread**
   - Check interval using monotonic time
   - Send message via `tmux send-keys`
   - Update last_beat_at and beat_count

@@ -1357,6 +1357,7 @@ class HeartbeatState:
     last_beat_at: Optional[str] = None  # ISO 8601 timestamp of last beat, None if no beats yet
     beat_count: int = 0
     status: str = "active"  # active, paused, expired, stopped
+    monitor_pid: Optional[int] = None  # PID of background monitor process
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -1369,6 +1370,7 @@ class HeartbeatState:
             "last_beat_at": self.last_beat_at,
             "beat_count": self.beat_count,
             "status": self.status,
+            "monitor_pid": self.monitor_pid,
         }
 
     @classmethod
@@ -1383,6 +1385,7 @@ class HeartbeatState:
             last_beat_at=d.get("last_beat_at"),
             beat_count=d.get("beat_count", 0),
             status=d.get("status", "active"),
+            monitor_pid=d.get("monitor_pid"),
         )
 
 
@@ -1513,6 +1516,173 @@ def list_heartbeat_states() -> list[HeartbeatState]:
                 continue
 
         return sorted(states, key=lambda s: s.worker_name)
+
+
+def run_heartbeat_monitor(worker_name: str) -> None:
+    """Run the heartbeat monitor loop for a worker.
+
+    This function runs as a daemon process and:
+    1. Checks every 30 seconds (poll interval)
+    2. Sends heartbeat message at the configured interval
+    3. Checks for expiration and auto-stops
+    4. Detects worker death and auto-stops
+
+    Uses monotonic time to avoid clock drift issues.
+
+    Args:
+        worker_name: Name of the worker to monitor
+    """
+    # Poll interval - check state every 30 seconds
+    POLL_INTERVAL = 30
+
+    # Use monotonic time to track when next beat should occur
+    # This avoids issues with system clock changes
+    last_beat_monotonic = time.monotonic()
+
+    while True:
+        # Sleep for poll interval
+        time.sleep(POLL_INTERVAL)
+
+        # Load heartbeat state
+        heartbeat_state = load_heartbeat_state(worker_name)
+        if heartbeat_state is None:
+            # State file deleted, exit
+            return
+
+        # Check status
+        if heartbeat_state.status == "stopped":
+            return
+        if heartbeat_state.status == "paused":
+            # Reset beat tracking when paused so next beat happens
+            # at full interval after resume
+            last_beat_monotonic = time.monotonic()
+            continue
+        if heartbeat_state.status == "expired":
+            return
+
+        # Check expiration
+        if heartbeat_state.expire_at:
+            expire_dt = datetime.fromisoformat(heartbeat_state.expire_at.replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            if now >= expire_dt:
+                heartbeat_state.status = "expired"
+                save_heartbeat_state(heartbeat_state)
+                return
+
+        # Check if worker is still alive
+        state = State()
+        worker = state.get_worker(worker_name)
+        if worker is None:
+            # Worker no longer exists in state
+            heartbeat_state.status = "stopped"
+            save_heartbeat_state(heartbeat_state)
+            return
+
+        # Check actual worker status
+        actual_status = refresh_worker_status(worker)
+        if actual_status != "running":
+            # Worker died
+            heartbeat_state.status = "stopped"
+            save_heartbeat_state(heartbeat_state)
+            return
+
+        # Check if it's time to send a beat
+        elapsed = time.monotonic() - last_beat_monotonic
+        if elapsed >= heartbeat_state.interval_seconds:
+            # Time to send a beat
+            try:
+                tmux_send(
+                    worker.tmux.session,
+                    worker.tmux.window,
+                    heartbeat_state.message,
+                    enter=True,
+                    socket=worker.tmux.socket
+                )
+                # Update state
+                heartbeat_state.last_beat_at = datetime.now(timezone.utc).isoformat()
+                heartbeat_state.beat_count += 1
+                save_heartbeat_state(heartbeat_state)
+
+                # Reset monotonic timer
+                last_beat_monotonic = time.monotonic()
+            except Exception:
+                # Failed to send, worker may have died
+                # Will be detected on next iteration
+                pass
+
+
+def start_heartbeat_monitor(worker_name: str) -> int:
+    """Start the heartbeat monitor as a daemon process.
+
+    Spawns a background process that runs run_heartbeat_monitor.
+    The process is double-forked to become a proper daemon.
+
+    Args:
+        worker_name: Name of the worker to monitor
+
+    Returns:
+        PID of the monitor process
+    """
+    # Fork to create child process
+    pid = os.fork()
+    if pid > 0:
+        # Parent process - return child PID
+        return pid
+
+    # Child process - become session leader
+    os.setsid()
+
+    # Fork again to prevent zombie processes
+    pid = os.fork()
+    if pid > 0:
+        # Exit first child
+        os._exit(0)
+
+    # Grandchild process - this is the actual daemon
+    # Close standard file descriptors
+    sys.stdin.close()
+    sys.stdout.close()
+    sys.stderr.close()
+
+    # Redirect to /dev/null
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+
+    # Run the monitor loop
+    try:
+        run_heartbeat_monitor(worker_name)
+    except Exception:
+        pass
+    finally:
+        os._exit(0)
+
+
+def stop_heartbeat_monitor(heartbeat_state: HeartbeatState) -> bool:
+    """Stop the heartbeat monitor process.
+
+    Terminates the background monitor process if it's running.
+
+    Args:
+        heartbeat_state: HeartbeatState with monitor_pid
+
+    Returns:
+        True if process was stopped, False if not running
+    """
+    if heartbeat_state.monitor_pid is None:
+        return False
+
+    try:
+        # Check if process is running
+        os.kill(heartbeat_state.monitor_pid, 0)
+        # Send SIGTERM
+        os.kill(heartbeat_state.monitor_pid, signal.SIGTERM)
+        return True
+    except OSError:
+        # Process not running
+        return False
 
 
 def parse_duration(duration_str: str) -> int:
@@ -4777,6 +4947,8 @@ def cmd_heartbeat_start(args) -> None:
         if not args.force:
             print(f"Error: heartbeat already active for '{worker_name}' (use --force to replace)", file=sys.stderr)
             sys.exit(1)
+        # Stop existing monitor if using --force
+        stop_heartbeat_monitor(existing)
 
     # Parse interval
     try:
@@ -4811,9 +4983,17 @@ def cmd_heartbeat_start(args) -> None:
         last_beat_at=None,
         beat_count=0,
         status="active",
+        monitor_pid=None,  # Will be set after spawning monitor
     )
 
-    # Save heartbeat state
+    # Save heartbeat state first (monitor needs it to exist)
+    save_heartbeat_state(heartbeat_state)
+
+    # Start background monitor process
+    monitor_pid = start_heartbeat_monitor(worker_name)
+
+    # Update state with monitor PID
+    heartbeat_state.monitor_pid = monitor_pid
     save_heartbeat_state(heartbeat_state)
 
     # Format output
@@ -4829,7 +5009,7 @@ def cmd_heartbeat_start(args) -> None:
 def cmd_heartbeat_stop(args) -> None:
     """Stop heartbeat for a worker.
 
-    Sets the heartbeat status to stopped.
+    Sets the heartbeat status to stopped and terminates the monitor process.
 
     Args:
         args: Namespace with stop arguments
@@ -4842,8 +5022,12 @@ def cmd_heartbeat_stop(args) -> None:
         print(f"No active heartbeat for {worker_name}")
         return
 
+    # Stop the monitor process
+    stop_heartbeat_monitor(heartbeat_state)
+
     # Update status to stopped
     heartbeat_state.status = "stopped"
+    heartbeat_state.monitor_pid = None
     save_heartbeat_state(heartbeat_state)
     print(f"Heartbeat stopped for {worker_name}")
 
@@ -4956,6 +5140,21 @@ def cmd_heartbeat_resume(args) -> None:
         sys.exit(1)
 
     heartbeat_state.status = "active"
+
+    # Check if monitor process is still running, restart if needed
+    monitor_running = False
+    if heartbeat_state.monitor_pid:
+        try:
+            os.kill(heartbeat_state.monitor_pid, 0)
+            monitor_running = True
+        except OSError:
+            monitor_running = False
+
+    if not monitor_running:
+        # Restart monitor process
+        monitor_pid = start_heartbeat_monitor(worker_name)
+        heartbeat_state.monitor_pid = monitor_pid
+
     save_heartbeat_state(heartbeat_state)
     print(f"Heartbeat resumed for {worker_name}")
 
