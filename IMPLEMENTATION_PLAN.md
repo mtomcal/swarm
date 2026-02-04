@@ -70,7 +70,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of exit code propagation
   - Add examples: basic, with timeout, exit code check
 
-- [ ] **1.9 Enhance `swarm clean --help`**
+- [x] **1.9 Enhance `swarm clean --help`**
   - Add description of what gets cleaned
   - Add "Warnings" section
   - Add examples with filters

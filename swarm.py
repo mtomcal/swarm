@@ -566,6 +566,78 @@ See Also:
   swarm kill --help      Forcefully stop workers that are stuck
 """
 
+CLEAN_HELP_DESCRIPTION = """\
+Remove stopped workers from swarm state and clean up associated resources.
+
+Removes worker entries from ~/.swarm/state.json and deletes associated log files
+(~/.swarm/logs/<name>.{stdout,stderr}.log). By default, git worktrees are also
+removed unless they have uncommitted changes. Only stopped workers can be cleaned;
+running workers must be killed first with 'swarm kill'.
+
+What Gets Cleaned:
+  - Worker entry in state file (~/.swarm/state.json)
+  - Log files (~/.swarm/logs/<name>.stdout.log, <name>.stderr.log)
+  - Git worktree directory (with --rm-worktree, default: enabled)
+  - Empty tmux sessions (automatically destroyed if no other workers)
+"""
+
+CLEAN_HELP_EPILOG = """\
+Examples:
+  # Clean a single stopped worker
+  swarm clean my-worker
+
+  # Clean all stopped workers at once
+  swarm clean --all
+
+  # Clean worker but preserve its worktree
+  swarm clean my-worker --no-rm-worktree
+
+  # Force clean worktree with uncommitted changes (DATA LOSS!)
+  swarm clean dirty-worker --force-dirty
+
+  # Clean all stopped workers and force-remove dirty worktrees
+  swarm clean --all --force-dirty
+
+Warnings:
+  - Cannot clean running workers - use 'swarm kill' first
+  - --force-dirty will DELETE UNCOMMITTED CHANGES permanently
+  - Without --force-dirty, worktrees with uncommitted changes are preserved
+  - Log files are deleted without confirmation
+  - This action cannot be undone
+
+Recovery Commands:
+  # If worktree removal failed, check uncommitted changes:
+  cd /path/to/worktree && git status
+
+  # Manually commit and push before cleaning:
+  cd /path/to/worktree && git add -A && git commit -m "save work" && git push
+
+  # Then clean up the worker:
+  swarm clean <name>
+
+  # To see worktree path before cleaning:
+  swarm status <name>
+
+  # List all worktrees in the repo:
+  git worktree list
+
+Common Patterns:
+  Kill then clean (typical workflow):
+    swarm kill my-worker && swarm clean my-worker
+
+  Wait for completion then clean:
+    swarm wait my-worker && swarm clean my-worker
+
+  Clean up all finished workers:
+    swarm clean --all
+
+See Also:
+  swarm kill --help      Stop running workers
+  swarm respawn --help   Restart a stopped worker (instead of cleaning)
+  swarm status --help    Check worker state and worktree path
+  swarm ls --help        List all workers and their states
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1703,13 +1775,29 @@ def main() -> None:
                             "with a worker name. Useful for coordinating parallel workers.")
 
     # clean
-    clean_p = subparsers.add_parser("clean", help="Clean up dead workers")
-    clean_p.add_argument("name", nargs="?", help="Worker name")
+    clean_p = subparsers.add_parser(
+        "clean",
+        help="Remove stopped workers from state",
+        description=CLEAN_HELP_DESCRIPTION,
+        epilog=CLEAN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    clean_p.add_argument("name", nargs="?",
+                        help="Worker name to clean. Required unless using --all. "
+                             "Worker must be stopped (not running).")
     clean_p.add_argument("--rm-worktree", action="store_true", default=True,
-                        help="Remove git worktree (default: true)")
+                        help="Remove git worktree directory. Default: true. "
+                             "Use --no-rm-worktree to preserve worktree while "
+                             "removing worker from state.")
+    clean_p.add_argument("--no-rm-worktree", action="store_false", dest="rm_worktree",
+                        help="Preserve git worktree directory while removing worker "
+                             "from state. Useful for manual cleanup or inspection.")
     clean_p.add_argument("--force-dirty", action="store_true",
-                        help="Force removal of worktree even with uncommitted changes")
-    clean_p.add_argument("--all", action="store_true", help="Clean all stopped workers")
+                        help="Force removal of worktree even with uncommitted changes. "
+                             "WARNING: This permanently deletes any uncommitted work!")
+    clean_p.add_argument("--all", action="store_true",
+                        help="Clean all stopped workers. Running workers are skipped "
+                             "with a warning. Cannot be combined with a worker name.")
 
     # respawn
     respawn_p = subparsers.add_parser("respawn", help="Respawn a dead worker")
