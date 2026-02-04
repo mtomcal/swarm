@@ -1,7 +1,7 @@
 # Implementation Plan: Ralph UX Improvements
 
 **Created**: 2026-02-04
-**Status**: Pending
+**Status**: Complete
 **Goal**: Improve ralph command usability with auto-start, continuous done-pattern checking, and better CLI help
 
 ---
@@ -104,12 +104,12 @@ Current ralph UX has friction points:
   python3 -m unittest test_cmd_ralph -v
   ```
 
-- [ ] **5.2 Run integration tests**
+- [x] **5.2 Run integration tests**
   ```bash
   timeout 120 python3 -m unittest tests.test_integration_ralph -v
   ```
 
-- [ ] **5.3 Manual verification**
+- [x] **5.3 Manual verification**
   ```bash
   # Test auto-start (should block)
   swarm ralph spawn --name test --prompt-file PROMPT.md --max-iterations 2 -- echo hi

@@ -22,7 +22,7 @@ Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralp
 
 ### Ralph Spawn Command
 
-**Description**: Spawn a new worker with ralph loop mode enabled.
+**Description**: Spawn a new worker with ralph loop mode enabled. By default, automatically starts the monitoring loop.
 
 **Command**:
 ```bash
@@ -33,6 +33,7 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 - `--name` (str, required): Unique worker identifier
 - `--prompt-file` (str, required): Path to prompt file read each iteration
 - `--max-iterations` (int, required): Maximum number of loop iterations
+- `--no-run` (bool, optional): Spawn worker but don't start monitoring loop (default: false)
 - `-- <command>` (required): Command to spawn (e.g., `claude`)
 
 **Behavior**:
@@ -40,6 +41,12 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 2. Automatically use tmux mode (no `--tmux` flag needed)
 3. Create worker and ralph state
 4. Warn if `--max-iterations` exceeds 50
+5. **Auto-start loop**: Unless `--no-run` is specified, automatically start the monitoring loop after spawning
+
+**Auto-start Behavior**:
+- By default, `ralph spawn` both creates the worker AND starts monitoring
+- The command blocks while the loop runs (use `&` or tmux to background)
+- Use `--no-run` when you want to spawn now but run the loop later
 
 **Error Conditions**:
 | Condition | Behavior |
@@ -54,17 +61,19 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 **Inputs**:
 - `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 60)
 - `--done-pattern` (str, optional): Regex pattern that stops the loop when matched in output
+- `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit (default: false)
 
 **Behavior**:
 1. **Initialize**: Create ralph state file, set iteration to 0
 2. **Loop Start**:
    a. Increment iteration counter
    b. Read prompt file from disk (fresh read every iteration)
-   c. Spawn agent with prompt content piped to stdin or via `--append-system-prompt`
+   c. Spawn agent with prompt content typed into tmux pane after ready detection
    d. Log iteration start with timestamp
 3. **Monitor**:
    a. Wait for agent to exit OR inactivity timeout
-   b. If `--done-pattern` specified, check output for match
+   b. If `--check-done-continuous`, check done pattern every poll cycle
+   c. If `--done-pattern` specified (without continuous), check output after exit
 4. **Evaluate**:
    a. If done pattern matched → stop loop, exit 0
    b. If max iterations reached → stop loop, exit 0
@@ -111,17 +120,28 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 **Behavior**:
 1. Read prompt file from disk at start of each iteration
 2. File is re-read every time (allows editing mid-loop)
-3. Content is passed to the agent command
+3. Content is typed into the tmux pane after agent ready detection
 
-**Prompt Injection Methods**:
-- Pipe to stdin: `cat PROMPT.md | claude`
-- The exact method depends on the command being spawned
+**Prompt Injection Method**:
+The prompt is typed into the tmux pane using `tmux send-keys` after the agent signals readiness. For Claude Code, this becomes the first user message in the conversation.
 
 **Error Conditions**:
 | Condition | Behavior |
 |-----------|----------|
 | Prompt file deleted mid-loop | Exit 1 with "swarm: error: prompt file not found: <path>" |
 | Prompt file unreadable | Exit 1 with "swarm: error: cannot read prompt file: <path>" |
+
+### Worktree Behavior
+
+**Description**: How worktrees work with ralph mode.
+
+**Behavior**:
+- When `--worktree` is specified, the worktree is created once at spawn time
+- The **same worktree is reused across all iterations**
+- Work persists between iterations (agent commits/pushes, next iteration picks up)
+- The worktree is NOT recreated or reset between iterations
+
+This enables the core ralph pattern: each iteration builds on the previous one's committed work.
 
 ### Ralph State Management
 
@@ -142,7 +162,8 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
   "consecutive_failures": 0,
   "total_failures": 2,
   "done_pattern": "regex|null",
-  "inactivity_timeout": 300
+  "inactivity_timeout": 300,
+  "check_done_continuous": false
 }
 ```
 
@@ -191,11 +212,18 @@ The worker record includes ralph iteration in metadata:
 
 **Inputs**:
 - `--done-pattern` (str, optional): Regex pattern to match
+- `--check-done-continuous` (bool, optional): Check during monitoring, not just after exit
 
-**Behavior**:
+**Default Behavior** (without `--check-done-continuous`):
 1. After each agent exit, capture recent output
 2. Match regex against output
 3. If matched, stop loop with success
+
+**Continuous Checking** (with `--check-done-continuous`):
+1. During the inactivity detection polling loop (every 2 seconds)
+2. Check captured output against done pattern
+3. If matched, immediately stop loop (don't wait for exit or timeout)
+4. Useful when you want to stop as soon as "All tasks complete" appears
 
 **Common Patterns**:
 - `"All tasks complete"` - Simple string match
@@ -218,6 +246,22 @@ The worker record includes ralph iteration in metadata:
 4. Consecutive failure count resets on successful iteration (exit 0)
 
 **Backoff Formula**: `min(2^(n-1), 300)` seconds where n = consecutive failure count
+
+### Mid-Iteration Intervention
+
+**Description**: Send messages to the agent during an iteration.
+
+**Command**:
+```bash
+swarm send <name> "message"
+```
+
+Since ralph workers are tmux workers, the standard `swarm send` command works. Use this to:
+- Redirect the agent: `swarm send agent "skip that approach, try X instead"`
+- Request wrap-up: `swarm send agent "please wrap up and commit your changes"`
+- Provide information: `swarm send agent "the API endpoint changed to /v2/users"`
+
+The message is typed into the tmux pane and becomes part of the agent's input.
 
 ### Success Output
 
@@ -252,6 +296,26 @@ spawned <name> (tmux: <session>:<window>) [ralph mode: iteration 1/100]
 ```
 [ralph] <name>: done pattern matched, stopping loop
 ```
+
+## Prompt Design Principles
+
+Good ralph prompts follow these principles:
+
+| Principle | Rationale |
+|-----------|-----------|
+| **Small** | Less prompt = more context for actual work. Keep under 20 lines. |
+| **Pick one task** | Each iteration should focus on ONE task. Don't overwhelm. |
+| **Verify first** | Agent should read code before assuming state. Don't hallucinate. |
+| **Commit each iteration** | Work must be committed/pushed to persist across context windows. |
+| **Update the plan** | Mark tasks done so next iteration knows what's left. |
+
+### Anti-patterns to Avoid
+
+- Long prompts that consume context
+- Multiple tasks per iteration (leads to partial completion)
+- Assuming code state without reading it
+- Forgetting to commit (work lost on next iteration)
+- Not updating IMPLEMENTATION_PLAN.md (agent redoes completed work)
 
 ## Prompt Template Generation
 
@@ -292,15 +356,6 @@ IMPORTANT:
 - run tests after changes
 - commit and push when you are done
 ```
-
-### Template Design Principles
-
-| Principle | Rationale |
-|-----------|-----------|
-| **Minimal** | Less prompt = more context for actual work |
-| **Direct** | Imperative instructions, no fluff |
-| **Project-agnostic** | References common conventions (specs/, CLAUDE.md) |
-| **Customizable** | User should edit for their project (add test commands, deployment steps, etc.) |
 
 ### What Users Should Customize
 
@@ -477,30 +532,44 @@ done
 | `--max-iterations` | int | Yes | - | Maximum loop iterations |
 | `--inactivity-timeout` | int | No | 60 | Screen stability timeout (seconds) |
 | `--done-pattern` | str | No | null | Regex to stop loop |
+| `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
+| `--no-run` | bool | No | false | Spawn only, don't start loop |
+| `--worktree` | bool | No | false | Create isolated git worktree |
 
 ### Ralph Management Subcommands
 
 | Command | Description |
 |---------|-------------|
-| `swarm ralph spawn --name <n> --prompt-file <f> --max-iterations <n> -- <cmd>` | Spawn ralph worker |
+| `swarm ralph spawn --name <n> --prompt-file <f> --max-iterations <n> -- <cmd>` | Spawn ralph worker and start loop |
+| `swarm ralph spawn --no-run ...` | Spawn ralph worker without starting loop |
+| `swarm ralph run <name>` | Run the monitoring loop for existing worker |
 | `swarm ralph pause <name>` | Pause ralph loop |
 | `swarm ralph resume <name>` | Resume ralph loop |
 | `swarm ralph status <name>` | Show ralph loop status |
 | `swarm ralph list` | List all ralph workers |
 | `swarm ralph init` | Create PROMPT.md template |
 | `swarm ralph template` | Output template to stdout |
-| `swarm ralph run <name>` | Run the ralph loop (internal) |
 
 ## Scenarios
 
-### Scenario: Basic ralph loop
+### Scenario: Basic ralph loop (auto-start)
 - **Given**: Prompt file exists at `./PROMPT.md`
 - **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
 - **Then**:
   - Worker spawned in tmux mode
-  - Prompt file read and passed to claude
+  - Monitoring loop starts automatically
+  - Command blocks while loop runs
   - Output: "spawned agent (tmux: swarm:agent) [ralph mode: iteration 1/10]"
   - Ralph state created at `~/.swarm/ralph/agent/state.json`
+
+### Scenario: Spawn without running loop
+- **Given**: Prompt file exists at `./PROMPT.md`
+- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 --no-run -- claude`
+- **Then**:
+  - Worker spawned in tmux mode
+  - Monitoring loop NOT started
+  - Command returns immediately
+  - User must run `swarm ralph run agent` separately
 
 ### Scenario: Iteration restart on agent exit
 - **Given**: Ralph worker "agent" running, iteration 3/10
@@ -520,12 +589,21 @@ done
   - Log: "[ralph] agent: inactivity timeout (60s), restarting"
   - New iteration started
 
-### Scenario: Done pattern stops loop
+### Scenario: Done pattern stops loop (after exit)
 - **Given**: Ralph worker with `--done-pattern "All tasks complete"`
-- **When**: Agent output contains "All tasks complete"
+- **When**: Agent exits and output contains "All tasks complete"
 - **Then**:
   - Log: "[ralph] agent: done pattern matched, stopping loop"
   - Loop exits with code 0
+  - Ralph state status set to "stopped"
+
+### Scenario: Continuous done pattern checking
+- **Given**: Ralph worker with `--done-pattern "All tasks complete" --check-done-continuous`
+- **When**: Agent output contains "All tasks complete" (agent still running)
+- **Then**:
+  - Pattern detected during monitoring poll
+  - Log: "[ralph] agent: done pattern matched, stopping loop"
+  - Loop exits immediately (doesn't wait for agent exit)
   - Ralph state status set to "stopped"
 
 ### Scenario: Max iterations reached
@@ -602,17 +680,26 @@ done
 
 ### Scenario: Missing prompt file
 - **Given**: `--prompt-file ./missing.md` specified
-- **When**: `swarm spawn --ralph --prompt-file ./missing.md --max-iterations 10 -- claude`
+- **When**: `swarm ralph spawn --name agent --prompt-file ./missing.md --max-iterations 10 -- claude`
 - **Then**:
   - Exit code 1
   - Error: "swarm: error: prompt file not found: ./missing.md"
 
-### Scenario: Ralph requires tmux
-- **Given**: User attempts ralph without explicit tmux
-- **When**: `swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+### Scenario: Mid-iteration intervention
+- **Given**: Ralph worker "agent" running, iteration 3/10
+- **When**: `swarm send agent "please wrap up and commit"`
 - **Then**:
-  - `--tmux` automatically enabled
-  - Worker created in tmux mode
+  - Message typed into agent's tmux pane
+  - Agent receives message as input
+  - Agent can respond to the intervention
+
+### Scenario: Worktree reuse across iterations
+- **Given**: Ralph worker spawned with `--worktree`
+- **When**: Iteration 1 completes, iteration 2 starts
+- **Then**:
+  - Same worktree directory used
+  - Any committed changes from iteration 1 are present
+  - Worktree is NOT reset or recreated
 
 ## Edge Cases
 
@@ -623,11 +710,12 @@ done
 - Backoff timer does not count toward inactivity timeout
 - Pausing during backoff wait immediately stops the wait
 - Resume after pause continues iteration count (does not reset)
-- Multiple `--ralph` workers can run concurrently with different names
+- Multiple ralph workers can run concurrently with different names
 - Ralph state persists across swarm restarts (can resume after crash)
 - Killing a ralph worker also stops the loop (state set to "stopped")
 - `--ready-wait` is implicit in ralph mode (always waits for ready)
-- Worktree mode (`--worktree`) is compatible with ralph mode
+- Worktree mode (`--worktree`) is compatible with ralph mode - same worktree reused
+- `--no-run` returns immediately after spawn, useful for scripting
 
 ## Recovery Procedures
 
@@ -663,7 +751,7 @@ vim ~/.swarm/ralph/<name>/state.json
 # Or pause, kill, respawn with new value
 swarm ralph pause <name>
 swarm kill <name>
-swarm spawn --name <name> --ralph --prompt-file ./PROMPT.md --max-iterations 200 -- claude
+swarm ralph spawn --name <name> --prompt-file ./PROMPT.md --max-iterations 200 -- claude
 ```
 
 ### Clean up ralph state
@@ -679,8 +767,10 @@ rm -rf ~/.swarm/ralph/
 ## Implementation Notes
 
 - **Tmux requirement**: Ralph requires tmux for pane capture, ready detection, and output monitoring. Process mode is not supported.
-- **Prompt injection**: The prompt file content should be piped to the agent or passed via appropriate CLI flags depending on the target agent.
+- **Prompt injection**: The prompt file content is typed into the tmux pane via `tmux send-keys` after the agent signals readiness. For Claude Code, this becomes the first user message.
 - **State file locking**: Ralph state files should use fcntl locking to prevent race conditions.
 - **Iteration logging**: Each iteration is logged with timestamps to enable debugging and analysis.
 - **Graceful shutdown**: SIGTERM to the ralph process should pause the loop and allow current agent to complete.
 - **Resource management**: Each iteration creates a fresh agent with a new context window, consuming API tokens.
+- **Auto-start default**: `ralph spawn` runs the loop by default for simpler UX. Use `--no-run` for the legacy two-command workflow.
+- **Worktree persistence**: When using `--worktree`, the same worktree is reused across all iterations. Work persists via git commits.
