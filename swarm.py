@@ -1261,6 +1261,135 @@ class HeartbeatState:
         )
 
 
+# Heartbeat state lock file path
+HEARTBEAT_LOCK_FILE = SWARM_DIR / "heartbeat.lock"
+
+
+@contextmanager
+def heartbeat_file_lock():
+    """Context manager for exclusive locking of heartbeat state files.
+
+    This prevents race conditions when multiple swarm processes
+    attempt to read/modify/write heartbeat state files concurrently.
+
+    Uses fcntl.flock() for exclusive (LOCK_EX) file locking.
+    The lock is automatically released when the context exits,
+    even if an exception occurs.
+
+    Yields:
+        File object for the lock file (callers don't need to use this)
+    """
+    ensure_dirs()
+    lock_file = open(HEARTBEAT_LOCK_FILE, 'w')
+    try:
+        # Acquire exclusive lock (blocks if another process holds it)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield lock_file
+    finally:
+        # Release lock and close file
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def get_heartbeat_state_path(worker_name: str) -> Path:
+    """Get the path to a worker's heartbeat state file.
+
+    Heartbeat state is stored per-worker at:
+    ~/.swarm/heartbeats/<worker-name>.json
+
+    Args:
+        worker_name: Name of the worker
+
+    Returns:
+        Path to the heartbeat state file
+    """
+    return HEARTBEATS_DIR / f"{worker_name}.json"
+
+
+def load_heartbeat_state(worker_name: str) -> Optional[HeartbeatState]:
+    """Load heartbeat state for a worker.
+
+    Reads heartbeat state from disk with exclusive file locking to
+    prevent race conditions with concurrent processes.
+
+    Args:
+        worker_name: Name of the worker
+
+    Returns:
+        HeartbeatState if it exists, None otherwise
+    """
+    with heartbeat_file_lock():
+        state_path = get_heartbeat_state_path(worker_name)
+        if not state_path.exists():
+            return None
+
+        with open(state_path, "r") as f:
+            data = json.load(f)
+            return HeartbeatState.from_dict(data)
+
+
+def save_heartbeat_state(heartbeat_state: HeartbeatState) -> None:
+    """Save heartbeat state for a worker.
+
+    Writes heartbeat state to disk with exclusive file locking to
+    prevent race conditions with concurrent processes.
+
+    Args:
+        heartbeat_state: HeartbeatState to save
+    """
+    with heartbeat_file_lock():
+        HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        state_path = get_heartbeat_state_path(heartbeat_state.worker_name)
+
+        with open(state_path, "w") as f:
+            json.dump(heartbeat_state.to_dict(), f, indent=2)
+
+
+def delete_heartbeat_state(worker_name: str) -> bool:
+    """Delete heartbeat state file for a worker.
+
+    Removes the heartbeat state file with exclusive file locking.
+
+    Args:
+        worker_name: Name of the worker
+
+    Returns:
+        True if file was deleted, False if it didn't exist
+    """
+    with heartbeat_file_lock():
+        state_path = get_heartbeat_state_path(worker_name)
+        if state_path.exists():
+            state_path.unlink()
+            return True
+        return False
+
+
+def list_heartbeat_states() -> list[HeartbeatState]:
+    """List all heartbeat states.
+
+    Loads all heartbeat state files from the heartbeats directory
+    with exclusive file locking.
+
+    Returns:
+        List of HeartbeatState objects, sorted by worker name
+    """
+    with heartbeat_file_lock():
+        if not HEARTBEATS_DIR.exists():
+            return []
+
+        states = []
+        for state_file in HEARTBEATS_DIR.glob("*.json"):
+            try:
+                with open(state_file, "r") as f:
+                    data = json.load(f)
+                    states.append(HeartbeatState.from_dict(data))
+            except (json.JSONDecodeError, KeyError):
+                # Skip invalid state files
+                continue
+
+        return sorted(states, key=lambda s: s.worker_name)
+
+
 def get_ralph_state_path(worker_name: str) -> Path:
     """Get the path to a worker's ralph state file."""
     return RALPH_DIR / worker_name / "state.json"

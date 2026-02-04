@@ -102,7 +102,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Fields: worker_name, interval_seconds, expire_at, message, created_at, last_beat_at, beat_count, status
   - Add to data-structures section of swarm.py
 
-- [ ] **2.2 Add heartbeat state persistence**
+- [x] **2.2 Add heartbeat state persistence**
   - Storage: `~/.swarm/heartbeats/<worker>.json`
   - Load/save functions with file locking
   - Status enum: active, paused, expired, stopped
