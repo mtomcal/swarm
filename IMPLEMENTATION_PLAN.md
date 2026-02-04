@@ -92,7 +92,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add detach instructions
   - Add examples
 
-- [ ] **1.14 Enhance `swarm init --help`**
+- [x] **1.14 Enhance `swarm init --help`**
   - Add description of what gets initialized
   - Add examples
 

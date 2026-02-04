@@ -889,6 +889,62 @@ See Also:
   swarm spawn --help      Create new workers
 """
 
+INIT_HELP_DESCRIPTION = """\
+Initialize swarm in your project by adding agent instructions to a markdown file.
+
+This command adds a "Process Management (swarm)" section to your project's agent
+instruction file (AGENTS.md or CLAUDE.md). This section teaches AI agents how to
+use swarm commands for parallel task execution and worktree isolation.
+
+Auto-discovery: If no --file is specified, init checks for AGENTS.md first, then
+CLAUDE.md. If neither exists, it creates AGENTS.md. The command is idempotent -
+running it multiple times on the same file has no effect unless --force is used.
+"""
+
+INIT_HELP_EPILOG = """\
+Examples:
+  # Auto-discover and initialize (recommended)
+  swarm init
+
+  # Preview what would be done without making changes
+  swarm init --dry-run
+
+  # Explicitly target CLAUDE.md
+  swarm init --file CLAUDE.md
+
+  # Update existing swarm instructions to latest version
+  swarm init --force
+
+What Gets Added:
+  A "Process Management (swarm)" section containing:
+  - Quick reference for common swarm commands
+  - Worktree isolation usage patterns
+  - Ralph mode (autonomous looping) documentation
+  - Power user tips and environment variable options
+
+Auto-Discovery Order:
+  1. If --file specified, use that file
+  2. If AGENTS.md exists, append to it
+  3. If CLAUDE.md exists, append to it
+  4. Otherwise, create AGENTS.md
+
+Idempotent Behavior:
+  - If the marker "Process Management (swarm)" already exists in the target
+    file, init reports this and exits without changes
+  - Use --force to replace the existing section with the latest version
+
+Common Workflow:
+  1. Clone a project:     git clone <repo>
+  2. Initialize swarm:    cd <repo> && swarm init
+  3. Spawn a worker:      swarm spawn --name dev --tmux --worktree -- claude
+  4. Send instructions:   swarm send dev "read AGENTS.md and start working"
+
+See Also:
+  swarm spawn --help      Create new workers
+  swarm ralph --help      Autonomous agent looping
+  swarm --help            Overview of all commands
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -2101,13 +2157,22 @@ def main() -> None:
                                "not needed.")
 
     # init
-    init_p = subparsers.add_parser("init", help="Initialize swarm in project")
+    init_p = subparsers.add_parser(
+        "init",
+        help="Initialize swarm in project",
+        description=INIT_HELP_DESCRIPTION,
+        epilog=INIT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     init_p.add_argument("--dry-run", action="store_true",
-                        help="Show what would be done without making changes")
+                        help="Preview what would be done without making changes. "
+                             "Shows target file and action (create/append/update).")
     init_p.add_argument("--file", choices=["AGENTS.md", "CLAUDE.md"], default=None,
-                        help="Output file name (default: auto-detect AGENTS.md or CLAUDE.md)")
+                        help="Target file for swarm instructions. Default: auto-detect "
+                             "(checks AGENTS.md, then CLAUDE.md, creates AGENTS.md if neither exists).")
     init_p.add_argument("--force", action="store_true",
-                        help="Overwrite existing file")
+                        help="Replace existing swarm instructions section with latest version. "
+                             "Without --force, init is idempotent and skips if marker exists.")
 
     # ralph - autonomous agent looping (Ralph Wiggum pattern)
     ralph_p = subparsers.add_parser(
