@@ -93,7 +93,7 @@ Current ralph UX has friction points:
   - Add "Prompt Design Principles" section
   - Update scenarios for new behaviors
 
-- [ ] **4.2 Update CLAUDE.md**
+- [x] **4.2 Update CLAUDE.md**
   - Update ralph example to show single-command workflow
   - Add note about `--no-run` for scripting
 

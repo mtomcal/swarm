@@ -52,13 +52,9 @@ State stored in `~/.swarm/state.json`. Logs in `~/.swarm/logs/`.
 ### Ralph Mode (Autonomous Looping)
 Ralph mode enables autonomous agent looping with fresh context windows.
 
-**Important**: `ralph spawn` creates the worker and sends the initial prompt, but `ralph run` must be executed separately to monitor and loop:
 ```bash
-# Step 1: Spawn the worker (starts iteration 1)
+# Single command spawns worker AND starts monitoring loop (blocks until complete)
 swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude
-
-# Step 2: Run the monitoring loop (handles iterations 2+)
-swarm ralph run agent        # Monitors worker and restarts on inactivity/exit
 
 # Other commands
 swarm ralph status agent     # Check iteration progress
@@ -66,6 +62,12 @@ swarm ralph pause agent      # Pause the loop
 swarm ralph resume agent     # Resume the loop
 swarm ralph init             # Create starter PROMPT.md
 swarm ralph list             # List all ralph workers
+```
+
+**Scripting/Advanced**: Use `--no-run` to spawn without starting the loop:
+```bash
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --no-run -- claude
+swarm ralph run agent        # Start monitoring loop separately
 ```
 
 Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is unchanged for `--inactivity-timeout` seconds (default: 60s). State in `~/.swarm/ralph/<name>/state.json`. Iteration logs in `~/.swarm/ralph/<name>/iterations.log`.
