@@ -1277,5 +1277,278 @@ class TestHeartbeatStopWithMonitor(unittest.TestCase):
         self.assertIsNone(updated.monitor_pid)
 
 
+class TestCmdHeartbeatStatus(unittest.TestCase):
+    """Test cmd_heartbeat_status function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_status_nonexistent_heartbeat_fails(self):
+        """Test status for non-existent heartbeat fails."""
+        args = Namespace(worker='nonexistent', format='text')
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_status(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_status_shows_active_heartbeat(self):
+        """Test status shows active heartbeat info."""
+        created = datetime.now(timezone.utc)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=created.isoformat(),
+            status='active',
+            beat_count=5,
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should not raise
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_next_beat_for_active(self):
+        """Test status shows next beat time for active heartbeat."""
+        created = datetime.now(timezone.utc) - timedelta(minutes=30)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=created.isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show next beat (created + 1 hour interval = 30 min from now)
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_next_beat_based_on_last_beat(self):
+        """Test next beat is calculated from last_beat_at when available."""
+        created = datetime.now(timezone.utc) - timedelta(hours=2)
+        last_beat = datetime.now(timezone.utc) - timedelta(minutes=30)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=created.isoformat(),
+            last_beat_at=last_beat.isoformat(),
+            beat_count=2,
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show next beat (last_beat + 1 hour = 30 min from now)
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_dash_for_paused(self):
+        """Test status shows dash for next beat when paused."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show "-" for next beat
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_dash_for_stopped(self):
+        """Test status shows dash for next beat when stopped."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show "-" for next beat
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_dash_for_expired(self):
+        """Test status shows dash for next beat when expired."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='expired',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show "-" for next beat
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_expiration(self):
+        """Test status shows expiration time."""
+        expire_time = datetime.now(timezone.utc) + timedelta(hours=12)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at=expire_time.isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show expiration time
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_shows_never_for_no_expiration(self):
+        """Test status shows 'never' when no expiration set."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at=None,
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should show "never" for expiration
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_json_output(self):
+        """Test status JSON output format."""
+        created = datetime.now(timezone.utc)
+        expire_time = created + timedelta(hours=24)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=created.isoformat(),
+            expire_at=expire_time.isoformat(),
+            beat_count=3,
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='json')
+        # Should output valid JSON
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_json_includes_next_beat_at(self):
+        """Test JSON output includes next_beat_at field."""
+        created = datetime.now(timezone.utc) - timedelta(minutes=30)
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=created.isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='json')
+
+        # Capture output
+        import io
+        from contextlib import redirect_stdout
+        f = io.StringIO()
+        with redirect_stdout(f):
+            swarm.cmd_heartbeat_status(args)
+
+        output = f.getvalue()
+        data = json.loads(output)
+
+        self.assertIn('next_beat_at', data)
+        self.assertIsNotNone(data['next_beat_at'])
+
+    def test_status_json_next_beat_at_null_for_stopped(self):
+        """Test JSON output has null next_beat_at when stopped."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='json')
+
+        # Capture output
+        import io
+        from contextlib import redirect_stdout
+        f = io.StringIO()
+        with redirect_stdout(f):
+            swarm.cmd_heartbeat_status(args)
+
+        output = f.getvalue()
+        data = json.loads(output)
+
+        self.assertIn('next_beat_at', data)
+        self.assertIsNone(data['next_beat_at'])
+
+    def test_status_handles_invalid_created_at(self):
+        """Test status handles invalid created_at timestamp."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at='not-a-valid-timestamp',
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should handle gracefully
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_handles_empty_created_at(self):
+        """Test status handles empty created_at."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at='',
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder', format='text')
+        # Should handle gracefully and show "?"
+        swarm.cmd_heartbeat_status(args)
+
+    def test_status_cli_format_flag(self):
+        """Test status command accepts --format flag via CLI."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'status', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--format', result.stdout)
+        self.assertIn('json', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

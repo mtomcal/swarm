@@ -131,8 +131,10 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Table output: worker, interval, next beat, expires, status, beats
   - JSON output option
 
-- [ ] **2.7 Implement `swarm heartbeat status`**
+- [x] **2.7 Implement `swarm heartbeat status`**
   - Detailed output for single heartbeat
+  - Next beat time calculation
+  - JSON output format support
 
 - [ ] **2.8 Implement `swarm heartbeat pause/resume`**
   - Set status to paused/active

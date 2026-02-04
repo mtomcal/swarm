@@ -1193,13 +1193,25 @@ HEARTBEAT_STATUS_HELP_EPILOG = """\
 Show detailed status for a single heartbeat.
 
 Displays comprehensive information including:
-  - Current status
-  - Interval and message
+  - Current status (active, paused, expired, stopped)
+  - Interval and message configuration
   - Created time and expiration
-  - Last beat time and beat count
+  - Last beat time and next scheduled beat
+  - Total beat count
+
+Output Formats:
+  text (default)    Human-readable key-value pairs
+  json              Machine-readable JSON object
 
 Examples:
+  # Show status for a worker's heartbeat
   swarm heartbeat status builder
+
+  # Get JSON output for scripting
+  swarm heartbeat status builder --format json
+
+  # Check when next beat will occur
+  swarm heartbeat status builder | grep "Next beat"
 """
 
 HEARTBEAT_PAUSE_HELP_EPILOG = """\
@@ -2898,6 +2910,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     heartbeat_status_p.add_argument("worker", help="Worker name")
+    heartbeat_status_p.add_argument("--format", choices=["text", "json"],
+                                    default="text", help="Output format (default: text)")
 
     # heartbeat pause
     heartbeat_pause_p = heartbeat_subparsers.add_parser(
@@ -5126,20 +5140,55 @@ def cmd_heartbeat_status(args) -> None:
         print(f"No heartbeat found for {worker_name}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Worker: {heartbeat_state.worker_name}")
-    print(f"Status: {heartbeat_state.status}")
-    print(f"Interval: {format_duration(heartbeat_state.interval_seconds)}")
-    print(f"Message: {heartbeat_state.message}")
-    print(f"Created: {heartbeat_state.created_at}")
+    # Calculate next beat time
+    if heartbeat_state.status in ("paused", "expired", "stopped"):
+        next_beat_str = "-"
+        next_beat_iso = None
+    else:
+        base_time = heartbeat_state.last_beat_at if heartbeat_state.last_beat_at else heartbeat_state.created_at
+        if base_time:
+            try:
+                base_dt = datetime.fromisoformat(base_time.replace('Z', '+00:00'))
+                next_dt = base_dt + timedelta(seconds=heartbeat_state.interval_seconds)
+                next_beat_iso = next_dt.isoformat()
+                next_beat_str = time_until(next_beat_iso)
+            except ValueError:
+                next_beat_str = "?"
+                next_beat_iso = None
+        else:
+            next_beat_str = "?"
+            next_beat_iso = None
+
+    # Calculate expires string
     if heartbeat_state.expire_at:
-        print(f"Expires: {heartbeat_state.expire_at}")
+        try:
+            expire_str = time_until(heartbeat_state.expire_at)
+        except ValueError:
+            expire_str = heartbeat_state.expire_at
     else:
-        print(f"Expires: never")
-    if heartbeat_state.last_beat_at:
-        print(f"Last beat: {heartbeat_state.last_beat_at}")
+        expire_str = "never"
+
+    if args.format == "json":
+        import json
+        output = heartbeat_state.to_dict()
+        output["next_beat_at"] = next_beat_iso
+        print(json.dumps(output, indent=2))
     else:
-        print(f"Last beat: none")
-    print(f"Beat count: {heartbeat_state.beat_count}")
+        print(f"Worker: {heartbeat_state.worker_name}")
+        print(f"Status: {heartbeat_state.status}")
+        print(f"Interval: {format_duration(heartbeat_state.interval_seconds)}")
+        print(f"Message: {heartbeat_state.message}")
+        print(f"Created: {heartbeat_state.created_at}")
+        if heartbeat_state.expire_at:
+            print(f"Expires: {heartbeat_state.expire_at} ({expire_str})")
+        else:
+            print(f"Expires: never")
+        if heartbeat_state.last_beat_at:
+            print(f"Last beat: {heartbeat_state.last_beat_at}")
+        else:
+            print(f"Last beat: none")
+        print(f"Next beat: {next_beat_str}")
+        print(f"Beat count: {heartbeat_state.beat_count}")
 
 
 def cmd_heartbeat_pause(args) -> None:
