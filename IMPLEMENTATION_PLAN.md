@@ -265,7 +265,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Check `.swarm/workflows/` before global
   - Document in help text
 
-- [ ] **4.3 Resume heartbeats on swarm startup**
+- [x] **4.3 Resume heartbeats on swarm startup**
   - Check for active heartbeats
   - Restart monitor threads
 

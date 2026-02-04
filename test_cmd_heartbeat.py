@@ -2341,5 +2341,305 @@ class TestHeartbeatCleanupOnKill(unittest.TestCase):
             self.assertEqual(updated.status, 'stopped')
 
 
+class TestIsHeartbeatMonitorRunning(unittest.TestCase):
+    """Test is_heartbeat_monitor_running function."""
+
+    def test_no_monitor_pid(self):
+        """Test returns False when monitor_pid is None."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        self.assertFalse(swarm.is_heartbeat_monitor_running(heartbeat_state))
+
+    def test_invalid_pid(self):
+        """Test returns False when PID doesn't exist."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=999999999,  # Highly unlikely to exist
+        )
+        self.assertFalse(swarm.is_heartbeat_monitor_running(heartbeat_state))
+
+    def test_current_process_pid(self):
+        """Test returns True for a running process (current process)."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=os.getpid(),  # Current process is definitely running
+        )
+        self.assertTrue(swarm.is_heartbeat_monitor_running(heartbeat_state))
+
+
+class TestResumeActiveHeartbeats(unittest.TestCase):
+    """Test resume_active_heartbeats function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_no_heartbeats(self):
+        """Test returns 0 when no heartbeats exist."""
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+    def test_paused_heartbeat_not_resumed(self):
+        """Test paused heartbeats are not resumed."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+    def test_stopped_heartbeat_not_resumed(self):
+        """Test stopped heartbeats are not resumed."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+    def test_expired_heartbeat_not_resumed(self):
+        """Test expired heartbeats are not resumed."""
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='expired',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+    @patch('swarm.is_heartbeat_monitor_running')
+    def test_active_heartbeat_with_running_monitor_not_resumed(self, mock_is_running):
+        """Test active heartbeats with running monitor are not resumed."""
+        mock_is_running.return_value = True
+
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=12345,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.is_heartbeat_monitor_running')
+    @patch('swarm.State')
+    def test_active_heartbeat_without_worker_marked_stopped(
+        self, mock_state_cls, mock_is_running, mock_refresh, mock_start_monitor
+    ):
+        """Test active heartbeats without a worker are marked stopped."""
+        mock_is_running.return_value = False
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None  # Worker doesn't exist
+        mock_state_cls.return_value = mock_state
+
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+        # Verify heartbeat was marked stopped
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+        mock_start_monitor.assert_not_called()
+
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.is_heartbeat_monitor_running')
+    @patch('swarm.State')
+    def test_active_heartbeat_with_stopped_worker_marked_stopped(
+        self, mock_state_cls, mock_is_running, mock_refresh, mock_start_monitor
+    ):
+        """Test active heartbeats with stopped worker are marked stopped."""
+        mock_is_running.return_value = False
+        mock_worker = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'stopped'  # Worker is stopped
+
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+        # Verify heartbeat was marked stopped
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+        mock_start_monitor.assert_not_called()
+
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.is_heartbeat_monitor_running')
+    @patch('swarm.State')
+    def test_expired_active_heartbeat_marked_expired(
+        self, mock_state_cls, mock_is_running, mock_refresh, mock_start_monitor
+    ):
+        """Test active heartbeats past expiration are marked expired."""
+        mock_is_running.return_value = False
+        mock_worker = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+
+        # Create heartbeat that expired in the past
+        expired_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at=expired_time.isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 0)
+
+        # Verify heartbeat was marked expired
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'expired')
+        mock_start_monitor.assert_not_called()
+
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.is_heartbeat_monitor_running')
+    @patch('swarm.State')
+    def test_active_heartbeat_resumed_successfully(
+        self, mock_state_cls, mock_is_running, mock_refresh, mock_start_monitor
+    ):
+        """Test active heartbeat with running worker is resumed."""
+        mock_is_running.return_value = False
+        mock_worker = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+        mock_start_monitor.return_value = 54321  # New monitor PID
+
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            monitor_pid=None,
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 1)
+
+        # Verify monitor was started
+        mock_start_monitor.assert_called_once_with('builder')
+
+        # Verify heartbeat was updated with new PID
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'active')
+        self.assertEqual(updated.monitor_pid, 54321)
+
+    @patch('swarm.start_heartbeat_monitor')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.is_heartbeat_monitor_running')
+    @patch('swarm.State')
+    def test_multiple_heartbeats_resumed(
+        self, mock_state_cls, mock_is_running, mock_refresh, mock_start_monitor
+    ):
+        """Test multiple active heartbeats are resumed."""
+        mock_is_running.return_value = False
+        mock_worker = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+        mock_start_monitor.side_effect = [11111, 22222, 33333]
+
+        # Create three active heartbeats
+        for name in ['worker1', 'worker2', 'worker3']:
+            heartbeat_state = swarm.HeartbeatState(
+                worker_name=name,
+                interval_seconds=3600,
+                message='continue',
+                created_at=datetime.now(timezone.utc).isoformat(),
+                status='active',
+                monitor_pid=None,
+            )
+            swarm.save_heartbeat_state(heartbeat_state)
+
+        result = swarm.resume_active_heartbeats()
+        self.assertEqual(result, 3)
+
+        # Verify all monitors were started
+        self.assertEqual(mock_start_monitor.call_count, 3)
+
+
 if __name__ == '__main__':
     unittest.main()

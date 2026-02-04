@@ -3249,6 +3249,88 @@ def stop_heartbeat_monitor(heartbeat_state: HeartbeatState) -> bool:
         return False
 
 
+def is_heartbeat_monitor_running(heartbeat_state: HeartbeatState) -> bool:
+    """Check if the heartbeat monitor process is still running.
+
+    Args:
+        heartbeat_state: HeartbeatState with monitor_pid
+
+    Returns:
+        True if process is running, False otherwise
+    """
+    if heartbeat_state.monitor_pid is None:
+        return False
+
+    try:
+        # Signal 0 checks if process exists without sending a signal
+        os.kill(heartbeat_state.monitor_pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def resume_active_heartbeats() -> int:
+    """Resume heartbeat monitors for active heartbeats.
+
+    Called on swarm startup to restart monitor processes for heartbeats
+    that were active when swarm last ran. This handles the case where
+    the system rebooted or the monitor processes were killed.
+
+    Returns:
+        Number of heartbeats resumed
+    """
+    states = list_heartbeat_states()
+    resumed_count = 0
+
+    for heartbeat_state in states:
+        # Only resume active heartbeats
+        if heartbeat_state.status != "active":
+            continue
+
+        # Check if monitor is already running
+        if is_heartbeat_monitor_running(heartbeat_state):
+            continue
+
+        # Check if worker is still alive before resuming
+        state = State()
+        worker = state.get_worker(heartbeat_state.worker_name)
+        if worker is None:
+            # Worker no longer exists, mark heartbeat as stopped
+            heartbeat_state.status = "stopped"
+            heartbeat_state.monitor_pid = None
+            save_heartbeat_state(heartbeat_state)
+            continue
+
+        # Check actual worker status
+        actual_status = refresh_worker_status(worker)
+        if actual_status != "running":
+            # Worker is not running, mark heartbeat as stopped
+            heartbeat_state.status = "stopped"
+            heartbeat_state.monitor_pid = None
+            save_heartbeat_state(heartbeat_state)
+            continue
+
+        # Check if heartbeat has expired
+        if heartbeat_state.expire_at:
+            expire_dt = datetime.fromisoformat(
+                heartbeat_state.expire_at.replace('Z', '+00:00')
+            )
+            now = datetime.now(timezone.utc)
+            if now >= expire_dt:
+                heartbeat_state.status = "expired"
+                heartbeat_state.monitor_pid = None
+                save_heartbeat_state(heartbeat_state)
+                continue
+
+        # Restart the monitor process
+        monitor_pid = start_heartbeat_monitor(heartbeat_state.worker_name)
+        heartbeat_state.monitor_pid = monitor_pid
+        save_heartbeat_state(heartbeat_state)
+        resumed_count += 1
+
+    return resumed_count
+
+
 def parse_duration(duration_str: str) -> int:
     """Parse a duration string into seconds.
 
@@ -4666,6 +4748,11 @@ def main() -> None:
                                  help="Number of history lines to show (default: 1000)")
 
     args = parser.parse_args()
+
+    # Resume active heartbeats on startup
+    # This restarts monitor processes for heartbeats that were active
+    # when swarm last ran (e.g., after system reboot)
+    resume_active_heartbeats()
 
     # Dispatch to command handlers
     if args.command == "spawn":
