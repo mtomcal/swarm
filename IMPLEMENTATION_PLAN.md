@@ -219,7 +219,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Show current stage details
   - Show timing information
 
-- [ ] **3.11 Implement `swarm workflow list`**
+- [x] **3.11 Implement `swarm workflow list`**
   - Table: name, status, current stage, started, source
   - JSON output option
 

@@ -5592,5 +5592,264 @@ class TestCmdWorkflowStatus(unittest.TestCase):
         self.assertNotIn("Stages:", output)
 
 
+class TestCmdWorkflowList(unittest.TestCase):
+    """Test cmd_workflow_list function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "running",
+            "current_stage": "plan",
+            "current_stage_index": 0,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": None,
+            "stages": {
+                "plan": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def test_list_no_workflows_table(self):
+        """Test listing when no workflows exist (table format)."""
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        self.assertIn("No workflows found", output)
+
+    def test_list_no_workflows_json(self):
+        """Test listing when no workflows exist (JSON format)."""
+        args = Namespace(format="json")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        self.assertEqual(output.strip(), "[]")
+
+    def test_list_single_workflow_table(self):
+        """Test listing a single workflow (table format)."""
+        self._create_workflow_state("my-workflow")
+
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        # Check headers
+        self.assertIn("NAME", output)
+        self.assertIn("STATUS", output)
+        self.assertIn("CURRENT", output)
+        self.assertIn("STARTED", output)
+        self.assertIn("SOURCE", output)
+        # Check workflow data
+        self.assertIn("my-workflow", output)
+        self.assertIn("running", output)
+        self.assertIn("plan", output)
+
+    def test_list_single_workflow_json(self):
+        """Test listing a single workflow (JSON format)."""
+        self._create_workflow_state("my-workflow")
+
+        args = Namespace(format="json")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["name"], "my-workflow")
+        self.assertEqual(data[0]["status"], "running")
+        self.assertEqual(data[0]["current_stage"], "plan")
+
+    def test_list_multiple_workflows_table(self):
+        """Test listing multiple workflows (table format)."""
+        self._create_workflow_state("workflow-a", status="running", current_stage="build")
+        self._create_workflow_state("workflow-b", status="completed", current_stage=None)
+        self._create_workflow_state("workflow-c", status="scheduled", current_stage=None, started_at=None)
+
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        # Check all workflows are listed
+        self.assertIn("workflow-a", output)
+        self.assertIn("workflow-b", output)
+        self.assertIn("workflow-c", output)
+        # Check various statuses
+        self.assertIn("running", output)
+        self.assertIn("completed", output)
+        self.assertIn("scheduled", output)
+
+    def test_list_multiple_workflows_json(self):
+        """Test listing multiple workflows (JSON format)."""
+        self._create_workflow_state("workflow-a")
+        self._create_workflow_state("workflow-b")
+
+        args = Namespace(format="json")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+        self.assertEqual(len(data), 2)
+        names = [wf["name"] for wf in data]
+        self.assertIn("workflow-a", names)
+        self.assertIn("workflow-b", names)
+
+    def test_list_sorted_by_name(self):
+        """Test that workflows are sorted by name."""
+        self._create_workflow_state("zebra-workflow")
+        self._create_workflow_state("alpha-workflow")
+        self._create_workflow_state("middle-workflow")
+
+        args = Namespace(format="json")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+        names = [wf["name"] for wf in data]
+        self.assertEqual(names, ["alpha-workflow", "middle-workflow", "zebra-workflow"])
+
+    def test_list_shows_current_stage_when_none(self):
+        """Test that current stage shows '-' when None."""
+        self._create_workflow_state(
+            "completed-workflow",
+            status="completed",
+            current_stage=None,
+        )
+
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        self.assertIn("completed-workflow", output)
+        # Current stage should show as "-" when None
+        lines = output.strip().split("\n")
+        # Find the data line (skip header)
+        data_line = [l for l in lines if "completed-workflow" in l][0]
+        self.assertIn("-", data_line)
+
+    def test_list_shows_started_when_none(self):
+        """Test that started shows '-' when workflow hasn't started."""
+        self._create_workflow_state(
+            "scheduled-workflow",
+            status="scheduled",
+            current_stage=None,
+            started_at=None,
+        )
+
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        self.assertIn("scheduled-workflow", output)
+        self.assertIn("scheduled", output)
+
+    def test_list_truncates_long_source_path(self):
+        """Test that very long source paths are truncated."""
+        self._create_workflow_state(
+            "long-path-workflow",
+            workflow_file="/very/long/path/that/goes/on/and/on/and/never/seems/to/end/workflow.yaml",
+        )
+
+        args = Namespace(format="table")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        self.assertIn("long-path-workflow", output)
+        # Path should be truncated with "..."
+        self.assertIn("...", output)
+
+    def test_list_all_status_values(self):
+        """Test listing workflows with all possible status values."""
+        statuses = ["created", "scheduled", "running", "completed", "failed", "cancelled"]
+        for i, status in enumerate(statuses):
+            self._create_workflow_state(
+                f"workflow-{i}",
+                status=status,
+                current_stage="plan" if status == "running" else None,
+            )
+
+        args = Namespace(format="json")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_list(args)
+
+        output = captured.getvalue()
+        data = json.loads(output)
+        self.assertEqual(len(data), len(statuses))
+        found_statuses = [wf["status"] for wf in data]
+        for status in statuses:
+            self.assertIn(status, found_statuses)
+
+
 if __name__ == "__main__":
     unittest.main()

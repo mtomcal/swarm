@@ -1610,6 +1610,52 @@ See Also:
   swarm attach <workflow>-<stage> # Attach to running stage
 """
 
+WORKFLOW_LIST_HELP_DESCRIPTION = """\
+List all workflows.
+
+Shows all workflow states with their current status, stage, and timing
+information. Use this to monitor multiple workflows or find workflow names.
+"""
+
+WORKFLOW_LIST_HELP_EPILOG = """\
+Output Columns:
+  NAME          Workflow identifier
+  STATUS        created/scheduled/running/completed/failed/cancelled
+  CURRENT       Currently executing stage (or last stage if finished)
+  STARTED       When workflow started (relative time)
+  SOURCE        Path to workflow YAML file
+
+Output Formats:
+  table (default)    Human-readable table format
+  json               Machine-readable JSON array
+
+Examples:
+  # List all workflows
+  swarm workflow list
+
+  # Get JSON output for scripting
+  swarm workflow list --format json
+
+  # Find running workflows
+  swarm workflow list | grep running
+
+  # Count workflows by status
+  swarm workflow list --format json | jq 'group_by(.status) | map({status: .[0].status, count: length})'
+
+Workflow States:
+  created     Parsed but not started
+  scheduled   Waiting for scheduled start time
+  running     Currently executing stages
+  completed   All stages finished successfully
+  failed      Stage failed and on-failure: stop
+  cancelled   Manually cancelled
+
+See Also:
+  swarm workflow status <name>    # Detailed status of single workflow
+  swarm workflow run --help       # Start a new workflow
+  swarm workflow cancel --help    # Cancel a running workflow
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -4134,6 +4180,17 @@ def main() -> None:
     workflow_status_p.add_argument("name", help="Workflow name")
     workflow_status_p.add_argument("--format", choices=["text", "json"],
                                    default="text", help="Output format (default: text)")
+
+    # workflow list
+    workflow_list_p = workflow_subparsers.add_parser(
+        "list",
+        help="List all workflows",
+        description=WORKFLOW_LIST_HELP_DESCRIPTION,
+        epilog=WORKFLOW_LIST_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_list_p.add_argument("--format", choices=["table", "json"],
+                                 default="table", help="Output format (default: table)")
 
     args = parser.parse_args()
 
@@ -7656,7 +7713,7 @@ def cmd_workflow(args) -> None:
     - validate: Validate workflow YAML without running
     - run: Run a workflow from YAML file
     - status: Show workflow status
-    - list: List all workflows (to be implemented)
+    - list: List all workflows
     - cancel: Cancel a running workflow (to be implemented)
     - resume: Resume a failed/paused workflow (to be implemented)
     - logs: View workflow logs (to be implemented)
@@ -7667,6 +7724,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_run(args)
     elif args.workflow_command == "status":
         cmd_workflow_status(args)
+    elif args.workflow_command == "list":
+        cmd_workflow_list(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -7792,6 +7851,59 @@ def cmd_workflow_status(args) -> None:
                 attempts = str(stage_state.attempts) if stage_state.attempts > 0 else "-"
                 exit_reason = stage_state.exit_reason or "-"
                 print(f"  {stage_name:<20} {stage_state.status:<12} {worker_name:<30} {attempts:<8} {exit_reason}")
+
+
+def cmd_workflow_list(args) -> None:
+    """List all workflows.
+
+    Shows a table or JSON of all workflow states with their current status,
+    stage, and timing information.
+
+    Args:
+        args: Namespace with list arguments:
+            - format: Output format ('table' or 'json')
+
+    Exit codes:
+        0: Success (even if no workflows found)
+    """
+    workflows = list_workflow_states()
+
+    if not workflows:
+        if args.format == "json":
+            print("[]")
+        else:
+            print("No workflows found")
+        return
+
+    if args.format == "json":
+        output = []
+        for wf in workflows:
+            output.append(wf.to_dict())
+        print(json.dumps(output, indent=2))
+    else:
+        # Table format
+        # Calculate column widths for better formatting
+        print(f"{'NAME':<25} {'STATUS':<12} {'CURRENT':<15} {'STARTED':<12} {'SOURCE'}")
+
+        for wf in workflows:
+            # Format current stage
+            current_stage = wf.current_stage or "-"
+
+            # Format started time
+            if wf.started_at:
+                try:
+                    started_str = relative_time(wf.started_at) + " ago"
+                except (ValueError, TypeError):
+                    started_str = wf.started_at[:10] if wf.started_at else "-"
+            else:
+                started_str = "-"
+
+            # Truncate source path for display
+            source = wf.workflow_file
+            if len(source) > 40:
+                source = "..." + source[-37:]
+
+            print(f"{wf.name:<25} {wf.status:<12} {current_stage:<15} {started_str:<12} {source}")
 
 
 def cmd_workflow_run(args) -> None:
