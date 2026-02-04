@@ -78,6 +78,7 @@ python3 -m unittest tests.test_integration_ralph -v  # Integration tests (requir
 ```
 
 ### Integration Test Tips
+- **Always use `timeout`** to prevent hanging tests: `timeout 60 python3 -m unittest ...`
 - Integration tests use `TmuxIsolatedTestCase` from `tests/test_tmux_isolation.py`
 - Each test gets a unique tmux socket for isolation
 - Commands using `--ralph` call `wait_for_agent_ready()` which looks for prompt patterns
