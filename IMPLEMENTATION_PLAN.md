@@ -83,7 +83,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of Ctrl-C behavior
   - Add examples and use cases
 
-- [ ] **1.12 Enhance `swarm eof --help`**
+- [x] **1.12 Enhance `swarm eof --help`**
   - Add description of Ctrl-D behavior
   - Add examples and use cases
 

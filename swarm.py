@@ -775,6 +775,66 @@ See Also:
   swarm logs --help       View worker output
 """
 
+EOF_HELP_DESCRIPTION = """\
+Send Ctrl-D (EOF/end-of-file) to a tmux worker to signal input completion.
+
+Sends the end-of-file signal (Ctrl-D) to the process running in a worker's tmux
+window. This is equivalent to pressing Ctrl-D in the terminal. Commonly used to:
+- Signal end of input to programs reading from stdin
+- Close interactive shells or REPL sessions
+- Exit applications waiting for user input
+
+Unlike interrupt (Ctrl-C), EOF signals completion rather than cancellation.
+This can cause shells to exit entirely, so use with caution. The worker's
+status will change to "stopped" if the shell exits.
+"""
+
+EOF_HELP_EPILOG = """\
+Examples:
+  # Send EOF to a worker
+  swarm eof my-worker
+
+  # Signal end of input to an agent waiting for stdin
+  swarm eof data-processor
+
+  # Exit an interactive shell session
+  swarm eof shell-worker
+
+Use Cases:
+  Signal end of piped input:
+    swarm send my-worker "line 1"
+    swarm send my-worker "line 2"
+    swarm eof my-worker           # Signal no more input
+
+  Exit an interactive Python/Node REPL:
+    swarm eof repl-worker         # Exits the REPL cleanly
+
+  Close a shell session gracefully:
+    swarm eof shell-worker        # Like typing 'exit'
+
+Behavior Notes:
+  - Only works on tmux workers (not background process workers)
+  - Worker must be in "running" status
+  - May cause the worker to exit if it closes the shell
+  - Unlike interrupt, EOF does NOT support --all flag (intentional)
+  - Some programs require multiple Ctrl-D to exit
+
+If Worker Exits Unexpectedly:
+  EOF can cause shells to exit. If this was unintended:
+  1. Check worker status: swarm status <name>
+  2. Respawn if needed: swarm respawn <name>
+
+EOF vs Interrupt:
+  - Ctrl-C (interrupt): Cancels current command, returns to prompt
+  - Ctrl-D (eof): Signals input complete, may exit shell
+
+See Also:
+  swarm interrupt --help    Send Ctrl-C (interrupt) to worker
+  swarm send --help         Send text input to worker
+  swarm kill --help         Forcefully stop worker
+  swarm status --help       Check worker status
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1852,8 +1912,16 @@ def main() -> None:
                             "Cannot be used with a worker name.")
 
     # eof
-    eof_p = subparsers.add_parser("eof", help="Send Ctrl-D to worker")
-    eof_p.add_argument("name", help="Worker name")
+    eof_p = subparsers.add_parser(
+        "eof",
+        help="Send Ctrl-D to worker",
+        description=EOF_HELP_DESCRIPTION,
+        epilog=EOF_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    eof_p.add_argument("name",
+                       help="Worker name to send EOF to. Worker must be a tmux worker "
+                            "and currently running. Use 'swarm ls' to see available workers.")
 
     # attach
     attach_p = subparsers.add_parser("attach", help="Attach to worker tmux window")
