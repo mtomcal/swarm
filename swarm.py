@@ -209,6 +209,57 @@ See Also:
   swarm ralph --help     Autonomous looping mode
 """
 
+# ls command help
+LS_HELP_DESCRIPTION = """\
+List all registered workers with their current status.
+
+Displays worker name, status (running/stopped), process or tmux info, start
+time, worktree path, and tags. Status is refreshed on each call by checking
+the actual tmux window or process state.
+"""
+
+LS_HELP_EPILOG = """\
+Output Formats:
+  table   Aligned columns with header (default)
+  json    Full worker details as JSON array
+  names   Worker names only, one per line (for scripting)
+
+Table Columns:
+  NAME        Worker identifier
+  STATUS      running or stopped (live-checked)
+  PID/WINDOW  Tmux session:window or process PID
+  STARTED     Relative time (e.g., 5s, 2m, 1h, 3d)
+  WORKTREE    Git worktree path or - if none
+  TAG         Comma-separated tags or - if none
+
+Examples:
+  # List all workers
+  swarm ls
+
+  # Show only running workers
+  swarm ls --status running
+
+  # Filter by tag
+  swarm ls --tag team-a
+
+  # Combine filters
+  swarm ls --status running --tag backend
+
+  # JSON output for scripting
+  swarm ls --format json
+
+  # Names only (useful for piping)
+  swarm ls --format names | xargs -I {} swarm status {}
+
+  # Count running workers
+  swarm ls --status running --format names | wc -l
+
+See Also:
+  swarm status --help    Detailed info for single worker
+  swarm spawn --help     Create new workers
+  swarm kill --help      Stop workers
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1218,12 +1269,22 @@ def main() -> None:
                              "Example: -- claude")
 
     # ls
-    ls_p = subparsers.add_parser("ls", help="List workers")
+    ls_p = subparsers.add_parser(
+        "ls",
+        help="List workers",
+        description=LS_HELP_DESCRIPTION,
+        epilog=LS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ls_p.add_argument("--format", choices=["table", "json", "names"], default="table",
-                     help="Output format (default: table)")
+                     help="Output format. Default: table. Use 'json' for full worker "
+                          "details, 'names' for simple list (one per line).")
     ls_p.add_argument("--status", choices=["running", "stopped", "all"], default="all",
-                     help="Filter by status (default: all)")
-    ls_p.add_argument("--tag", help="Filter by tag")
+                     help="Filter by worker status. Default: all. Status is refreshed "
+                          "by checking actual tmux/process state.")
+    ls_p.add_argument("--tag",
+                     help="Filter by tag (exact match). Only workers with this tag "
+                          "in their tag list are shown.")
 
     # status
     status_p = subparsers.add_parser("status", help="Get worker status")

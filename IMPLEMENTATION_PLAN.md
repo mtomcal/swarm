@@ -42,7 +42,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add "Common Patterns" section
   - Document all flag defaults explicitly
 
-- [ ] **1.3 Enhance `swarm ls --help`**
+- [x] **1.3 Enhance `swarm ls --help`**
   - Add description explaining output formats
   - Add examples for each format (table, json, names)
   - Add filter examples (--status, --tag)
