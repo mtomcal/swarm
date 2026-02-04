@@ -56,7 +56,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add examples: single worker, broadcast, no-enter
   - Add "Intervention Patterns" section
 
-- [ ] **1.6 Enhance `swarm kill --help`**
+- [x] **1.6 Enhance `swarm kill --help`**
   - Add description with safety warnings
   - Add examples: basic, with worktree, force-dirty
   - Add "Warnings" section about data loss

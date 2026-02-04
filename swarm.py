@@ -367,6 +367,73 @@ See Also:
   swarm logs --help        View what the worker is outputting
 """
 
+# Kill command help
+KILL_HELP_DESCRIPTION = """\
+Stop running workers and optionally clean up their worktrees.
+
+Terminates worker processes by killing tmux windows (for tmux workers) or
+sending SIGTERM/SIGKILL signals (for process workers). Workers are marked
+as "stopped" in state but not removed - use 'swarm clean' to fully remove.
+
+For tmux workers, the window is destroyed and the process receives SIGHUP.
+For process workers, SIGTERM is sent first with a 5-second grace period,
+followed by SIGKILL if the process doesn't terminate.
+"""
+
+KILL_HELP_EPILOG = """\
+Examples:
+  # Kill a single worker
+  swarm kill my-worker
+
+  # Kill worker and remove its git worktree
+  swarm kill feature-auth --rm-worktree
+
+  # Force remove worktree with uncommitted changes (DATA LOSS!)
+  swarm kill dirty-worker --rm-worktree --force-dirty
+
+  # Kill all workers at once
+  swarm kill --all
+
+  # Kill all workers and remove all worktrees
+  swarm kill --all --rm-worktree
+
+Warnings:
+  - --force-dirty will DELETE UNCOMMITTED CHANGES permanently
+  - Killing a worker does NOT remove it from state (use 'swarm clean')
+  - Worktree removal without --force-dirty fails if changes exist
+  - Empty tmux sessions are automatically destroyed after kill
+
+Recovery Commands:
+  # If worktree removal failed, check uncommitted changes:
+  cd /path/to/worktree && git status
+
+  # Manually commit and push before removing:
+  cd /path/to/worktree && git add -A && git commit -m "save work"
+
+  # Then clean up the stopped worker:
+  swarm clean <name> --rm-worktree
+
+  # Check remaining tmux sessions:
+  tmux list-sessions
+
+  # If state shows worker as running but it's dead:
+  swarm status <name>   # Refreshes status
+  swarm clean <name>    # Removes from state
+
+Tips:
+  - Always check 'swarm status <name>' before killing to see worktree path
+  - Use 'swarm ls' to see all workers and their states
+  - Workers with worktrees show their path in status output
+  - After kill, worker remains in 'swarm ls' with status "stopped"
+  - Use 'swarm respawn <name>' to restart a stopped worker
+
+See Also:
+  swarm clean --help     Remove stopped workers from state
+  swarm respawn --help   Restart a stopped worker
+  swarm status --help    Check worker details before killing
+  swarm ls --help        List all workers and their states
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1451,13 +1518,25 @@ def main() -> None:
                        help="Continuously poll and display")
 
     # kill
-    kill_p = subparsers.add_parser("kill", help="Kill worker")
-    kill_p.add_argument("name", nargs="?", help="Worker name")
+    kill_p = subparsers.add_parser(
+        "kill",
+        help="Stop running workers",
+        description=KILL_HELP_DESCRIPTION,
+        epilog=KILL_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    kill_p.add_argument("name", nargs="?",
+                       help="Worker name to kill. Required unless using --all.")
     kill_p.add_argument("--rm-worktree", action="store_true",
-                       help="Also remove the git worktree")
+                       help="Remove the git worktree after killing. Default: false. "
+                            "Fails if worktree has uncommitted changes unless "
+                            "--force-dirty is also specified.")
     kill_p.add_argument("--force-dirty", action="store_true",
-                       help="Force removal of worktree even with uncommitted changes")
-    kill_p.add_argument("--all", action="store_true", help="Kill all workers")
+                       help="Force removal of worktree even with uncommitted changes. "
+                            "WARNING: This permanently deletes uncommitted work! "
+                            "Only use when you're sure changes are not needed.")
+    kill_p.add_argument("--all", action="store_true",
+                       help="Kill all workers. Cannot be used with a worker name.")
 
     # wait
     wait_p = subparsers.add_parser("wait", help="Wait for worker to finish")
