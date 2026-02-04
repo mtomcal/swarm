@@ -36,7 +36,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add quick start example
   - Group commands by category
 
-- [ ] **1.2 Enhance `swarm spawn --help`**
+- [x] **1.2 Enhance `swarm spawn --help`**
   - Add description paragraph explaining worker types
   - Add 4+ examples (basic, worktree, env vars, ready-wait)
   - Add "Common Patterns" section

@@ -143,6 +143,72 @@ Examples:
 State: ~/.swarm/state.json    Logs: ~/.swarm/logs/
 """
 
+# Spawn command help
+SPAWN_HELP_DESCRIPTION = """\
+Create a new worker to run a command as a managed process.
+
+Workers can run either as background processes (default) or in tmux windows
+(--tmux). For AI agent workflows, tmux mode enables interactive features like
+sending messages, viewing live output, and attaching to the terminal.
+
+Git worktree isolation (--worktree) creates a dedicated branch and directory
+for each worker, enabling parallel development without merge conflicts. Each
+agent works independently, and changes can be merged via pull requests.
+"""
+
+SPAWN_HELP_EPILOG = """\
+Examples:
+  # Basic: spawn an agent in tmux
+  swarm spawn --name worker1 --tmux -- claude
+
+  # With git worktree isolation (recommended for parallel work)
+  swarm spawn --name feature-auth --tmux --worktree -- claude
+
+  # Custom branch name (worktree dir still uses --name)
+  swarm spawn --name w1 --tmux --worktree --branch feature/auth -- claude
+
+  # With environment variables
+  swarm spawn --name api-dev --tmux --worktree \\
+    --env API_KEY=test-key --env DEBUG=1 -- claude
+
+  # With tags for filtering
+  swarm spawn --name backend --tmux --worktree \\
+    --tag team-a --tag priority -- claude
+
+  # Wait for agent to be ready before returning
+  swarm spawn --name worker1 --tmux --ready-wait -- claude
+
+  # With custom ready timeout (default: 120s)
+  swarm spawn --name worker1 --tmux --ready-wait --ready-timeout 60 -- claude
+
+  # Background process mode (no tmux)
+  swarm spawn --name batch-job -- python process_data.py
+
+Common Patterns:
+  Parallel Feature Development:
+    swarm spawn --name auth --tmux --worktree -- claude
+    swarm spawn --name api --tmux --worktree -- claude
+    swarm spawn --name ui --tmux --worktree -- claude
+    swarm ls  # see all workers
+
+  Scripted Orchestration:
+    swarm spawn --name worker --tmux --ready-wait -- claude
+    swarm send worker "implement the login feature"
+    swarm wait worker
+
+Tips:
+  - Use --tmux for AI agents (enables send, logs, attach commands)
+  - Use --worktree when running multiple agents on the same repo
+  - Use --ready-wait in scripts that send commands after spawn
+  - Tags help organize workers: filter with 'swarm ls --tag <tag>'
+
+See Also:
+  swarm ls --help        List workers
+  swarm send --help      Send commands to workers
+  swarm kill --help      Stop workers
+  swarm ralph --help     Autonomous looping mode
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1100,26 +1166,56 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # spawn
-    spawn_p = subparsers.add_parser("spawn", help="Spawn a new worker")
-    spawn_p.add_argument("--name", required=True, help="Unique identifier for this worker")
-    spawn_p.add_argument("--tmux", action="store_true", help="Run in a tmux window")
-    spawn_p.add_argument("--session", default=None, help="Tmux session name (default: hash-based isolation)")
-    spawn_p.add_argument("--tmux-socket", default=None, help="Tmux socket name (for testing/isolation)")
-    spawn_p.add_argument("--worktree", action="store_true", help="Create a git worktree")
-    spawn_p.add_argument("--branch", help="Branch name for worktree (default: same as --name)")
+    spawn_p = subparsers.add_parser(
+        "spawn",
+        help="Spawn a new worker",
+        description=SPAWN_HELP_DESCRIPTION,
+        epilog=SPAWN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    spawn_p.add_argument("--name", required=True,
+                        help="Unique identifier for this worker. Used as window name "
+                             "(tmux), worktree directory, and branch name by default.")
+    spawn_p.add_argument("--tmux", action="store_true",
+                        help="Run in tmux window. Default: false. Enables send, logs, "
+                             "attach commands. Required for --ready-wait.")
+    spawn_p.add_argument("--session", default=None,
+                        help="Tmux session name. Default: hash-based unique name. "
+                             "Workers in same session share a tmux server.")
+    spawn_p.add_argument("--tmux-socket", default=None,
+                        help="Tmux socket name for isolation. Default: none (uses "
+                             "default tmux server). Useful for testing.")
+    spawn_p.add_argument("--worktree", action="store_true",
+                        help="Create isolated git worktree for this worker. Default: "
+                             "false. Creates <repo>-worktrees/<name>/ with its own "
+                             "branch. Enables parallel work without conflicts.")
+    spawn_p.add_argument("--branch",
+                        help="Branch name for worktree. Default: same as --name. "
+                             "Only used with --worktree.")
     spawn_p.add_argument("--worktree-dir", default=None,
-                        help="Parent dir for worktrees (default: <repo>-worktrees, sibling to repo)")
+                        help="Parent directory for worktrees. Default: <repo>-worktrees "
+                             "(sibling to repository). Worktree created at "
+                             "<worktree-dir>/<name>/.")
     spawn_p.add_argument("--tag", action="append", default=[], dest="tags",
-                        help="Tag for filtering (repeatable)")
+                        help="Tag for filtering workers. Repeatable. Use with "
+                             "'swarm ls --tag <tag>' to filter.")
     spawn_p.add_argument("--env", action="append", default=[],
-                        help="Environment variable KEY=VAL (repeatable)")
-    spawn_p.add_argument("--cwd", help="Working directory")
+                        help="Environment variable in KEY=VAL format. Repeatable. "
+                             "Passed to the spawned command.")
+    spawn_p.add_argument("--cwd",
+                        help="Working directory for the command. Default: current "
+                             "directory. Ignored when --worktree is used.")
     spawn_p.add_argument("--ready-wait", action="store_true",
-                        help="Wait for agent to be ready before returning (tmux only)")
+                        help="Wait for agent to be ready before returning. Default: "
+                             "false. Only works with --tmux. Detects ready patterns "
+                             "like '$ ' prompt.")
     spawn_p.add_argument("--ready-timeout", type=int, default=120,
-                        help="Timeout in seconds for --ready-wait (default: 120, suitable for Claude Code startup)")
+                        help="Timeout in seconds for --ready-wait. Default: 120 "
+                             "(suitable for Claude Code startup). Worker created "
+                             "regardless of timeout, but warning printed.")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
-                        help="Command to run (after --)")
+                        help="Command to execute. Place after '--' separator. "
+                             "Example: -- claude")
 
     # ls
     ls_p = subparsers.add_parser("ls", help="List workers")
