@@ -1527,6 +1527,100 @@ class HeartbeatState:
         )
 
 
+@dataclass
+class StageState:
+    """State for a single workflow stage.
+
+    Each stage tracks its execution status, timing, worker association,
+    retry attempts, and how it completed (or failed).
+    """
+    status: str = "pending"  # pending, running, completed, failed, skipped
+    started_at: Optional[str] = None  # ISO 8601 timestamp
+    completed_at: Optional[str] = None  # ISO 8601 timestamp
+    worker_name: Optional[str] = None  # Name of worker running this stage
+    attempts: int = 0  # Number of execution attempts
+    exit_reason: Optional[str] = None  # done_pattern, timeout, error, skipped
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "status": self.status,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "worker_name": self.worker_name,
+            "attempts": self.attempts,
+            "exit_reason": self.exit_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StageState":
+        """Create StageState from dictionary."""
+        return cls(
+            status=d.get("status", "pending"),
+            started_at=d.get("started_at"),
+            completed_at=d.get("completed_at"),
+            worker_name=d.get("worker_name"),
+            attempts=d.get("attempts", 0),
+            exit_reason=d.get("exit_reason"),
+        )
+
+
+@dataclass
+class WorkflowState:
+    """State for a multi-stage workflow.
+
+    Workflows orchestrate sequential agent stages (plan → build → validate)
+    with support for scheduling, heartbeats, and configurable failure handling.
+    """
+    name: str
+    status: str = "created"  # created, scheduled, running, completed, failed, cancelled
+    current_stage: Optional[str] = None  # Name of currently executing stage
+    current_stage_index: int = 0  # Index in stages list
+    created_at: str = ""  # ISO 8601 timestamp
+    started_at: Optional[str] = None  # ISO 8601 timestamp
+    scheduled_for: Optional[str] = None  # ISO 8601 timestamp for scheduled start
+    completed_at: Optional[str] = None  # ISO 8601 timestamp
+    stages: dict[str, StageState] = field(default_factory=dict)  # stage_name -> StageState
+    workflow_file: str = ""  # Path to workflow YAML file
+    workflow_hash: str = ""  # Hash of workflow YAML for change detection
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "status": self.status,
+            "current_stage": self.current_stage,
+            "current_stage_index": self.current_stage_index,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "scheduled_for": self.scheduled_for,
+            "completed_at": self.completed_at,
+            "stages": {name: stage.to_dict() for name, stage in self.stages.items()},
+            "workflow_file": self.workflow_file,
+            "workflow_hash": self.workflow_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WorkflowState":
+        """Create WorkflowState from dictionary."""
+        stages = {}
+        for name, stage_dict in d.get("stages", {}).items():
+            stages[name] = StageState.from_dict(stage_dict)
+        return cls(
+            name=d["name"],
+            status=d.get("status", "created"),
+            current_stage=d.get("current_stage"),
+            current_stage_index=d.get("current_stage_index", 0),
+            created_at=d.get("created_at", ""),
+            started_at=d.get("started_at"),
+            scheduled_for=d.get("scheduled_for"),
+            completed_at=d.get("completed_at"),
+            stages=stages,
+            workflow_file=d.get("workflow_file", ""),
+            workflow_hash=d.get("workflow_hash", ""),
+        )
+
+
 # Heartbeat state lock file path
 HEARTBEAT_LOCK_FILE = SWARM_DIR / "heartbeat.lock"
 

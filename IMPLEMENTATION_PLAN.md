@@ -161,7 +161,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 ### Phase 3: Workflow Implementation
 
-- [ ] **3.1 Add WorkflowState and StageState dataclasses**
+- [x] **3.1 Add WorkflowState and StageState dataclasses**
   - WorkflowState: name, status, current_stage, stages dict, timestamps
   - StageState: status, worker_name, attempts, timestamps, exit_reason
 
