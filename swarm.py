@@ -311,6 +311,62 @@ See Also:
   swarm attach --help    Attach to worker's tmux window
 """
 
+# Send command help
+SEND_HELP_DESCRIPTION = """\
+Send text input to tmux-based workers.
+
+Transmits text to running workers via tmux send-keys, enabling orchestration
+scripts to send prompts, commands, or interventions to agent CLIs. Only works
+with workers spawned using --tmux (not background process workers).
+
+By default, sends the text followed by Enter. Use --no-enter to send text
+without submitting it (useful for partial input or special characters).
+"""
+
+SEND_HELP_EPILOG = """\
+Examples:
+  # Send a prompt to a single worker
+  swarm send my-worker "implement the login feature"
+
+  # Send to worker without pressing Enter (partial input)
+  swarm send my-worker "partial text" --no-enter
+
+  # Broadcast to all running tmux workers
+  swarm send --all "please wrap up and commit your changes"
+
+  # Send follow-up instructions
+  swarm send feature-auth "skip the OAuth approach, use JWT instead"
+
+  # Send empty line (just presses Enter)
+  swarm send my-worker ""
+
+Intervention Patterns:
+  Redirect agent mid-task:
+    swarm send dev "stop working on X, instead do Y"
+
+  Request status update:
+    swarm send dev "give me a brief status update on progress"
+
+  Ask agent to wrap up:
+    swarm send dev "please commit your current changes and exit"
+
+  Course correction during review:
+    swarm send --all "remember to run tests before committing"
+
+Tips:
+  - Text is sent literally; special characters like quotes work correctly
+  - Newlines in text are sent as-is (may cause multi-line input)
+  - Use --no-enter when building up input incrementally
+  - Broadcast (--all) silently skips non-running and non-tmux workers
+  - Check worker is running first: swarm status <name>
+
+See Also:
+  swarm interrupt --help   Send Ctrl-C to cancel current operation
+  swarm eof --help         Send Ctrl-D (EOF signal)
+  swarm attach --help      Attach to worker's tmux window for direct interaction
+  swarm logs --help        View what the worker is outputting
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1349,11 +1405,27 @@ def main() -> None:
                          help="Worker name. Must match a registered worker exactly.")
 
     # send
-    send_p = subparsers.add_parser("send", help="Send text to worker")
-    send_p.add_argument("name", nargs="?", help="Worker name")
-    send_p.add_argument("text", help="Text to send")
-    send_p.add_argument("--no-enter", action="store_true", help="Don't append Enter key")
-    send_p.add_argument("--all", action="store_true", help="Send to all running tmux workers")
+    send_p = subparsers.add_parser(
+        "send",
+        help="Send text to tmux worker",
+        description=SEND_HELP_DESCRIPTION,
+        epilog=SEND_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    send_p.add_argument("name", nargs="?",
+                       help="Worker name. Required unless using --all. Must be a "
+                            "tmux-based worker (spawned with --tmux).")
+    send_p.add_argument("text",
+                       help="Text to send to the worker. Sent literally via tmux "
+                            "send-keys. Special characters and quotes are handled correctly.")
+    send_p.add_argument("--no-enter", action="store_true",
+                       help="Don't append Enter key after the text. Default: false "
+                            "(Enter is sent). Useful for partial input or when you "
+                            "want to build up a command incrementally.")
+    send_p.add_argument("--all", action="store_true",
+                       help="Broadcast to all running tmux workers. Non-tmux and "
+                            "non-running workers are silently skipped. Cannot be "
+                            "used with a worker name.")
 
     # interrupt
     int_p = subparsers.add_parser("interrupt", help="Send Ctrl-C to worker")

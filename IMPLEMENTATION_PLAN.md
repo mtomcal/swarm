@@ -51,7 +51,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of status output fields
   - Add examples showing different worker states
 
-- [ ] **1.5 Enhance `swarm send --help`**
+- [x] **1.5 Enhance `swarm send --help`**
   - Add description explaining tmux requirement
   - Add examples: single worker, broadcast, no-enter
   - Add "Intervention Patterns" section
