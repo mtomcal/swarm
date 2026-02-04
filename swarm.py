@@ -1949,6 +1949,56 @@ See Also:
   swarm workflow run --force      # Start fresh (deletes old state)
 """
 
+WORKFLOW_RESUME_ALL_HELP_DESCRIPTION = """\
+Resume all interrupted workflows after system restart.
+
+When the system restarts or workflow monitors are killed, this command
+finds workflows that were 'running' or 'scheduled' and offers to resume
+them. Useful after unexpected shutdowns or when workflow monitors were
+stopped externally.
+"""
+
+WORKFLOW_RESUME_ALL_HELP_EPILOG = """\
+Resumable States:
+  - running: Workflow was actively running when interrupted
+  - scheduled: Workflow was waiting for scheduled start time
+
+What Happens:
+  1. Finds all workflows with status 'running' or 'scheduled'
+  2. For 'running' workflows: resumes from the current stage
+  3. For 'scheduled' workflows: restarts the scheduling wait
+
+Options:
+  --dry-run       Show which workflows would be resumed, without resuming
+  --background    Run each workflow monitor in background (nohup)
+                  Without this flag, workflows are resumed sequentially
+
+Examples:
+  # See which workflows need resuming (dry run)
+  swarm workflow resume-all --dry-run
+
+  # Resume all interrupted workflows sequentially (foreground)
+  swarm workflow resume-all
+
+  # Resume all interrupted workflows in background
+  swarm workflow resume-all --background
+
+Typical Use:
+  After a system restart or unexpected shutdown:
+  1. Check for interrupted workflows: swarm workflow list
+  2. See what would be resumed: swarm workflow resume-all --dry-run
+  3. Resume in background: swarm workflow resume-all --background
+
+Note:
+  This command is automatically called (in dry-run mode) on swarm startup
+  to notify you of any interrupted workflows.
+
+See Also:
+  swarm workflow list             # List all workflows
+  swarm workflow status <name>    # Check workflow details
+  swarm workflow resume <name>    # Resume a single workflow
+"""
+
 WORKFLOW_LOGS_HELP_DESCRIPTION = """\
 View logs from workflow stages.
 
@@ -3329,6 +3379,55 @@ def resume_active_heartbeats() -> int:
         resumed_count += 1
 
     return resumed_count
+
+
+def check_interrupted_workflows() -> list[WorkflowState]:
+    """Check for workflows that were interrupted (running or scheduled).
+
+    Called on swarm startup to detect workflows that were active when
+    the system last ran. These workflows may need to be resumed.
+
+    Returns:
+        List of WorkflowState objects that are in 'running' or 'scheduled' status
+    """
+    states = list_workflow_states()
+    interrupted = []
+
+    for workflow_state in states:
+        # Only include running or scheduled workflows
+        if workflow_state.status in ("running", "scheduled"):
+            interrupted.append(workflow_state)
+
+    return interrupted
+
+
+def notify_interrupted_workflows() -> int:
+    """Notify user about interrupted workflows on startup.
+
+    Called on swarm startup to alert users about workflows that may
+    need to be resumed. Prints a message if there are interrupted
+    workflows and suggests the resume-all command.
+
+    Returns:
+        Number of interrupted workflows found
+    """
+    interrupted = check_interrupted_workflows()
+    if not interrupted:
+        return 0
+
+    count = len(interrupted)
+    workflow_word = "workflow" if count == 1 else "workflows"
+    print(f"swarm: {count} interrupted {workflow_word} found", file=sys.stderr)
+    for workflow_state in interrupted:
+        stage_info = ""
+        if workflow_state.status == "running" and workflow_state.current_stage:
+            stage_info = f" (stage: {workflow_state.current_stage})"
+        elif workflow_state.status == "scheduled" and workflow_state.scheduled_for:
+            stage_info = f" (scheduled: {workflow_state.scheduled_for})"
+        print(f"swarm:   - {workflow_state.name}: {workflow_state.status}{stage_info}", file=sys.stderr)
+    print(f"swarm: use 'swarm workflow resume-all' to resume", file=sys.stderr)
+
+    return count
 
 
 def parse_duration(duration_str: str) -> int:
@@ -4731,6 +4830,19 @@ def main() -> None:
     workflow_resume_p.add_argument("--from", dest="from_stage", metavar="STAGE",
                                    help="Resume from a specific stage")
 
+    # workflow resume-all
+    workflow_resume_all_p = workflow_subparsers.add_parser(
+        "resume-all",
+        help="Resume all interrupted workflows",
+        description=WORKFLOW_RESUME_ALL_HELP_DESCRIPTION,
+        epilog=WORKFLOW_RESUME_ALL_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_resume_all_p.add_argument("--dry-run", action="store_true",
+                                       help="Show which workflows would be resumed without resuming")
+    workflow_resume_all_p.add_argument("--background", action="store_true",
+                                       help="Run each workflow monitor in background")
+
     # workflow logs
     workflow_logs_p = workflow_subparsers.add_parser(
         "logs",
@@ -4753,6 +4865,10 @@ def main() -> None:
     # This restarts monitor processes for heartbeats that were active
     # when swarm last ran (e.g., after system reboot)
     resume_active_heartbeats()
+
+    # Notify about interrupted workflows on startup
+    # Workflows run in foreground so we can't auto-resume, but we alert the user
+    notify_interrupted_workflows()
 
     # Dispatch to command handlers
     if args.command == "spawn":
@@ -8332,6 +8448,7 @@ def cmd_workflow(args) -> None:
     - list: List all workflows
     - cancel: Cancel a running workflow
     - resume: Resume a failed/cancelled workflow
+    - resume-all: Resume all interrupted workflows
     - logs: View workflow logs
     """
     if args.workflow_command == "validate":
@@ -8346,6 +8463,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_cancel(args)
     elif args.workflow_command == "resume":
         cmd_workflow_resume(args)
+    elif args.workflow_command == "resume-all":
+        cmd_workflow_resume_all(args)
     elif args.workflow_command == "logs":
         cmd_workflow_logs(args)
     else:
@@ -8779,6 +8898,293 @@ def cmd_workflow_resume(args) -> None:
         workflow_def=workflow_def,
         workflow_dir=workflow_dir,
     )
+
+
+def cmd_workflow_resume_all(args) -> None:
+    """Resume all interrupted workflows.
+
+    Finds workflows that were 'running' or 'scheduled' when the system
+    was interrupted (e.g., after reboot or monitor killed). Offers to
+    resume them either in foreground (sequentially) or background.
+
+    Args:
+        args: Namespace with resume-all arguments:
+            - dry_run: If True, show what would be resumed without resuming
+            - background: If True, run workflow monitors in background
+
+    Exit codes:
+        0: Success (or no workflows to resume)
+        1: Error during resume
+    """
+    dry_run = args.dry_run
+    background = args.background
+
+    # Find interrupted workflows
+    interrupted = check_interrupted_workflows()
+
+    if not interrupted:
+        print("No interrupted workflows found.")
+        return
+
+    count = len(interrupted)
+    workflow_word = "workflow" if count == 1 else "workflows"
+
+    if dry_run:
+        print(f"Found {count} interrupted {workflow_word}:")
+        for workflow_state in interrupted:
+            stage_info = ""
+            if workflow_state.status == "running" and workflow_state.current_stage:
+                stage_info = f" (stage: {workflow_state.current_stage})"
+            elif workflow_state.status == "scheduled" and workflow_state.scheduled_for:
+                stage_info = f" (scheduled: {workflow_state.scheduled_for})"
+            print(f"  - {workflow_state.name}: {workflow_state.status}{stage_info}")
+        print(f"\nRun without --dry-run to resume these workflows.")
+        return
+
+    print(f"Resuming {count} interrupted {workflow_word}...")
+
+    resumed_count = 0
+    failed_count = 0
+
+    for workflow_state in interrupted:
+        workflow_name = workflow_state.name
+        print(f"\nResuming workflow '{workflow_name}'...")
+
+        # Load the workflow definition from the stored YAML copy
+        yaml_copy_path = get_workflow_yaml_copy_path(workflow_name)
+        if not yaml_copy_path.exists():
+            print(f"  Error: workflow definition not found at {yaml_copy_path}", file=sys.stderr)
+            failed_count += 1
+            continue
+
+        try:
+            workflow_def = parse_workflow_yaml(str(yaml_copy_path))
+        except (FileNotFoundError, WorkflowValidationError) as e:
+            print(f"  Error: failed to parse workflow definition: {e}", file=sys.stderr)
+            failed_count += 1
+            continue
+
+        # Get the workflow directory
+        if workflow_state.workflow_file:
+            workflow_dir = Path(workflow_state.workflow_file).parent
+        else:
+            workflow_dir = yaml_copy_path.parent
+
+        if background:
+            # Spawn workflow monitor in background using nohup
+            # We need to start a subprocess that runs the workflow monitor
+            try:
+                _resume_workflow_in_background(
+                    workflow_name=workflow_name,
+                    workflow_state=workflow_state,
+                    workflow_def=workflow_def,
+                    workflow_dir=workflow_dir,
+                )
+                print(f"  Started workflow '{workflow_name}' in background")
+                resumed_count += 1
+            except Exception as e:
+                print(f"  Error: failed to start background monitor: {e}", file=sys.stderr)
+                failed_count += 1
+        else:
+            # Resume workflow in foreground (sequential)
+            # For foreground mode, we resume each workflow one at a time
+            try:
+                _resume_workflow_foreground(
+                    workflow_name=workflow_name,
+                    workflow_state=workflow_state,
+                    workflow_def=workflow_def,
+                    workflow_dir=workflow_dir,
+                )
+                resumed_count += 1
+            except Exception as e:
+                print(f"  Error: failed to resume workflow: {e}", file=sys.stderr)
+                failed_count += 1
+
+    # Print summary
+    print(f"\n{resumed_count} {workflow_word} resumed, {failed_count} failed")
+
+    if failed_count > 0:
+        sys.exit(1)
+
+
+def _resume_workflow_foreground(
+    workflow_name: str,
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    workflow_dir: Path,
+) -> None:
+    """Resume a workflow in foreground (blocking).
+
+    This handles both 'running' and 'scheduled' workflows:
+    - For 'running': restarts from the current stage
+    - For 'scheduled': restarts the scheduling wait
+
+    Args:
+        workflow_name: Name of the workflow
+        workflow_state: Current workflow state
+        workflow_def: Parsed workflow definition
+        workflow_dir: Directory containing the workflow YAML
+
+    Raises:
+        RuntimeError: If workflow fails to resume
+    """
+    if workflow_state.status == "scheduled":
+        # For scheduled workflows, just restart the monitor to wait for the schedule
+        print(f"  Workflow '{workflow_name}' is scheduled, resuming schedule wait...")
+        run_workflow_monitor(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            workflow_dir=workflow_dir,
+        )
+    elif workflow_state.status == "running":
+        # For running workflows, we need to restart the current stage
+        current_stage_name = workflow_state.current_stage
+        current_stage_index = workflow_state.current_stage_index
+
+        if current_stage_name is None:
+            raise RuntimeError("Running workflow has no current stage")
+
+        # Get the stage definition
+        stage_def = workflow_def.stages[current_stage_index]
+
+        # Check if the stage worker is still running
+        state = State()
+        stage_state = workflow_state.stages.get(current_stage_name)
+        worker_name = stage_state.worker_name if stage_state else None
+
+        if worker_name:
+            worker = state.get_worker(worker_name)
+            if worker:
+                actual_status = refresh_worker_status(worker)
+                if actual_status == "running":
+                    # Worker is still running, just restart the monitor
+                    print(f"  Stage worker '{worker_name}' still running, resuming monitoring...")
+                    run_workflow_monitor(
+                        workflow_name=workflow_name,
+                        workflow_def=workflow_def,
+                        workflow_dir=workflow_dir,
+                    )
+                    return
+
+        # Worker not running, need to respawn it
+        print(f"  Stage worker not running, respawning stage '{current_stage_name}'...")
+
+        # Update stage state
+        now = datetime.now(timezone.utc).isoformat()
+        if stage_state:
+            stage_state.started_at = now
+            stage_state.attempts += 1
+            stage_state.worker_name = f"{workflow_name}-{current_stage_name}"
+
+        save_workflow_state(workflow_state)
+
+        # Spawn the stage worker
+        worker = spawn_workflow_stage(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            stage_def=stage_def,
+            workflow_dir=workflow_dir,
+        )
+        print(f"  Spawned worker '{worker.name}'")
+
+        # Start monitor loop
+        run_workflow_monitor(
+            workflow_name=workflow_name,
+            workflow_def=workflow_def,
+            workflow_dir=workflow_dir,
+        )
+
+
+def _resume_workflow_in_background(
+    workflow_name: str,
+    workflow_state: WorkflowState,
+    workflow_def: WorkflowDefinition,
+    workflow_dir: Path,
+) -> None:
+    """Resume a workflow in background using subprocess.
+
+    Spawns a new process that runs the workflow monitor. The process
+    is detached using nohup-like behavior.
+
+    Args:
+        workflow_name: Name of the workflow
+        workflow_state: Current workflow state
+        workflow_def: Parsed workflow definition
+        workflow_dir: Directory containing the workflow YAML
+
+    Raises:
+        RuntimeError: If failed to start background process
+    """
+    import subprocess
+    import os
+
+    # For running workflows, we may need to respawn the stage worker first
+    if workflow_state.status == "running":
+        current_stage_name = workflow_state.current_stage
+        current_stage_index = workflow_state.current_stage_index
+
+        if current_stage_name is not None:
+            stage_state = workflow_state.stages.get(current_stage_name)
+            worker_name = stage_state.worker_name if stage_state else None
+
+            if worker_name:
+                state = State()
+                worker = state.get_worker(worker_name)
+                if not worker:
+                    # Worker not found, need to respawn it
+                    stage_def = workflow_def.stages[current_stage_index]
+                    now = datetime.now(timezone.utc).isoformat()
+                    if stage_state:
+                        stage_state.started_at = now
+                        stage_state.attempts += 1
+                        stage_state.worker_name = f"{workflow_name}-{current_stage_name}"
+                    save_workflow_state(workflow_state)
+
+                    worker = spawn_workflow_stage(
+                        workflow_name=workflow_name,
+                        workflow_def=workflow_def,
+                        stage_def=stage_def,
+                        workflow_dir=workflow_dir,
+                    )
+
+    # Start workflow monitor in background
+    # Use a subprocess that runs swarm workflow internal-monitor
+    # Since we don't have an internal-monitor command, we'll use nohup + python
+    yaml_copy_path = get_workflow_yaml_copy_path(workflow_name)
+
+    # Create a simple Python script to run the monitor
+    monitor_script = f'''
+import sys
+sys.path.insert(0, "{Path(__file__).parent}")
+import swarm
+workflow_def = swarm.parse_workflow_yaml("{yaml_copy_path}")
+workflow_dir = swarm.Path("{workflow_dir}")
+swarm.run_workflow_monitor("{workflow_name}", workflow_def, workflow_dir)
+'''
+
+    # Write to temp file and run with nohup
+    import tempfile
+    script_path = Path(tempfile.gettempdir()) / f"swarm_workflow_monitor_{workflow_name}.py"
+    with open(script_path, "w") as f:
+        f.write(monitor_script)
+
+    # Get workflow logs dir for output
+    logs_dir = get_workflow_logs_dir(workflow_name)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / "monitor.log"
+
+    # Start subprocess with nohup-like behavior
+    with open(log_file, "a") as log_out:
+        process = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            stdout=log_out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # Detach from terminal
+            cwd=str(workflow_dir),
+        )
+
+    print(f"  Monitor PID: {process.pid}, log: {log_file}")
 
 
 def cmd_workflow_logs(args) -> None:

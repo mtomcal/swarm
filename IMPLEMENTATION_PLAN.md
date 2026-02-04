@@ -269,7 +269,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Check for active heartbeats
   - Restart monitor threads
 
-- [ ] **4.4 Resume workflows on swarm startup**
+- [x] **4.4 Resume workflows on swarm startup**
   - Check for running workflows
   - Provide `swarm workflow resume-all` command
 

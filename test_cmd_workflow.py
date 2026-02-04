@@ -7130,5 +7130,340 @@ class TestWorkflowLogsSubparser(unittest.TestCase):
         self.assertIn("--follow", swarm.WORKFLOW_LOGS_HELP_EPILOG)
 
 
+class TestCheckInterruptedWorkflows(unittest.TestCase):
+    """Test check_interrupted_workflows function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_no_workflows_returns_empty(self):
+        """Test returns empty list when no workflows exist."""
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(result, [])
+
+    def test_completed_workflows_not_included(self):
+        """Test completed workflows are not returned."""
+        state = swarm.WorkflowState(
+            name="completed-workflow",
+            status="completed",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 0)
+
+    def test_failed_workflows_not_included(self):
+        """Test failed workflows are not returned."""
+        state = swarm.WorkflowState(
+            name="failed-workflow",
+            status="failed",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 0)
+
+    def test_cancelled_workflows_not_included(self):
+        """Test cancelled workflows are not returned."""
+        state = swarm.WorkflowState(
+            name="cancelled-workflow",
+            status="cancelled",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 0)
+
+    def test_running_workflow_included(self):
+        """Test running workflows are returned."""
+        state = swarm.WorkflowState(
+            name="running-workflow",
+            status="running",
+            current_stage="build",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "running-workflow")
+        self.assertEqual(result[0].status, "running")
+
+    def test_scheduled_workflow_included(self):
+        """Test scheduled workflows are returned."""
+        state = swarm.WorkflowState(
+            name="scheduled-workflow",
+            status="scheduled",
+            scheduled_for="2026-02-04T14:00:00Z",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "scheduled-workflow")
+        self.assertEqual(result[0].status, "scheduled")
+
+    def test_multiple_interrupted_workflows(self):
+        """Test multiple interrupted workflows are returned."""
+        state1 = swarm.WorkflowState(
+            name="running-workflow",
+            status="running",
+            current_stage="plan",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        state2 = swarm.WorkflowState(
+            name="scheduled-workflow",
+            status="scheduled",
+            scheduled_for="2026-02-04T14:00:00Z",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        state3 = swarm.WorkflowState(
+            name="completed-workflow",
+            status="completed",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state1)
+        swarm.save_workflow_state(state2)
+        swarm.save_workflow_state(state3)
+
+        result = swarm.check_interrupted_workflows()
+        self.assertEqual(len(result), 2)
+        names = {w.name for w in result}
+        self.assertIn("running-workflow", names)
+        self.assertIn("scheduled-workflow", names)
+
+
+class TestNotifyInterruptedWorkflows(unittest.TestCase):
+    """Test notify_interrupted_workflows function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_no_workflows_returns_zero(self):
+        """Test returns 0 when no interrupted workflows."""
+        result = swarm.notify_interrupted_workflows()
+        self.assertEqual(result, 0)
+
+    def test_returns_count_of_interrupted(self):
+        """Test returns count of interrupted workflows."""
+        state1 = swarm.WorkflowState(
+            name="running-1",
+            status="running",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        state2 = swarm.WorkflowState(
+            name="running-2",
+            status="running",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state1)
+        swarm.save_workflow_state(state2)
+
+        with patch('sys.stderr', new_callable=io.StringIO):
+            result = swarm.notify_interrupted_workflows()
+
+        self.assertEqual(result, 2)
+
+    def test_prints_notification_to_stderr(self):
+        """Test prints notification message to stderr."""
+        state = swarm.WorkflowState(
+            name="running-workflow",
+            status="running",
+            current_stage="build",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        with patch('sys.stderr', new_callable=io.StringIO) as mock_stderr:
+            swarm.notify_interrupted_workflows()
+            output = mock_stderr.getvalue()
+
+        self.assertIn("1 interrupted workflow found", output)
+        self.assertIn("running-workflow: running", output)
+        self.assertIn("(stage: build)", output)
+        self.assertIn("swarm workflow resume-all", output)
+
+    def test_prints_scheduled_info(self):
+        """Test prints scheduled time info for scheduled workflows."""
+        state = swarm.WorkflowState(
+            name="scheduled-workflow",
+            status="scheduled",
+            scheduled_for="2026-02-04T14:00:00Z",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        with patch('sys.stderr', new_callable=io.StringIO) as mock_stderr:
+            swarm.notify_interrupted_workflows()
+            output = mock_stderr.getvalue()
+
+        self.assertIn("scheduled-workflow: scheduled", output)
+        self.assertIn("(scheduled: 2026-02-04T14:00:00Z)", output)
+
+
+class TestCmdWorkflowResumeAll(unittest.TestCase):
+    """Test cmd_workflow_resume_all command."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_no_workflows_prints_message(self):
+        """Test prints message when no interrupted workflows."""
+        args = Namespace(dry_run=False, background=False)
+
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
+            swarm.cmd_workflow_resume_all(args)
+            output = mock_stdout.getvalue()
+
+        self.assertIn("No interrupted workflows found", output)
+
+    def test_dry_run_lists_workflows(self):
+        """Test dry run lists workflows without resuming."""
+        state = swarm.WorkflowState(
+            name="running-workflow",
+            status="running",
+            current_stage="build",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        args = Namespace(dry_run=True, background=False)
+
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
+            swarm.cmd_workflow_resume_all(args)
+            output = mock_stdout.getvalue()
+
+        self.assertIn("Found 1 interrupted workflow", output)
+        self.assertIn("running-workflow: running", output)
+        self.assertIn("(stage: build)", output)
+        self.assertIn("Run without --dry-run", output)
+
+    def test_dry_run_shows_scheduled_info(self):
+        """Test dry run shows scheduled time for scheduled workflows."""
+        state = swarm.WorkflowState(
+            name="scheduled-workflow",
+            status="scheduled",
+            scheduled_for="2026-02-04T14:00:00Z",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        args = Namespace(dry_run=True, background=False)
+
+        with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
+            swarm.cmd_workflow_resume_all(args)
+            output = mock_stdout.getvalue()
+
+        self.assertIn("scheduled-workflow: scheduled", output)
+        self.assertIn("(scheduled: 2026-02-04T14:00:00Z)", output)
+
+
+class TestWorkflowResumeAllSubcommand(unittest.TestCase):
+    """Test workflow resume-all subcommand CLI parsing."""
+
+    def test_resume_all_subcommand_exists(self):
+        """Test that 'workflow resume-all' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'resume-all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Resume all interrupted workflows', result.stdout)
+
+    def test_resume_all_has_dry_run_flag(self):
+        """Test resume-all has --dry-run flag."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'resume-all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--dry-run', result.stdout)
+
+    def test_resume_all_has_background_flag(self):
+        """Test resume-all has --background flag."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'resume-all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--background', result.stdout)
+
+    def test_resume_all_help_has_description(self):
+        """Test resume-all help has description."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'resume-all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('system restart', result.stdout)
+
+    def test_resume_all_help_has_examples(self):
+        """Test resume-all help has examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'workflow', 'resume-all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('Examples:', result.stdout)
+        self.assertIn('swarm workflow resume-all --dry-run', result.stdout)
+
+    def test_resume_all_constants_exist(self):
+        """Test that help constants are defined."""
+        self.assertIn("Resume all interrupted workflows", swarm.WORKFLOW_RESUME_ALL_HELP_DESCRIPTION)
+        self.assertIn("--dry-run", swarm.WORKFLOW_RESUME_ALL_HELP_EPILOG)
+        self.assertIn("--background", swarm.WORKFLOW_RESUME_ALL_HELP_EPILOG)
+
+
 if __name__ == "__main__":
     unittest.main()
