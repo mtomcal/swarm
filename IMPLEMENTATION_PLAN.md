@@ -123,11 +123,11 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Check expiration
   - Detect worker death and auto-stop
 
-- [ ] **2.5 Implement `swarm heartbeat stop`**
+- [x] **2.5 Implement `swarm heartbeat stop`**
   - Set status to stopped
   - Terminate monitor thread
 
-- [ ] **2.6 Implement `swarm heartbeat list`**
+- [x] **2.6 Implement `swarm heartbeat list`**
   - Table output: worker, interval, next beat, expires, status, beats
   - JSON output option
 

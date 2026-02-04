@@ -2415,6 +2415,33 @@ def relative_time(iso_str: str) -> str:
         return f"{seconds // 86400}d"
 
 
+def time_until(iso_str: str) -> str:
+    """Convert ISO timestamp to human-readable time until.
+
+    Args:
+        iso_str: ISO format timestamp string (future time)
+
+    Returns:
+        Human-readable time delta (e.g., "in 5m", "in 2h", "in 3d")
+        or "now" if time has passed
+    """
+    dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+    delta = dt - now
+    seconds = int(delta.total_seconds())
+
+    if seconds <= 0:
+        return "now"
+    elif seconds < 60:
+        return f"in {seconds}s"
+    elif seconds < 3600:
+        return f"in {seconds // 60}m"
+    elif seconds < 86400:
+        return f"in {seconds // 3600}h"
+    else:
+        return f"in {seconds // 86400}d"
+
+
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -5057,18 +5084,33 @@ def cmd_heartbeat_list(args) -> None:
         print(json.dumps(output, indent=2))
     else:
         # Table format
-        print(f"{'WORKER':<15} {'INTERVAL':<10} {'STATUS':<10} {'BEATS':<6} {'EXPIRES':<20}")
+        print(f"{'WORKER':<15} {'INTERVAL':<10} {'NEXT BEAT':<12} {'EXPIRES':<12} {'STATUS':<10} {'BEATS':<6}")
         for s in states:
             interval_str = format_duration(s.interval_seconds)
+            # Calculate next beat time
+            if s.status in ("paused", "expired", "stopped"):
+                next_beat_str = "-"
+            else:
+                # Next beat is last_beat_at + interval, or created_at + interval if no beats yet
+                base_time = s.last_beat_at if s.last_beat_at else s.created_at
+                if base_time:
+                    try:
+                        base_dt = datetime.fromisoformat(base_time.replace('Z', '+00:00'))
+                        next_dt = base_dt + timedelta(seconds=s.interval_seconds)
+                        next_beat_str = time_until(next_dt.isoformat())
+                    except ValueError:
+                        next_beat_str = "?"
+                else:
+                    next_beat_str = "?"
+            # Format expiration
             if s.expire_at:
                 try:
-                    expire_dt = datetime.fromisoformat(s.expire_at.replace('Z', '+00:00'))
-                    expire_str = relative_time(s.expire_at)
+                    expire_str = time_until(s.expire_at)
                 except ValueError:
                     expire_str = s.expire_at
             else:
                 expire_str = "never"
-            print(f"{s.worker_name:<15} {interval_str:<10} {s.status:<10} {s.beat_count:<6} {expire_str:<20}")
+            print(f"{s.worker_name:<15} {interval_str:<10} {next_beat_str:<12} {expire_str:<12} {s.status:<10} {s.beat_count:<6}")
 
 
 def cmd_heartbeat_status(args) -> None:

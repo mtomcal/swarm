@@ -541,6 +541,132 @@ class TestCmdHeartbeatList(unittest.TestCase):
         # Should not raise
         swarm.cmd_heartbeat_list(args)
 
+    def test_list_shows_dash_for_paused(self):
+        """Test that paused heartbeats show dash for next beat."""
+        state = swarm.HeartbeatState(
+            worker_name='paused-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should not raise and should show "-" for next beat
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_shows_dash_for_stopped(self):
+        """Test that stopped heartbeats show dash for next beat."""
+        state = swarm.HeartbeatState(
+            worker_name='stopped-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should not raise and should show "-" for next beat
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_calculates_next_beat_from_last_beat(self):
+        """Test that next beat is calculated from last_beat_at when available."""
+        last_beat = datetime.now(timezone.utc) - timedelta(minutes=30)
+        state = swarm.HeartbeatState(
+            worker_name='beat-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+            last_beat_at=last_beat.isoformat(),
+            beat_count=2,
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should not raise - next beat should be ~30 minutes from now
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_json_with_heartbeats(self):
+        """Test JSON output for heartbeats."""
+        state = swarm.HeartbeatState(
+            worker_name='json-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='json')
+        # Should output valid JSON
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_with_expire_time(self):
+        """Test listing heartbeats with expiration time."""
+        expire_time = datetime.now(timezone.utc) + timedelta(hours=24)
+        state = swarm.HeartbeatState(
+            worker_name='expiring-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at=expire_time.isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should show expiration time
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_with_invalid_expire_at(self):
+        """Test listing heartbeats with invalid expire_at timestamp."""
+        state = swarm.HeartbeatState(
+            worker_name='invalid-expire-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            expire_at='not-a-valid-timestamp',
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should handle gracefully and show original string
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_with_invalid_created_at(self):
+        """Test listing heartbeats with invalid created_at timestamp."""
+        state = swarm.HeartbeatState(
+            worker_name='invalid-created-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at='not-a-valid-timestamp',
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should handle gracefully and show "?"
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_with_empty_created_at(self):
+        """Test listing heartbeats with empty created_at."""
+        state = swarm.HeartbeatState(
+            worker_name='empty-created-worker',
+            interval_seconds=3600,
+            message='continue',
+            created_at='',
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should handle gracefully and show "?"
+        swarm.cmd_heartbeat_list(args)
+
 
 class TestCmdHeartbeatPauseResume(unittest.TestCase):
     """Test cmd_heartbeat_pause and cmd_heartbeat_resume functions."""

@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -87,6 +87,61 @@ class TestRelativeTime(unittest.TestCase):
         now = datetime.now()
         result = swarm.relative_time(now.isoformat())
         self.assertEqual(result, "0s")
+
+
+class TestTimeUntil(unittest.TestCase):
+    """Test the time_until helper function."""
+
+    def test_seconds(self):
+        """Test formatting for seconds in the future."""
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(seconds=30)
+        result = swarm.time_until(future.isoformat())
+        # Allow some tolerance for test execution time
+        self.assertTrue(result.startswith("in ") and result.endswith("s"))
+
+    def test_minutes(self):
+        """Test formatting for minutes in the future."""
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(minutes=5, seconds=30)
+        result = swarm.time_until(future.isoformat())
+        self.assertEqual(result, "in 5m")
+
+    def test_hours(self):
+        """Test formatting for hours in the future."""
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(hours=2, minutes=30)
+        result = swarm.time_until(future.isoformat())
+        self.assertEqual(result, "in 2h")
+
+    def test_days(self):
+        """Test formatting for days in the future."""
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(days=3, hours=12)
+        result = swarm.time_until(future.isoformat())
+        self.assertEqual(result, "in 3d")
+
+    def test_past_time_returns_now(self):
+        """Test that past time returns 'now'."""
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(minutes=5)
+        result = swarm.time_until(past.isoformat())
+        self.assertEqual(result, "now")
+
+    def test_zero_returns_now(self):
+        """Test that current time returns 'now'."""
+        now = datetime.now(timezone.utc)
+        result = swarm.time_until(now.isoformat())
+        self.assertEqual(result, "now")
+
+    def test_handles_z_suffix(self):
+        """Test parsing of timestamps with Z suffix."""
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(hours=2)
+        iso_with_z = future.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+        result = swarm.time_until(iso_with_z)
+        # Should be approximately 2 hours, allowing for test execution time
+        self.assertTrue(result in ("in 1h", "in 2h"))
 
 
 class TestCmdStatus(unittest.TestCase):
