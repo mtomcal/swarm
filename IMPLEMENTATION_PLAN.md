@@ -62,7 +62,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add "Warnings" section about data loss
   - Add recovery commands for mistakes
 
-- [ ] **1.7 Enhance `swarm logs --help`**
+- [x] **1.7 Enhance `swarm logs --help`**
   - Add description of log storage
   - Add examples: basic, follow, tail
 

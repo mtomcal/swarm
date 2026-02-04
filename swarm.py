@@ -434,6 +434,70 @@ See Also:
   swarm ls --help        List all workers and their states
 """
 
+# Logs command help
+LOGS_HELP_DESCRIPTION = """\
+View worker output from tmux panes or log files.
+
+For tmux workers, captures output directly from the tmux pane. By default,
+shows only the visible pane content. Use --history to include scrollback
+buffer (up to --lines lines). Use --follow for live tailing.
+
+For background (non-tmux) workers, reads from log files stored in
+~/.swarm/logs/<name>.stdout.log. Use --follow to tail the log file.
+"""
+
+LOGS_HELP_EPILOG = r"""Log Storage:
+  Tmux workers:     Output captured directly from tmux pane
+  Non-tmux workers: ~/.swarm/logs/<name>.stdout.log
+
+Examples:
+  # View current visible output for a tmux worker
+  swarm logs my-worker
+
+  # Include scrollback history (last 1000 lines)
+  swarm logs my-worker --history
+
+  # Include more scrollback (last 5000 lines)
+  swarm logs my-worker --history --lines 5000
+
+  # Follow output in real-time (Ctrl-C to stop)
+  swarm logs my-worker --follow
+
+  # Follow with scrollback history included
+  swarm logs my-worker --follow --history
+
+  # Pipe output to search for patterns
+  swarm logs my-worker --history | grep "error"
+
+  # Save output to file for analysis
+  swarm logs my-worker --history > worker-output.txt
+
+Common Patterns:
+  Check what an agent is currently doing:
+    swarm logs <name>
+
+  Search for errors in worker output:
+    swarm logs <name> --history | grep -i "error\|failed\|exception"
+
+  Monitor a long-running task:
+    swarm logs <name> --follow
+
+  Get full output after completion:
+    swarm logs <name> --history --lines 10000
+
+Tips:
+  - --follow mode for tmux workers refreshes every 1 second
+  - --follow mode for non-tmux workers uses 'tail -f'
+  - Press Ctrl-C to exit --follow mode
+  - Increase --lines if you need more history (default: 1000)
+  - --history only affects tmux workers (non-tmux reads full log file)
+
+See Also:
+  swarm status --help    Check if worker is still running
+  swarm attach --help    Attach to tmux window for direct interaction
+  swarm send --help      Send commands to the worker
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1508,14 +1572,27 @@ def main() -> None:
     attach_p.add_argument("name", help="Worker name")
 
     # logs
-    logs_p = subparsers.add_parser("logs", help="View worker output")
-    logs_p.add_argument("name", help="Worker name")
+    logs_p = subparsers.add_parser(
+        "logs",
+        help="View worker output",
+        description=LOGS_HELP_DESCRIPTION,
+        epilog=LOGS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    logs_p.add_argument("name",
+                       help="Worker name. Must match a registered worker exactly.")
     logs_p.add_argument("--history", action="store_true",
-                       help="Include scrollback buffer (default: visible pane only)")
+                       help="Include scrollback buffer for tmux workers. Default: false "
+                            "(shows only visible pane content). For non-tmux workers, "
+                            "the full log file is always read regardless of this flag.")
     logs_p.add_argument("--lines", type=int, default=1000,
-                       help="Number of scrollback lines (default: 1000)")
+                       help="Number of scrollback lines to capture. Default: 1000. "
+                            "Only used with --history for tmux workers. Increase for "
+                            "longer-running workers with more output.")
     logs_p.add_argument("--follow", action="store_true",
-                       help="Continuously poll and display")
+                       help="Continuously display new output (like tail -f). Default: false. "
+                            "Press Ctrl-C to stop following. For tmux workers, refreshes "
+                            "every 1 second. For non-tmux workers, uses tail -f.")
 
     # kill
     kill_p = subparsers.add_parser(
