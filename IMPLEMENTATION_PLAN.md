@@ -257,7 +257,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 ### Phase 4: Integration and Polish
 
-- [ ] **4.1 Add heartbeat support to ralph spawn**
+- [x] **4.1 Add heartbeat support to ralph spawn**
   - Same --heartbeat flags as regular spawn
   - Heartbeat during ralph loop
 

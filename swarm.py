@@ -1001,6 +1001,10 @@ Examples:
   swarm ralph spawn --name feature --prompt-file PROMPT.md --max-iterations 20 \\
     --worktree -- claude
 
+  # With heartbeat for overnight work (recovers from rate limits)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
+    --heartbeat 4h --heartbeat-expire 24h -- claude
+
   # Stop when pattern matched (checked after each agent exit)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
     --done-pattern "All tasks complete" -- claude
@@ -1013,6 +1017,15 @@ Examples:
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
     --no-run -- claude
   swarm ralph run dev
+
+Heartbeat for Rate Limit Recovery:
+  # Nudge every 4 hours for overnight work (24h expiry)
+  swarm ralph spawn --name agent --prompt-file PROMPT.md --max-iterations 100 \\
+    --heartbeat 4h --heartbeat-expire 24h -- claude
+
+  # Custom message for specific recovery behavior
+  swarm ralph spawn --name agent --prompt-file PROMPT.md --max-iterations 50 \\
+    --heartbeat 4h --heartbeat-message "please continue where you left off" -- claude
 
 Intervention:
   # Send a message to the running agent mid-iteration
@@ -4340,6 +4353,12 @@ def main() -> None:
                                help="Wait for agent to be ready before returning")
     ralph_spawn_p.add_argument("--ready-timeout", type=int, default=120,
                                help="Timeout in seconds for --ready-wait (default: 120)")
+    ralph_spawn_p.add_argument("--heartbeat",
+                               help='Heartbeat interval (e.g., "4h", "30m"). Sends periodic nudges to help recover from rate limits.')
+    ralph_spawn_p.add_argument("--heartbeat-expire",
+                               help='Stop heartbeat after this duration (e.g., "24h"). Default: no expiration')
+    ralph_spawn_p.add_argument("--heartbeat-message", default="continue",
+                               help='Message to send on each heartbeat. Default: "continue"')
     ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                                help="Command to run (after --)")
 
@@ -5753,6 +5772,62 @@ def cmd_ralph_spawn(args) -> None:
     msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
     msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
     print(msg)
+
+    # Start heartbeat if requested
+    if getattr(args, 'heartbeat', None):
+        # Parse and validate heartbeat interval
+        try:
+            interval_seconds = parse_duration(args.heartbeat)
+        except ValueError:
+            print(f"swarm: error: invalid heartbeat interval '{args.heartbeat}'", file=sys.stderr)
+            sys.exit(1)
+
+        # Warn if interval is very short
+        if interval_seconds < 60:
+            print(f"swarm: warning: very short heartbeat interval ({args.heartbeat}), consider using at least 1m", file=sys.stderr)
+
+        # Parse expiration
+        expire_at = None
+        if args.heartbeat_expire:
+            try:
+                expire_seconds = parse_duration(args.heartbeat_expire)
+                expire_at = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
+                expire_at = expire_at.isoformat()
+            except ValueError:
+                print(f"swarm: error: invalid heartbeat-expire '{args.heartbeat_expire}'", file=sys.stderr)
+                sys.exit(1)
+
+        # Create heartbeat state
+        now = datetime.now(timezone.utc).isoformat()
+        heartbeat_state = HeartbeatState(
+            worker_name=args.name,
+            interval_seconds=interval_seconds,
+            message=args.heartbeat_message,
+            expire_at=expire_at,
+            created_at=now,
+            last_beat_at=None,
+            beat_count=0,
+            status="active",
+            monitor_pid=None,
+        )
+
+        # Save heartbeat state
+        save_heartbeat_state(heartbeat_state)
+
+        # Start background monitor process
+        monitor_pid = start_heartbeat_monitor(args.name)
+
+        # Update state with monitor PID
+        heartbeat_state.monitor_pid = monitor_pid
+        save_heartbeat_state(heartbeat_state)
+
+        # Print heartbeat confirmation
+        interval_str = format_duration(interval_seconds)
+        if expire_at:
+            expire_str = format_duration(parse_duration(args.heartbeat_expire))
+            print(f"heartbeat started (every {interval_str}, expires in {expire_str})")
+        else:
+            print(f"heartbeat started (every {interval_str}, no expiration)")
 
     # Auto-start the monitoring loop unless --no-run is specified
     # Note: We check hasattr to maintain backwards compatibility with existing tests
