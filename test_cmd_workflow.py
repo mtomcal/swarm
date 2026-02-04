@@ -5851,5 +5851,351 @@ class TestCmdWorkflowList(unittest.TestCase):
             self.assertIn(status, found_statuses)
 
 
+class TestCmdWorkflowCancel(unittest.TestCase):
+    """Test cmd_workflow_cancel function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_state_file = swarm.STATE_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        swarm.STATE_FILE = swarm.SWARM_DIR / "state.json"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "running",
+            "current_stage": "plan",
+            "current_stage_index": 0,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": None,
+            "stages": {
+                "plan": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                ),
+                "build": swarm.StageState(
+                    status="pending",
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def test_cancel_workflow_not_found(self):
+        """Test cancel for non-existent workflow."""
+        args = Namespace(
+            name="nonexistent",
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_cancel(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cancel_completed_workflow_fails(self):
+        """Test that cancelling a completed workflow fails."""
+        self._create_workflow_state(
+            "completed-workflow",
+            status="completed",
+        )
+
+        args = Namespace(
+            name="completed-workflow",
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_cancel(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cancel_failed_workflow_fails(self):
+        """Test that cancelling a failed workflow fails."""
+        self._create_workflow_state(
+            "failed-workflow",
+            status="failed",
+        )
+
+        args = Namespace(
+            name="failed-workflow",
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_cancel(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cancel_already_cancelled_workflow_fails(self):
+        """Test that cancelling an already cancelled workflow fails."""
+        self._create_workflow_state(
+            "cancelled-workflow",
+            status="cancelled",
+        )
+
+        args = Namespace(
+            name="cancelled-workflow",
+            force=False
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_workflow_cancel(args)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_cancel_running_workflow_success(self):
+        """Test cancelling a running workflow (no worker)."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_cancel(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow 'test-workflow' cancelled", output)
+
+        # Verify workflow state was updated
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertEqual(workflow_state.status, "cancelled")
+        self.assertIsNotNone(workflow_state.completed_at)
+
+    def test_cancel_scheduled_workflow_success(self):
+        """Test cancelling a scheduled workflow."""
+        self._create_workflow_state(
+            "scheduled-workflow",
+            status="scheduled",
+            current_stage=None,
+            started_at=None,
+            stages={},
+        )
+
+        args = Namespace(
+            name="scheduled-workflow",
+            force=False
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_cancel(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow 'scheduled-workflow' cancelled", output)
+
+        # Verify workflow state was updated
+        workflow_state = swarm.load_workflow_state("scheduled-workflow")
+        self.assertEqual(workflow_state.status, "cancelled")
+        self.assertIsNotNone(workflow_state.completed_at)
+
+    def test_cancel_updates_stage_status(self):
+        """Test that cancel marks the current stage as failed with 'cancelled' exit reason."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_cancel(args)
+
+        # Verify stage state was updated
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        stage_state = workflow_state.stages["plan"]
+        self.assertEqual(stage_state.status, "failed")
+        self.assertEqual(stage_state.exit_reason, "cancelled")
+        self.assertIsNotNone(stage_state.completed_at)
+
+    def test_cancel_pending_stages_remain_pending(self):
+        """Test that pending stages remain pending after cancel."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_cancel(args)
+
+        # Verify pending stage wasn't changed
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        build_stage = workflow_state.stages["build"]
+        self.assertEqual(build_stage.status, "pending")
+        self.assertIsNone(build_stage.exit_reason)
+
+    def test_cancel_kills_worker(self):
+        """Test that cancel kills the stage worker if it exists."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a mock worker in state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name="test-workflow-plan",
+            status="running",
+            cmd=["bash", "-c", "sleep 60"],
+            started="2026-02-04T10:00:00+00:00",
+            cwd="/tmp",
+            tmux=swarm.TmuxInfo(
+                session="swarm",
+                window="test-workflow-plan",
+                socket=None,
+            )
+        )
+        state.workers.append(worker)
+        state.save()
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        # Mock the subprocess.run call to avoid actually trying to kill tmux
+        with patch('subprocess.run') as mock_run:
+            import io
+            captured = io.StringIO()
+            with patch('sys.stdout', captured):
+                swarm.cmd_workflow_cancel(args)
+
+            # Verify tmux kill-window was called
+            mock_run.assert_called()
+            call_args = mock_run.call_args[0][0]
+            self.assertIn("kill-window", call_args)
+
+    def test_cancel_stops_heartbeat(self):
+        """Test that cancel stops the heartbeat if active."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a heartbeat state for the worker
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        heartbeat_state = swarm.HeartbeatState(
+            worker_name="test-workflow-plan",
+            interval_seconds=60,
+            message="continue",
+            status="active",
+            created_at="2026-02-04T10:00:00+00:00",
+            monitor_pid=12345,  # Fake PID
+        )
+        swarm.save_heartbeat_state(heartbeat_state)
+
+        # Create a mock worker in state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name="test-workflow-plan",
+            status="running",
+            cmd=["bash", "-c", "sleep 60"],
+            started="2026-02-04T10:00:00+00:00",
+            cwd="/tmp",
+        )
+        state.workers.append(worker)
+        state.save()
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        # Mock stop_heartbeat_monitor to avoid actually trying to kill process
+        with patch.object(swarm, 'stop_heartbeat_monitor', return_value=True) as mock_stop:
+            import io
+            captured = io.StringIO()
+            with patch('sys.stdout', captured):
+                swarm.cmd_workflow_cancel(args)
+
+            # Verify stop_heartbeat_monitor was called
+            mock_stop.assert_called_once()
+
+        # Verify heartbeat state was updated
+        heartbeat_state = swarm.load_heartbeat_state("test-workflow-plan")
+        self.assertEqual(heartbeat_state.status, "stopped")
+        self.assertIsNone(heartbeat_state.monitor_pid)
+
+    def test_cancel_with_no_current_stage(self):
+        """Test cancelling a workflow that has no current stage set."""
+        self._create_workflow_state(
+            "test-workflow",
+            current_stage=None,
+            stages={},
+        )
+
+        args = Namespace(
+            name="test-workflow",
+            force=False
+        )
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            swarm.cmd_workflow_cancel(args)
+
+        output = captured.getvalue()
+        self.assertIn("Workflow 'test-workflow' cancelled", output)
+
+        # Verify workflow state was updated
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertEqual(workflow_state.status, "cancelled")
+
+    def test_cancel_with_force_flag(self):
+        """Test that force flag is passed to worker kill."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a mock worker in state with PID
+        state = swarm.State()
+        worker = swarm.Worker(
+            name="test-workflow-plan",
+            status="running",
+            cmd=["bash", "-c", "sleep 60"],
+            started="2026-02-04T10:00:00+00:00",
+            cwd="/tmp",
+            pid=12345,  # Non-tmux worker with PID
+        )
+        state.workers.append(worker)
+        state.save()
+
+        args = Namespace(
+            name="test-workflow",
+            force=True
+        )
+
+        # Mock os.kill to avoid actually trying to kill process
+        with patch('os.kill') as mock_kill:
+            import io
+            captured = io.StringIO()
+            with patch('sys.stdout', captured):
+                swarm.cmd_workflow_cancel(args)
+
+            # When force=True, should use SIGKILL directly
+            import signal
+            mock_kill.assert_called_with(12345, signal.SIGKILL)
+
+
 if __name__ == "__main__":
     unittest.main()

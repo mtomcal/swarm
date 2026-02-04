@@ -1656,6 +1656,51 @@ See Also:
   swarm workflow cancel --help    # Cancel a running workflow
 """
 
+WORKFLOW_CANCEL_HELP_DESCRIPTION = """\
+Cancel a running workflow.
+
+Stops the workflow and kills the current stage worker. If the workflow has
+an active heartbeat, it will also be stopped. The workflow status is set
+to 'cancelled'.
+"""
+
+WORKFLOW_CANCEL_HELP_EPILOG = """\
+Side Effects:
+  - Sets workflow status to 'cancelled'
+  - Kills the current stage worker (if any)
+  - Stops any active heartbeat for the stage worker
+  - Current stage is marked as 'failed' with exit_reason 'cancelled'
+
+Options:
+  --force         Kill workers without graceful shutdown (immediate SIGKILL)
+
+Examples:
+  # Cancel a running workflow
+  swarm workflow cancel my-workflow
+
+  # Force-kill a stuck workflow
+  swarm workflow cancel my-workflow --force
+
+Recovery:
+  After cancelling, you can resume from a specific stage:
+    swarm workflow resume my-workflow --from <stage-name>
+
+  Or clean up and start fresh:
+    swarm workflow run workflow.yaml --force
+
+What Gets Cancelled:
+  - The running workflow transitions to 'cancelled' status
+  - The current stage worker (named <workflow>-<stage>) is killed
+  - Any heartbeat monitoring the stage worker is stopped
+  - Pending stages remain 'pending' (not executed)
+
+See Also:
+  swarm workflow status <name>    # Check current workflow state
+  swarm workflow resume --help    # Resume a cancelled workflow
+  swarm kill --help               # Manually kill workers
+  swarm heartbeat stop --help     # Manually stop heartbeats
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -4191,6 +4236,18 @@ def main() -> None:
     )
     workflow_list_p.add_argument("--format", choices=["table", "json"],
                                  default="table", help="Output format (default: table)")
+
+    # workflow cancel
+    workflow_cancel_p = workflow_subparsers.add_parser(
+        "cancel",
+        help="Cancel a running workflow",
+        description=WORKFLOW_CANCEL_HELP_DESCRIPTION,
+        epilog=WORKFLOW_CANCEL_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    workflow_cancel_p.add_argument("name", help="Workflow name")
+    workflow_cancel_p.add_argument("--force", action="store_true",
+                                   help="Kill workers without graceful shutdown")
 
     args = parser.parse_args()
 
@@ -7714,7 +7771,7 @@ def cmd_workflow(args) -> None:
     - run: Run a workflow from YAML file
     - status: Show workflow status
     - list: List all workflows
-    - cancel: Cancel a running workflow (to be implemented)
+    - cancel: Cancel a running workflow
     - resume: Resume a failed/paused workflow (to be implemented)
     - logs: View workflow logs (to be implemented)
     """
@@ -7726,6 +7783,8 @@ def cmd_workflow(args) -> None:
         cmd_workflow_status(args)
     elif args.workflow_command == "list":
         cmd_workflow_list(args)
+    elif args.workflow_command == "cancel":
+        cmd_workflow_cancel(args)
     else:
         print(f"Error: workflow subcommand '{args.workflow_command}' not yet implemented", file=sys.stderr)
         sys.exit(1)
@@ -7904,6 +7963,105 @@ def cmd_workflow_list(args) -> None:
                 source = "..." + source[-37:]
 
             print(f"{wf.name:<25} {wf.status:<12} {current_stage:<15} {started_str:<12} {source}")
+
+
+def cmd_workflow_cancel(args) -> None:
+    """Cancel a running workflow.
+
+    Stops the workflow execution by:
+    1. Killing the current stage worker (if any)
+    2. Stopping any active heartbeat for the stage worker
+    3. Setting the workflow status to 'cancelled'
+
+    Args:
+        args: Namespace with cancel arguments:
+            - name: Workflow name
+            - force: Whether to use SIGKILL instead of graceful shutdown
+
+    Exit codes:
+        0: Workflow cancelled successfully
+        1: Workflow not found or not in cancellable state
+    """
+    workflow_name = args.name
+    force = args.force
+
+    # Load workflow state
+    workflow_state = load_workflow_state(workflow_name)
+    if workflow_state is None:
+        print(f"Error: workflow '{workflow_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if workflow is in a cancellable state
+    if workflow_state.status not in ("running", "scheduled"):
+        print(f"Error: workflow '{workflow_name}' is not running or scheduled (status: {workflow_state.status})", file=sys.stderr)
+        sys.exit(1)
+
+    # Get the current stage worker name (if workflow is running)
+    worker_name = None
+    current_stage_name = workflow_state.current_stage
+    if current_stage_name and current_stage_name in workflow_state.stages:
+        stage_state = workflow_state.stages[current_stage_name]
+        worker_name = stage_state.worker_name
+
+    # Kill the current stage worker if it exists
+    if worker_name:
+        state = State()
+        worker = state.get_worker(worker_name)
+        if worker:
+            # Kill tmux worker
+            if worker.tmux:
+                socket = worker.tmux.socket if worker.tmux else None
+                cmd_prefix = tmux_cmd_prefix(socket)
+                subprocess.run(
+                    cmd_prefix + ["kill-window", "-t", f"{worker.tmux.session}:{worker.tmux.window}"],
+                    capture_output=True
+                )
+            # Kill non-tmux worker with PID
+            elif worker.pid:
+                try:
+                    if force:
+                        os.kill(worker.pid, signal.SIGKILL)
+                    else:
+                        # Graceful shutdown with SIGTERM first
+                        os.kill(worker.pid, signal.SIGTERM)
+                        # Wait up to 5 seconds for process to die
+                        for _ in range(50):
+                            time.sleep(0.1)
+                            if not process_alive(worker.pid):
+                                break
+                        else:
+                            # Process still alive, use SIGKILL
+                            if process_alive(worker.pid):
+                                os.kill(worker.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # Process already dead
+
+            # Update worker status
+            worker.status = "stopped"
+            state.save()
+
+            # Stop heartbeat if active for this worker
+            heartbeat_state = load_heartbeat_state(worker_name)
+            if heartbeat_state and heartbeat_state.status in ("active", "paused"):
+                stop_heartbeat_monitor(heartbeat_state)
+                heartbeat_state.status = "stopped"
+                heartbeat_state.monitor_pid = None
+                save_heartbeat_state(heartbeat_state)
+
+    # Update current stage state to failed/cancelled
+    if current_stage_name and current_stage_name in workflow_state.stages:
+        stage_state = workflow_state.stages[current_stage_name]
+        if stage_state.status == "running":
+            stage_state.status = "failed"
+            stage_state.exit_reason = "cancelled"
+            stage_state.completed_at = datetime.now(timezone.utc).isoformat()
+
+    # Update workflow state
+    workflow_state.status = "cancelled"
+    workflow_state.completed_at = datetime.now(timezone.utc).isoformat()
+    save_workflow_state(workflow_state)
+
+    print(f"Workflow '{workflow_name}' cancelled")
 
 
 def cmd_workflow_run(args) -> None:

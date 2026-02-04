@@ -223,7 +223,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Table: name, status, current stage, started, source
   - JSON output option
 
-- [ ] **3.12 Implement `swarm workflow cancel`**
+- [x] **3.12 Implement `swarm workflow cancel`**
   - Kill current stage worker
   - Stop heartbeats
   - Set status to cancelled
