@@ -16,7 +16,7 @@ import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -1097,6 +1097,131 @@ Examples:
 """
 
 
+# Heartbeat help text constants
+HEARTBEAT_HELP_DESCRIPTION = """\
+Periodic nudges to help workers recover from rate limits.
+
+Heartbeat sends messages to workers on a schedule. This helps agents
+recover from API rate limits that renew on fixed intervals (e.g., every
+4 hours). Instead of detecting rate limits, heartbeat blindly nudges -
+if the agent is stuck, it retries; if working, it ignores the nudge.
+"""
+
+HEARTBEAT_HELP_EPILOG = """\
+Quick Reference:
+  swarm heartbeat start builder --interval 4h --expire 24h
+  swarm heartbeat list
+  swarm heartbeat stop builder
+
+Common Patterns:
+  # Nudge every 4 hours for overnight work (24h expiry)
+  swarm heartbeat start agent --interval 4h --expire 24h
+
+  # Custom message for specific recovery
+  swarm heartbeat start agent --interval 4h --message "please continue where you left off"
+
+  # Attach heartbeat at spawn time (see: swarm spawn --heartbeat)
+  swarm spawn --name agent --tmux --heartbeat 4h --heartbeat-expire 24h -- claude
+"""
+
+HEARTBEAT_START_HELP_DESCRIPTION = """\
+Start periodic heartbeat nudges for a worker.
+
+Creates a heartbeat that sends a message to the specified worker at
+regular intervals. This is useful for helping agents recover from
+API rate limits that renew on fixed schedules.
+"""
+
+HEARTBEAT_START_HELP_EPILOG = """\
+Duration Format:
+  Accepts: "4h", "30m", "90s", "3600" (seconds), or combinations "1h30m"
+
+Examples:
+  # Basic 4-hour heartbeat with 24-hour expiry
+  swarm heartbeat start builder --interval 4h --expire 24h
+
+  # Custom recovery message
+  swarm heartbeat start builder --interval 4h \\
+    --message "If you hit a rate limit, please continue now"
+
+  # Short interval for testing
+  swarm heartbeat start builder --interval 5m --expire 1h
+
+  # No expiration (manual stop required)
+  swarm heartbeat start builder --interval 4h
+
+Rate Limit Recovery:
+  API rate limits often renew on fixed intervals. Set --interval to match
+  your rate limit renewal period. The heartbeat will nudge the agent at
+  each interval, prompting it to retry if it was blocked.
+
+  Example: Claude API limits renew every 4 hours
+    swarm heartbeat start agent --interval 4h --expire 24h
+
+Safety:
+  Always set --expire for unattended work to prevent infinite nudging.
+  Heartbeats automatically stop when:
+    - Expiration time is reached
+    - Worker is killed
+    - Manual stop via: swarm heartbeat stop <worker>
+"""
+
+HEARTBEAT_STOP_HELP_EPILOG = """\
+Stop heartbeat for a worker.
+
+Examples:
+  swarm heartbeat stop builder
+"""
+
+HEARTBEAT_LIST_HELP_EPILOG = """\
+List all active heartbeats with their status.
+
+Output includes:
+  - Worker name
+  - Interval between beats
+  - Time until next beat
+  - Expiration time
+  - Current status (active/paused/expired/stopped)
+  - Number of beats sent
+
+Examples:
+  swarm heartbeat list                   # Table view
+  swarm heartbeat list --format json     # JSON for scripting
+"""
+
+HEARTBEAT_STATUS_HELP_EPILOG = """\
+Show detailed status for a single heartbeat.
+
+Displays comprehensive information including:
+  - Current status
+  - Interval and message
+  - Created time and expiration
+  - Last beat time and beat count
+
+Examples:
+  swarm heartbeat status builder
+"""
+
+HEARTBEAT_PAUSE_HELP_EPILOG = """\
+Pause heartbeat temporarily.
+
+The heartbeat remains configured but stops sending beats until resumed.
+Use 'swarm heartbeat resume <worker>' to continue.
+
+Examples:
+  swarm heartbeat pause builder
+"""
+
+HEARTBEAT_RESUME_HELP_EPILOG = """\
+Resume a paused heartbeat.
+
+Continues sending beats at the configured interval.
+
+Examples:
+  swarm heartbeat resume builder
+"""
+
+
 @dataclass
 class TmuxInfo:
     """Tmux window information."""
@@ -1388,6 +1513,61 @@ def list_heartbeat_states() -> list[HeartbeatState]:
                 continue
 
         return sorted(states, key=lambda s: s.worker_name)
+
+
+def parse_duration(duration_str: str) -> int:
+    """Parse a duration string into seconds.
+
+    Accepts formats:
+    - "4h", "30m", "90s" - single unit
+    - "1h30m", "2h30m15s" - combinations
+    - "3600" - bare number treated as seconds
+
+    Args:
+        duration_str: Duration string to parse
+
+    Returns:
+        Duration in seconds
+
+    Raises:
+        ValueError: If duration format is invalid or value is <= 0
+    """
+    if not duration_str:
+        raise ValueError("empty duration string")
+
+    duration_str = duration_str.strip().lower()
+
+    # Try bare number (seconds)
+    if duration_str.isdigit():
+        seconds = int(duration_str)
+        if seconds <= 0:
+            raise ValueError("duration must be positive")
+        return seconds
+
+    # Parse duration with units (e.g., "1h30m", "4h", "30m", "90s")
+    total_seconds = 0
+    remaining = duration_str
+    units = [('h', 3600), ('m', 60), ('s', 1)]
+
+    for unit, multiplier in units:
+        if unit in remaining:
+            parts = remaining.split(unit, 1)
+            if parts[0]:
+                try:
+                    value = int(parts[0])
+                    total_seconds += value * multiplier
+                except ValueError:
+                    raise ValueError(f"invalid duration: '{duration_str}'")
+            remaining = parts[1]
+
+    # Check if there's leftover unparsed content
+    if remaining and not remaining.isspace():
+        raise ValueError(f"invalid duration: '{duration_str}'")
+
+    if total_seconds <= 0:
+        raise ValueError("duration must be positive")
+
+    return total_seconds
 
 
 def get_ralph_state_path(worker_name: str) -> Path:
@@ -2466,6 +2646,80 @@ def main() -> None:
     ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                                help="Command to run (after --)")
 
+    # heartbeat - periodic nudges to workers
+    heartbeat_p = subparsers.add_parser(
+        "heartbeat",
+        help="Periodic nudges to help workers recover from rate limits",
+        description=HEARTBEAT_HELP_DESCRIPTION,
+        epilog=HEARTBEAT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_subparsers = heartbeat_p.add_subparsers(dest="heartbeat_command", required=True)
+
+    # heartbeat start
+    heartbeat_start_p = heartbeat_subparsers.add_parser(
+        "start",
+        help="Start heartbeat for a worker",
+        description=HEARTBEAT_START_HELP_DESCRIPTION,
+        epilog=HEARTBEAT_START_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_start_p.add_argument("worker", help="Worker name to send heartbeats to")
+    heartbeat_start_p.add_argument("--interval", required=True,
+                                   help='Time between heartbeats (e.g., "4h", "30m", "3600s")')
+    heartbeat_start_p.add_argument("--expire",
+                                   help='Stop heartbeat after this duration (e.g., "24h"). Default: no expiration')
+    heartbeat_start_p.add_argument("--message", default="continue",
+                                   help='Message to send on each beat. Default: "continue"')
+    heartbeat_start_p.add_argument("--force", action="store_true",
+                                   help="Replace existing heartbeat if one exists")
+
+    # heartbeat stop
+    heartbeat_stop_p = heartbeat_subparsers.add_parser(
+        "stop",
+        help="Stop heartbeat for a worker",
+        epilog=HEARTBEAT_STOP_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_stop_p.add_argument("worker", help="Worker name")
+
+    # heartbeat list
+    heartbeat_list_p = heartbeat_subparsers.add_parser(
+        "list",
+        help="List all heartbeats",
+        epilog=HEARTBEAT_LIST_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_list_p.add_argument("--format", choices=["table", "json"],
+                                  default="table", help="Output format (default: table)")
+
+    # heartbeat status
+    heartbeat_status_p = heartbeat_subparsers.add_parser(
+        "status",
+        help="Show heartbeat status",
+        epilog=HEARTBEAT_STATUS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_status_p.add_argument("worker", help="Worker name")
+
+    # heartbeat pause
+    heartbeat_pause_p = heartbeat_subparsers.add_parser(
+        "pause",
+        help="Pause heartbeat temporarily",
+        epilog=HEARTBEAT_PAUSE_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_pause_p.add_argument("worker", help="Worker name")
+
+    # heartbeat resume
+    heartbeat_resume_p = heartbeat_subparsers.add_parser(
+        "resume",
+        help="Resume paused heartbeat",
+        epilog=HEARTBEAT_RESUME_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_resume_p.add_argument("worker", help="Worker name")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -2497,6 +2751,8 @@ def main() -> None:
         cmd_init(args)
     elif args.command == "ralph":
         cmd_ralph(args)
+    elif args.command == "heartbeat":
+        cmd_heartbeat(args)
 
 
 # Command stubs - to be implemented in subsequent tasks
@@ -4463,6 +4719,245 @@ def _run_ralph_loop(args) -> None:
         ralph_state = load_ralph_state(args.name)
         if not ralph_state or ralph_state.status == "paused":
             break
+
+
+def cmd_heartbeat(args) -> None:
+    """Heartbeat management commands.
+
+    Dispatches to heartbeat subcommands:
+    - start: Start heartbeat for a worker
+    - stop: Stop heartbeat for a worker
+    - list: List all heartbeats
+    - status: Show heartbeat status
+    - pause: Pause heartbeat temporarily
+    - resume: Resume paused heartbeat
+    """
+    if args.heartbeat_command == "start":
+        cmd_heartbeat_start(args)
+    elif args.heartbeat_command == "stop":
+        cmd_heartbeat_stop(args)
+    elif args.heartbeat_command == "list":
+        cmd_heartbeat_list(args)
+    elif args.heartbeat_command == "status":
+        cmd_heartbeat_status(args)
+    elif args.heartbeat_command == "pause":
+        cmd_heartbeat_pause(args)
+    elif args.heartbeat_command == "resume":
+        cmd_heartbeat_resume(args)
+
+
+def cmd_heartbeat_start(args) -> None:
+    """Start heartbeat for a worker.
+
+    Creates a heartbeat configuration and saves it to disk.
+    The heartbeat will send periodic messages to the worker.
+
+    Args:
+        args: Namespace with start arguments
+    """
+    worker_name = args.worker
+
+    # Load worker state
+    state = State()
+    worker = state.get_worker(worker_name)
+
+    # Validate worker exists
+    if worker is None:
+        print(f"Error: worker '{worker_name}' not found", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate worker is tmux
+    if worker.tmux is None:
+        print(f"Error: heartbeat requires tmux worker", file=sys.stderr)
+        sys.exit(1)
+
+    # Check for existing heartbeat
+    existing = load_heartbeat_state(worker_name)
+    if existing is not None and existing.status in ("active", "paused"):
+        if not args.force:
+            print(f"Error: heartbeat already active for '{worker_name}' (use --force to replace)", file=sys.stderr)
+            sys.exit(1)
+
+    # Parse interval
+    try:
+        interval_seconds = parse_duration(args.interval)
+    except ValueError as e:
+        print(f"Error: invalid interval '{args.interval}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Warn if interval is very short
+    if interval_seconds < 60:
+        print(f"Warning: very short interval ({args.interval}), consider using at least 1m", file=sys.stderr)
+
+    # Parse expiration
+    expire_at = None
+    if args.expire:
+        try:
+            expire_seconds = parse_duration(args.expire)
+            expire_at = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
+            expire_at = expire_at.isoformat()
+        except ValueError as e:
+            print(f"Error: invalid expire '{args.expire}'", file=sys.stderr)
+            sys.exit(1)
+
+    # Create heartbeat state
+    now = datetime.now(timezone.utc).isoformat()
+    heartbeat_state = HeartbeatState(
+        worker_name=worker_name,
+        interval_seconds=interval_seconds,
+        message=args.message,
+        expire_at=expire_at,
+        created_at=now,
+        last_beat_at=None,
+        beat_count=0,
+        status="active",
+    )
+
+    # Save heartbeat state
+    save_heartbeat_state(heartbeat_state)
+
+    # Format output
+    interval_str = format_duration(interval_seconds)
+    if expire_at:
+        expire_delta = parse_duration(args.expire)
+        expire_str = format_duration(expire_delta)
+        print(f"Heartbeat started for {worker_name} (every {interval_str}, expires in {expire_str})")
+    else:
+        print(f"Heartbeat started for {worker_name} (every {interval_str}, no expiration)")
+
+
+def cmd_heartbeat_stop(args) -> None:
+    """Stop heartbeat for a worker.
+
+    Sets the heartbeat status to stopped.
+
+    Args:
+        args: Namespace with stop arguments
+    """
+    worker_name = args.worker
+
+    # Load heartbeat state
+    heartbeat_state = load_heartbeat_state(worker_name)
+    if heartbeat_state is None:
+        print(f"No active heartbeat for {worker_name}")
+        return
+
+    # Update status to stopped
+    heartbeat_state.status = "stopped"
+    save_heartbeat_state(heartbeat_state)
+    print(f"Heartbeat stopped for {worker_name}")
+
+
+def cmd_heartbeat_list(args) -> None:
+    """List all heartbeats.
+
+    Shows a table or JSON of all heartbeat configurations.
+
+    Args:
+        args: Namespace with list arguments
+    """
+    states = list_heartbeat_states()
+
+    if not states:
+        if args.format == "json":
+            print("[]")
+        else:
+            print("No heartbeats found")
+        return
+
+    if args.format == "json":
+        import json
+        output = []
+        for s in states:
+            output.append(s.to_dict())
+        print(json.dumps(output, indent=2))
+    else:
+        # Table format
+        print(f"{'WORKER':<15} {'INTERVAL':<10} {'STATUS':<10} {'BEATS':<6} {'EXPIRES':<20}")
+        for s in states:
+            interval_str = format_duration(s.interval_seconds)
+            if s.expire_at:
+                try:
+                    expire_dt = datetime.fromisoformat(s.expire_at.replace('Z', '+00:00'))
+                    expire_str = relative_time(s.expire_at)
+                except ValueError:
+                    expire_str = s.expire_at
+            else:
+                expire_str = "never"
+            print(f"{s.worker_name:<15} {interval_str:<10} {s.status:<10} {s.beat_count:<6} {expire_str:<20}")
+
+
+def cmd_heartbeat_status(args) -> None:
+    """Show detailed heartbeat status.
+
+    Args:
+        args: Namespace with status arguments
+    """
+    worker_name = args.worker
+
+    heartbeat_state = load_heartbeat_state(worker_name)
+    if heartbeat_state is None:
+        print(f"No heartbeat found for {worker_name}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Worker: {heartbeat_state.worker_name}")
+    print(f"Status: {heartbeat_state.status}")
+    print(f"Interval: {format_duration(heartbeat_state.interval_seconds)}")
+    print(f"Message: {heartbeat_state.message}")
+    print(f"Created: {heartbeat_state.created_at}")
+    if heartbeat_state.expire_at:
+        print(f"Expires: {heartbeat_state.expire_at}")
+    else:
+        print(f"Expires: never")
+    if heartbeat_state.last_beat_at:
+        print(f"Last beat: {heartbeat_state.last_beat_at}")
+    else:
+        print(f"Last beat: none")
+    print(f"Beat count: {heartbeat_state.beat_count}")
+
+
+def cmd_heartbeat_pause(args) -> None:
+    """Pause heartbeat for a worker.
+
+    Args:
+        args: Namespace with pause arguments
+    """
+    worker_name = args.worker
+
+    heartbeat_state = load_heartbeat_state(worker_name)
+    if heartbeat_state is None:
+        print(f"No heartbeat found for {worker_name}", file=sys.stderr)
+        sys.exit(1)
+
+    if heartbeat_state.status != "active":
+        print(f"Heartbeat for {worker_name} is not active (status: {heartbeat_state.status})", file=sys.stderr)
+        sys.exit(1)
+
+    heartbeat_state.status = "paused"
+    save_heartbeat_state(heartbeat_state)
+    print(f"Heartbeat paused for {worker_name}")
+
+
+def cmd_heartbeat_resume(args) -> None:
+    """Resume paused heartbeat for a worker.
+
+    Args:
+        args: Namespace with resume arguments
+    """
+    worker_name = args.worker
+
+    heartbeat_state = load_heartbeat_state(worker_name)
+    if heartbeat_state is None:
+        print(f"No heartbeat found for {worker_name}", file=sys.stderr)
+        sys.exit(1)
+
+    if heartbeat_state.status != "paused":
+        print(f"Heartbeat for {worker_name} is not paused (status: {heartbeat_state.status})", file=sys.stderr)
+        sys.exit(1)
+
+    heartbeat_state.status = "active"
+    save_heartbeat_state(heartbeat_state)
+    print(f"Heartbeat resumed for {worker_name}")
 
 
 if __name__ == "__main__":

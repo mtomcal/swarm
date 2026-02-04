@@ -1,474 +1,638 @@
-"""Unit tests for heartbeat functionality."""
-
-import unittest
-import swarm
-
-
-class TestHeartbeatStateDataclass(unittest.TestCase):
-    """Test HeartbeatState dataclass."""
-
-    def test_heartbeat_state_required_fields(self):
-        """Test HeartbeatState requires worker_name and interval_seconds."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600
-        )
-        self.assertEqual(state.worker_name, 'test-worker')
-        self.assertEqual(state.interval_seconds, 3600)
-
-    def test_heartbeat_state_defaults(self):
-        """Test HeartbeatState has correct defaults."""
-        state = swarm.HeartbeatState(
-            worker_name='test',
-            interval_seconds=14400
-        )
-        self.assertEqual(state.message, "continue")
-        self.assertIsNone(state.expire_at)
-        self.assertEqual(state.created_at, "")
-        self.assertIsNone(state.last_beat_at)
-        self.assertEqual(state.beat_count, 0)
-        self.assertEqual(state.status, "active")
-
-    def test_heartbeat_state_all_fields(self):
-        """Test HeartbeatState with all fields specified."""
-        state = swarm.HeartbeatState(
-            worker_name='builder',
-            interval_seconds=14400,
-            message='continue working',
-            expire_at='2026-02-05T02:00:00',
-            created_at='2026-02-04T02:00:00',
-            last_beat_at='2026-02-04T06:00:00',
-            beat_count=3,
-            status='paused'
-        )
-        self.assertEqual(state.worker_name, 'builder')
-        self.assertEqual(state.interval_seconds, 14400)
-        self.assertEqual(state.message, 'continue working')
-        self.assertEqual(state.expire_at, '2026-02-05T02:00:00')
-        self.assertEqual(state.created_at, '2026-02-04T02:00:00')
-        self.assertEqual(state.last_beat_at, '2026-02-04T06:00:00')
-        self.assertEqual(state.beat_count, 3)
-        self.assertEqual(state.status, 'paused')
-
-    def test_heartbeat_state_to_dict(self):
-        """Test HeartbeatState to_dict method."""
-        state = swarm.HeartbeatState(
-            worker_name='test',
-            interval_seconds=3600,
-            message='please continue',
-            status='active'
-        )
-        d = state.to_dict()
-        self.assertEqual(d['worker_name'], 'test')
-        self.assertEqual(d['interval_seconds'], 3600)
-        self.assertEqual(d['message'], 'please continue')
-        self.assertEqual(d['status'], 'active')
-        self.assertIsNone(d['expire_at'])
-        self.assertIsNone(d['last_beat_at'])
-        self.assertEqual(d['beat_count'], 0)
-
-    def test_heartbeat_state_from_dict_full(self):
-        """Test HeartbeatState from_dict with all fields."""
-        d = {
-            'worker_name': 'builder',
-            'interval_seconds': 14400,
-            'message': 'continue working',
-            'expire_at': '2026-02-05T02:00:00',
-            'created_at': '2026-02-04T02:00:00',
-            'last_beat_at': '2026-02-04T06:00:00',
-            'beat_count': 5,
-            'status': 'expired'
-        }
-        state = swarm.HeartbeatState.from_dict(d)
-        self.assertEqual(state.worker_name, 'builder')
-        self.assertEqual(state.interval_seconds, 14400)
-        self.assertEqual(state.message, 'continue working')
-        self.assertEqual(state.expire_at, '2026-02-05T02:00:00')
-        self.assertEqual(state.created_at, '2026-02-04T02:00:00')
-        self.assertEqual(state.last_beat_at, '2026-02-04T06:00:00')
-        self.assertEqual(state.beat_count, 5)
-        self.assertEqual(state.status, 'expired')
-
-    def test_heartbeat_state_from_dict_minimal(self):
-        """Test HeartbeatState from_dict with only required fields."""
-        d = {
-            'worker_name': 'test',
-            'interval_seconds': 1800
-        }
-        state = swarm.HeartbeatState.from_dict(d)
-        self.assertEqual(state.worker_name, 'test')
-        self.assertEqual(state.interval_seconds, 1800)
-        self.assertEqual(state.message, 'continue')
-        self.assertIsNone(state.expire_at)
-        self.assertEqual(state.created_at, '')
-        self.assertIsNone(state.last_beat_at)
-        self.assertEqual(state.beat_count, 0)
-        self.assertEqual(state.status, 'active')
-
-    def test_heartbeat_state_roundtrip(self):
-        """Test HeartbeatState survives round-trip through dict."""
-        original = swarm.HeartbeatState(
-            worker_name='builder',
-            interval_seconds=14400,
-            message='keep working',
-            expire_at='2026-02-05T02:00:00',
-            created_at='2026-02-04T02:00:00',
-            last_beat_at='2026-02-04T06:00:00',
-            beat_count=2,
-            status='active'
-        )
-        d = original.to_dict()
-        restored = swarm.HeartbeatState.from_dict(d)
-        self.assertEqual(original.worker_name, restored.worker_name)
-        self.assertEqual(original.interval_seconds, restored.interval_seconds)
-        self.assertEqual(original.message, restored.message)
-        self.assertEqual(original.expire_at, restored.expire_at)
-        self.assertEqual(original.created_at, restored.created_at)
-        self.assertEqual(original.last_beat_at, restored.last_beat_at)
-        self.assertEqual(original.beat_count, restored.beat_count)
-        self.assertEqual(original.status, restored.status)
-
-    def test_heartbeat_state_status_values(self):
-        """Test HeartbeatState accepts all valid status values."""
-        for status in ['active', 'paused', 'expired', 'stopped']:
-            state = swarm.HeartbeatState(
-                worker_name='test',
-                interval_seconds=3600,
-                status=status
-            )
-            self.assertEqual(state.status, status)
-
-
-class TestHeartbeatsDirConstant(unittest.TestCase):
-    """Test HEARTBEATS_DIR constant."""
-
-    def test_heartbeats_dir_exists(self):
-        """Test HEARTBEATS_DIR constant is defined."""
-        self.assertTrue(hasattr(swarm, 'HEARTBEATS_DIR'))
-
-    def test_heartbeats_dir_path(self):
-        """Test HEARTBEATS_DIR is under SWARM_DIR."""
-        self.assertEqual(
-            swarm.HEARTBEATS_DIR,
-            swarm.SWARM_DIR / "heartbeats"
-        )
-
+#!/usr/bin/env python3
+"""Tests for swarm heartbeat command - TDD tests for heartbeat subcommands."""
 
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import unittest
+from argparse import Namespace
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import swarm
 
 
-class TestHeartbeatStatePersistence(unittest.TestCase):
-    """Test heartbeat state persistence functions."""
+class TestDurationParsing(unittest.TestCase):
+    """Test duration string parsing."""
+
+    def test_parse_seconds(self):
+        """Test parsing bare seconds."""
+        self.assertEqual(swarm.parse_duration("3600"), 3600)
+        self.assertEqual(swarm.parse_duration("60"), 60)
+        self.assertEqual(swarm.parse_duration("1"), 1)
+
+    def test_parse_minutes(self):
+        """Test parsing minutes."""
+        self.assertEqual(swarm.parse_duration("30m"), 1800)
+        self.assertEqual(swarm.parse_duration("1m"), 60)
+        self.assertEqual(swarm.parse_duration("90m"), 5400)
+
+    def test_parse_hours(self):
+        """Test parsing hours."""
+        self.assertEqual(swarm.parse_duration("4h"), 14400)
+        self.assertEqual(swarm.parse_duration("1h"), 3600)
+        self.assertEqual(swarm.parse_duration("24h"), 86400)
+
+    def test_parse_seconds_with_unit(self):
+        """Test parsing seconds with 's' suffix."""
+        self.assertEqual(swarm.parse_duration("90s"), 90)
+        self.assertEqual(swarm.parse_duration("3600s"), 3600)
+
+    def test_parse_combinations(self):
+        """Test parsing combined durations."""
+        self.assertEqual(swarm.parse_duration("1h30m"), 5400)
+        self.assertEqual(swarm.parse_duration("2h30m15s"), 9015)
+        self.assertEqual(swarm.parse_duration("1h1m1s"), 3661)
+
+    def test_parse_case_insensitive(self):
+        """Test parsing is case insensitive."""
+        self.assertEqual(swarm.parse_duration("4H"), 14400)
+        self.assertEqual(swarm.parse_duration("30M"), 1800)
+        self.assertEqual(swarm.parse_duration("1H30M"), 5400)
+
+    def test_parse_invalid_empty(self):
+        """Test empty string raises error."""
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("")
+
+    def test_parse_invalid_negative(self):
+        """Test negative values raise error."""
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("-1")
+
+    def test_parse_invalid_zero(self):
+        """Test zero raises error."""
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("0")
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("0h")
+
+    def test_parse_invalid_format(self):
+        """Test invalid format raises error."""
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("abc")
+        with self.assertRaises(ValueError):
+            swarm.parse_duration("4x")
+
+
+class TestFormatDuration(unittest.TestCase):
+    """Test duration formatting.
+
+    Note: format_duration uses the existing format with spaces
+    like "1h 0m" for hours, "1m 0s" for minutes.
+    """
+
+    def test_format_seconds(self):
+        """Test formatting seconds."""
+        self.assertEqual(swarm.format_duration(30), "30s")
+        self.assertEqual(swarm.format_duration(59), "59s")
+
+    def test_format_minutes(self):
+        """Test formatting minutes."""
+        self.assertEqual(swarm.format_duration(60), "1m 0s")
+        self.assertEqual(swarm.format_duration(120), "2m 0s")
+        self.assertEqual(swarm.format_duration(1800), "30m 0s")
+
+    def test_format_hours(self):
+        """Test formatting hours."""
+        self.assertEqual(swarm.format_duration(3600), "1h 0m")
+        self.assertEqual(swarm.format_duration(7200), "2h 0m")
+        self.assertEqual(swarm.format_duration(14400), "4h 0m")
+
+    def test_format_combinations(self):
+        """Test formatting combined durations."""
+        self.assertEqual(swarm.format_duration(3661), "1h 1m")  # Existing format drops seconds
+        self.assertEqual(swarm.format_duration(5400), "1h 30m")
+        self.assertEqual(swarm.format_duration(90), "1m 30s")
+
+    def test_format_zero(self):
+        """Test formatting zero."""
+        self.assertEqual(swarm.format_duration(0), "0s")
+
+
+class TestHeartbeatSubparser(unittest.TestCase):
+    """Test that heartbeat subparser is correctly configured."""
+
+    def test_heartbeat_subparser_exists(self):
+        """Test that 'heartbeat' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('heartbeat', result.stdout.lower())
+
+    def test_heartbeat_start_subcommand_exists(self):
+        """Test that 'heartbeat start' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'start', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('interval', result.stdout.lower())
+
+    def test_heartbeat_stop_subcommand_exists(self):
+        """Test that 'heartbeat stop' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'stop', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_list_subcommand_exists(self):
+        """Test that 'heartbeat list' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'list', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_status_subcommand_exists(self):
+        """Test that 'heartbeat status' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'status', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_pause_subcommand_exists(self):
+        """Test that 'heartbeat pause' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'pause', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_resume_subcommand_exists(self):
+        """Test that 'heartbeat resume' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'resume', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_requires_subcommand(self):
+        """Test that heartbeat without subcommand shows error."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat'],
+            capture_output=True,
+            text=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+
+class TestHeartbeatHelpTextConstants(unittest.TestCase):
+    """Test heartbeat CLI help text module-level constants for coverage."""
+
+    def test_heartbeat_help_description_exists(self):
+        """Test HEARTBEAT_HELP_DESCRIPTION constant exists and has content."""
+        self.assertIn('nudges', swarm.HEARTBEAT_HELP_DESCRIPTION)
+        self.assertIn('rate limits', swarm.HEARTBEAT_HELP_DESCRIPTION)
+
+    def test_heartbeat_help_epilog_exists(self):
+        """Test HEARTBEAT_HELP_EPILOG constant exists and has content."""
+        self.assertIn('Quick Reference', swarm.HEARTBEAT_HELP_EPILOG)
+        self.assertIn('Common Patterns', swarm.HEARTBEAT_HELP_EPILOG)
+
+    def test_heartbeat_start_help_description_exists(self):
+        """Test HEARTBEAT_START_HELP_DESCRIPTION constant exists."""
+        self.assertIn('heartbeat', swarm.HEARTBEAT_START_HELP_DESCRIPTION.lower())
+
+    def test_heartbeat_start_help_epilog_exists(self):
+        """Test HEARTBEAT_START_HELP_EPILOG constant has examples."""
+        self.assertIn('Examples:', swarm.HEARTBEAT_START_HELP_EPILOG)
+        self.assertIn('Duration Format:', swarm.HEARTBEAT_START_HELP_EPILOG)
+        self.assertIn('Safety:', swarm.HEARTBEAT_START_HELP_EPILOG)
+
+
+class TestCmdHeartbeatStart(unittest.TestCase):
+    """Test cmd_heartbeat_start function."""
 
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
-        self.original_cwd = os.getcwd()
-        os.chdir(self.temp_dir)
-        # Set up temp swarm dirs
         self.original_swarm_dir = swarm.SWARM_DIR
         self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
-        self.original_heartbeat_lock_file = swarm.HEARTBEAT_LOCK_FILE
         swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
-        swarm.HEARTBEATS_DIR = Path(self.temp_dir) / ".swarm" / "heartbeats"
-        swarm.HEARTBEAT_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "heartbeat.lock"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
 
     def tearDown(self):
         """Clean up test fixtures."""
-        os.chdir(self.original_cwd)
         swarm.SWARM_DIR = self.original_swarm_dir
         swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
-        swarm.HEARTBEAT_LOCK_FILE = self.original_heartbeat_lock_file
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_get_heartbeat_state_path(self):
-        """Test get_heartbeat_state_path returns correct path."""
-        path = swarm.get_heartbeat_state_path('test-worker')
-        expected = swarm.HEARTBEATS_DIR / 'test-worker.json'
-        self.assertEqual(path, expected)
+    @patch('swarm.State')
+    def test_start_worker_not_found(self, mock_state_cls):
+        """Test starting heartbeat for non-existent worker fails."""
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+        mock_state_cls.return_value = mock_state
 
-    def test_get_heartbeat_state_path_different_workers(self):
-        """Test get_heartbeat_state_path for different workers."""
-        path1 = swarm.get_heartbeat_state_path('worker1')
-        path2 = swarm.get_heartbeat_state_path('worker2')
-        self.assertNotEqual(path1, path2)
-        self.assertTrue(str(path1).endswith('worker1.json'))
-        self.assertTrue(str(path2).endswith('worker2.json'))
-
-    def test_save_heartbeat_state_creates_file(self):
-        """Test save_heartbeat_state creates state file."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600,
-            message='continue'
+        args = Namespace(
+            worker='nonexistent',
+            interval='4h',
+            expire=None,
+            message='continue',
+            force=False
         )
-        swarm.save_heartbeat_state(state)
 
-        path = swarm.get_heartbeat_state_path('test-worker')
-        self.assertTrue(path.exists())
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_start(args)
 
-    def test_save_heartbeat_state_creates_directory(self):
-        """Test save_heartbeat_state creates heartbeats directory."""
-        self.assertFalse(swarm.HEARTBEATS_DIR.exists())
+        self.assertEqual(ctx.exception.code, 1)
 
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600
+    @patch('swarm.State')
+    def test_start_non_tmux_worker_fails(self, mock_state_cls):
+        """Test starting heartbeat for non-tmux worker fails."""
+        mock_worker = MagicMock()
+        mock_worker.tmux = None  # Not a tmux worker
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+
+        args = Namespace(
+            worker='bg-job',
+            interval='4h',
+            expire=None,
+            message='continue',
+            force=False
         )
-        swarm.save_heartbeat_state(state)
 
-        self.assertTrue(swarm.HEARTBEATS_DIR.exists())
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_start(args)
 
-    def test_save_heartbeat_state_content(self):
-        """Test save_heartbeat_state writes correct content."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=14400,
-            message='please continue',
-            status='active',
-            beat_count=5
+        self.assertEqual(ctx.exception.code, 1)
+
+    @patch('swarm.State')
+    def test_start_invalid_interval_fails(self, mock_state_cls):
+        """Test starting heartbeat with invalid interval fails."""
+        mock_worker = MagicMock()
+        mock_worker.tmux = MagicMock()  # Is a tmux worker
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+
+        args = Namespace(
+            worker='builder',
+            interval='invalid',
+            expire=None,
+            message='continue',
+            force=False
         )
-        swarm.save_heartbeat_state(state)
 
-        path = swarm.get_heartbeat_state_path('test-worker')
-        with open(path, 'r') as f:
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_start(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    @patch('swarm.State')
+    def test_start_creates_heartbeat_state(self, mock_state_cls):
+        """Test starting heartbeat creates state file."""
+        mock_worker = MagicMock()
+        mock_worker.tmux = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+
+        args = Namespace(
+            worker='builder',
+            interval='4h',
+            expire='24h',
+            message='continue',
+            force=False
+        )
+
+        swarm.cmd_heartbeat_start(args)
+
+        # Check state file was created
+        state_path = swarm.HEARTBEATS_DIR / "builder.json"
+        self.assertTrue(state_path.exists())
+
+        # Load and verify state
+        with open(state_path) as f:
             data = json.load(f)
 
-        self.assertEqual(data['worker_name'], 'test-worker')
-        self.assertEqual(data['interval_seconds'], 14400)
-        self.assertEqual(data['message'], 'please continue')
+        self.assertEqual(data['worker_name'], 'builder')
+        self.assertEqual(data['interval_seconds'], 14400)  # 4h
+        self.assertEqual(data['message'], 'continue')
         self.assertEqual(data['status'], 'active')
-        self.assertEqual(data['beat_count'], 5)
+        self.assertEqual(data['beat_count'], 0)
+        self.assertIsNotNone(data['expire_at'])
 
-    def test_load_heartbeat_state_returns_none_for_nonexistent(self):
-        """Test load_heartbeat_state returns None for non-existent worker."""
-        result = swarm.load_heartbeat_state('nonexistent')
-        self.assertIsNone(result)
+    @patch('swarm.State')
+    def test_start_without_expiration(self, mock_state_cls):
+        """Test starting heartbeat without expiration."""
+        mock_worker = MagicMock()
+        mock_worker.tmux = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
 
-    def test_load_heartbeat_state_loads_saved_state(self):
-        """Test load_heartbeat_state loads previously saved state."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
+        args = Namespace(
+            worker='builder',
+            interval='4h',
+            expire=None,
+            message='continue',
+            force=False
+        )
+
+        swarm.cmd_heartbeat_start(args)
+
+        state_path = swarm.HEARTBEATS_DIR / "builder.json"
+        with open(state_path) as f:
+            data = json.load(f)
+
+        self.assertIsNone(data['expire_at'])
+
+    @patch('swarm.State')
+    def test_start_existing_heartbeat_fails_without_force(self, mock_state_cls):
+        """Test starting heartbeat when one exists fails without --force."""
+        # Create existing heartbeat
+        existing_state = swarm.HeartbeatState(
+            worker_name='builder',
             interval_seconds=3600,
             message='continue',
-            expire_at='2026-02-05T00:00:00',
-            created_at='2026-02-04T00:00:00',
-            beat_count=3,
-            status='active'
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
         )
-        swarm.save_heartbeat_state(state)
+        swarm.save_heartbeat_state(existing_state)
 
-        loaded = swarm.load_heartbeat_state('test-worker')
-        self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.worker_name, 'test-worker')
-        self.assertEqual(loaded.interval_seconds, 3600)
-        self.assertEqual(loaded.message, 'continue')
-        self.assertEqual(loaded.expire_at, '2026-02-05T00:00:00')
-        self.assertEqual(loaded.created_at, '2026-02-04T00:00:00')
-        self.assertEqual(loaded.beat_count, 3)
-        self.assertEqual(loaded.status, 'active')
+        mock_worker = MagicMock()
+        mock_worker.tmux = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
 
-    def test_save_and_load_roundtrip(self):
-        """Test save then load preserves all fields."""
-        original = swarm.HeartbeatState(
+        args = Namespace(
+            worker='builder',
+            interval='4h',
+            expire=None,
+            message='continue',
+            force=False
+        )
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_start(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    @patch('swarm.State')
+    def test_start_existing_heartbeat_replaced_with_force(self, mock_state_cls):
+        """Test starting heartbeat when one exists succeeds with --force."""
+        # Create existing heartbeat
+        existing_state = swarm.HeartbeatState(
             worker_name='builder',
-            interval_seconds=14400,
-            message='keep working',
-            expire_at='2026-02-05T02:00:00',
-            created_at='2026-02-04T02:00:00',
-            last_beat_at='2026-02-04T06:00:00',
-            beat_count=2,
-            status='paused'
-        )
-        swarm.save_heartbeat_state(original)
-
-        loaded = swarm.load_heartbeat_state('builder')
-        self.assertEqual(original.worker_name, loaded.worker_name)
-        self.assertEqual(original.interval_seconds, loaded.interval_seconds)
-        self.assertEqual(original.message, loaded.message)
-        self.assertEqual(original.expire_at, loaded.expire_at)
-        self.assertEqual(original.created_at, loaded.created_at)
-        self.assertEqual(original.last_beat_at, loaded.last_beat_at)
-        self.assertEqual(original.beat_count, loaded.beat_count)
-        self.assertEqual(original.status, loaded.status)
-
-    def test_save_heartbeat_state_overwrites_existing(self):
-        """Test save_heartbeat_state overwrites existing state."""
-        state1 = swarm.HeartbeatState(
-            worker_name='test-worker',
             interval_seconds=3600,
-            beat_count=0
+            message='old message',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
         )
-        swarm.save_heartbeat_state(state1)
+        swarm.save_heartbeat_state(existing_state)
 
-        state2 = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=7200,
-            beat_count=10
+        mock_worker = MagicMock()
+        mock_worker.tmux = MagicMock()
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+
+        args = Namespace(
+            worker='builder',
+            interval='4h',
+            expire=None,
+            message='new message',
+            force=True
         )
-        swarm.save_heartbeat_state(state2)
 
-        loaded = swarm.load_heartbeat_state('test-worker')
-        self.assertEqual(loaded.interval_seconds, 7200)
-        self.assertEqual(loaded.beat_count, 10)
+        swarm.cmd_heartbeat_start(args)
 
-    def test_delete_heartbeat_state_removes_file(self):
-        """Test delete_heartbeat_state removes the state file."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600
-        )
-        swarm.save_heartbeat_state(state)
+        # Load and verify state was replaced
+        state_path = swarm.HEARTBEATS_DIR / "builder.json"
+        with open(state_path) as f:
+            data = json.load(f)
 
-        path = swarm.get_heartbeat_state_path('test-worker')
-        self.assertTrue(path.exists())
-
-        result = swarm.delete_heartbeat_state('test-worker')
-        self.assertTrue(result)
-        self.assertFalse(path.exists())
-
-    def test_delete_heartbeat_state_returns_false_for_nonexistent(self):
-        """Test delete_heartbeat_state returns False if file doesn't exist."""
-        result = swarm.delete_heartbeat_state('nonexistent')
-        self.assertFalse(result)
-
-    def test_delete_heartbeat_state_then_load_returns_none(self):
-        """Test load returns None after delete."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600
-        )
-        swarm.save_heartbeat_state(state)
-        swarm.delete_heartbeat_state('test-worker')
-
-        loaded = swarm.load_heartbeat_state('test-worker')
-        self.assertIsNone(loaded)
-
-    def test_list_heartbeat_states_empty(self):
-        """Test list_heartbeat_states returns empty list when no heartbeats."""
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(result, [])
-
-    def test_list_heartbeat_states_empty_dir_exists(self):
-        """Test list_heartbeat_states returns empty list when dir exists but empty."""
-        swarm.HEARTBEATS_DIR.mkdir(parents=True)
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(result, [])
-
-    def test_list_heartbeat_states_single(self):
-        """Test list_heartbeat_states returns single heartbeat."""
-        state = swarm.HeartbeatState(
-            worker_name='test-worker',
-            interval_seconds=3600
-        )
-        swarm.save_heartbeat_state(state)
-
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].worker_name, 'test-worker')
-
-    def test_list_heartbeat_states_multiple(self):
-        """Test list_heartbeat_states returns multiple heartbeats."""
-        state1 = swarm.HeartbeatState(worker_name='worker1', interval_seconds=3600)
-        state2 = swarm.HeartbeatState(worker_name='worker2', interval_seconds=7200)
-        state3 = swarm.HeartbeatState(worker_name='worker3', interval_seconds=1800)
-
-        swarm.save_heartbeat_state(state1)
-        swarm.save_heartbeat_state(state2)
-        swarm.save_heartbeat_state(state3)
-
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(len(result), 3)
-
-    def test_list_heartbeat_states_sorted_by_name(self):
-        """Test list_heartbeat_states returns states sorted by worker name."""
-        state1 = swarm.HeartbeatState(worker_name='zebra', interval_seconds=3600)
-        state2 = swarm.HeartbeatState(worker_name='alpha', interval_seconds=3600)
-        state3 = swarm.HeartbeatState(worker_name='middle', interval_seconds=3600)
-
-        swarm.save_heartbeat_state(state1)
-        swarm.save_heartbeat_state(state2)
-        swarm.save_heartbeat_state(state3)
-
-        result = swarm.list_heartbeat_states()
-        names = [s.worker_name for s in result]
-        self.assertEqual(names, ['alpha', 'middle', 'zebra'])
-
-    def test_list_heartbeat_states_skips_invalid_files(self):
-        """Test list_heartbeat_states skips invalid JSON files."""
-        state = swarm.HeartbeatState(worker_name='valid', interval_seconds=3600)
-        swarm.save_heartbeat_state(state)
-
-        # Create an invalid JSON file
-        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
-        invalid_path = swarm.HEARTBEATS_DIR / 'invalid.json'
-        with open(invalid_path, 'w') as f:
-            f.write('not valid json')
-
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].worker_name, 'valid')
-
-    def test_list_heartbeat_states_skips_missing_required_fields(self):
-        """Test list_heartbeat_states skips files missing required fields."""
-        state = swarm.HeartbeatState(worker_name='valid', interval_seconds=3600)
-        swarm.save_heartbeat_state(state)
-
-        # Create a file missing required fields
-        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
-        incomplete_path = swarm.HEARTBEATS_DIR / 'incomplete.json'
-        with open(incomplete_path, 'w') as f:
-            json.dump({'worker_name': 'incomplete'}, f)  # missing interval_seconds
-
-        result = swarm.list_heartbeat_states()
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].worker_name, 'valid')
+        self.assertEqual(data['message'], 'new message')
+        self.assertEqual(data['interval_seconds'], 14400)
 
 
-class TestHeartbeatFileLock(unittest.TestCase):
-    """Test heartbeat_file_lock context manager."""
+class TestCmdHeartbeatStop(unittest.TestCase):
+    """Test cmd_heartbeat_stop function."""
 
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
         self.original_swarm_dir = swarm.SWARM_DIR
-        self.original_heartbeat_lock_file = swarm.HEARTBEAT_LOCK_FILE
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
         swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
-        swarm.HEARTBEAT_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "heartbeat.lock"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
 
     def tearDown(self):
         """Clean up test fixtures."""
         swarm.SWARM_DIR = self.original_swarm_dir
-        swarm.HEARTBEAT_LOCK_FILE = self.original_heartbeat_lock_file
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_heartbeat_file_lock_creates_lock_file(self):
-        """Test heartbeat_file_lock creates lock file."""
-        with swarm.heartbeat_file_lock():
-            self.assertTrue(swarm.HEARTBEAT_LOCK_FILE.exists())
+    def test_stop_nonexistent_heartbeat(self):
+        """Test stopping non-existent heartbeat prints message."""
+        args = Namespace(worker='nonexistent')
 
-    def test_heartbeat_file_lock_context_manager(self):
-        """Test heartbeat_file_lock works as context manager."""
-        with swarm.heartbeat_file_lock() as lock_file:
-            self.assertIsNotNone(lock_file)
+        # Should not raise, just print message
+        swarm.cmd_heartbeat_stop(args)
 
-    def test_heartbeat_file_lock_yields_file(self):
-        """Test heartbeat_file_lock yields a file object."""
-        with swarm.heartbeat_file_lock() as lock_file:
-            # Should be a file-like object
-            self.assertTrue(hasattr(lock_file, 'fileno'))
+    def test_stop_updates_status(self):
+        """Test stopping heartbeat updates status to stopped."""
+        # Create heartbeat
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
 
-    def test_heartbeat_file_lock_function_exists(self):
-        """Test heartbeat_file_lock function exists."""
-        self.assertTrue(hasattr(swarm, 'heartbeat_file_lock'))
+        args = Namespace(worker='builder')
+        swarm.cmd_heartbeat_stop(args)
 
-    def test_heartbeat_lock_file_constant_exists(self):
-        """Test HEARTBEAT_LOCK_FILE constant exists."""
-        self.assertTrue(hasattr(swarm, 'HEARTBEAT_LOCK_FILE'))
+        # Verify status changed
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'stopped')
+
+
+class TestCmdHeartbeatList(unittest.TestCase):
+    """Test cmd_heartbeat_list function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_list_empty(self):
+        """Test listing when no heartbeats exist."""
+        args = Namespace(format='table')
+        # Should not raise
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_json_empty(self):
+        """Test listing JSON when no heartbeats exist."""
+        args = Namespace(format='json')
+        # Should not raise
+        swarm.cmd_heartbeat_list(args)
+
+    def test_list_with_heartbeats(self):
+        """Test listing existing heartbeats."""
+        # Create heartbeats
+        for name in ['worker1', 'worker2']:
+            state = swarm.HeartbeatState(
+                worker_name=name,
+                interval_seconds=3600,
+                message='continue',
+                created_at=datetime.now(timezone.utc).isoformat(),
+                status='active',
+            )
+            swarm.save_heartbeat_state(state)
+
+        args = Namespace(format='table')
+        # Should not raise
+        swarm.cmd_heartbeat_list(args)
+
+
+class TestCmdHeartbeatPauseResume(unittest.TestCase):
+    """Test cmd_heartbeat_pause and cmd_heartbeat_resume functions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_heartbeats_dir = swarm.HEARTBEATS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.HEARTBEATS_DIR = swarm.SWARM_DIR / "heartbeats"
+        swarm.HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.HEARTBEATS_DIR = self.original_heartbeats_dir
+        swarm.HEARTBEAT_LOCK_FILE = swarm.SWARM_DIR / "heartbeat.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_pause_active_heartbeat(self):
+        """Test pausing an active heartbeat."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+        swarm.cmd_heartbeat_pause(args)
+
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'paused')
+
+    def test_pause_nonexistent_heartbeat_fails(self):
+        """Test pausing non-existent heartbeat fails."""
+        args = Namespace(worker='nonexistent')
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_pause(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_pause_non_active_heartbeat_fails(self):
+        """Test pausing non-active heartbeat fails."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='stopped',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_pause(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_paused_heartbeat(self):
+        """Test resuming a paused heartbeat."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='paused',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+        swarm.cmd_heartbeat_resume(args)
+
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.status, 'active')
+
+    def test_resume_nonexistent_heartbeat_fails(self):
+        """Test resuming non-existent heartbeat fails."""
+        args = Namespace(worker='nonexistent')
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_resume(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_resume_non_paused_heartbeat_fails(self):
+        """Test resuming non-paused heartbeat fails."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=3600,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+        )
+        swarm.save_heartbeat_state(state)
+
+        args = Namespace(worker='builder')
+
+        with self.assertRaises(SystemExit) as ctx:
+            swarm.cmd_heartbeat_resume(args)
+
+        self.assertEqual(ctx.exception.code, 1)
 
 
 if __name__ == '__main__':

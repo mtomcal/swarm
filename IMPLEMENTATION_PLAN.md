@@ -107,7 +107,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Load/save functions with file locking
   - Status enum: active, paused, expired, stopped
 
-- [ ] **2.3 Implement `swarm heartbeat start`**
+- [x] **2.3 Implement `swarm heartbeat start`**
   - Parse --interval (duration string)
   - Parse --expire (duration string, optional)
   - Parse --message (string, default "continue")
