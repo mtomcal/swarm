@@ -70,6 +70,194 @@ class TestRalphSubparser(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class TestRalphHelpTextConstants(unittest.TestCase):
+    """Test ralph CLI help text module-level constants for coverage."""
+
+    def test_ralph_help_description_exists(self):
+        """Test RALPH_HELP_DESCRIPTION constant exists and has content."""
+        self.assertIn('Ralph Wiggum pattern', swarm.RALPH_HELP_DESCRIPTION)
+        self.assertIn('context', swarm.RALPH_HELP_DESCRIPTION)
+        self.assertIn('Workflow', swarm.RALPH_HELP_DESCRIPTION)
+
+    def test_ralph_help_epilog_exists(self):
+        """Test RALPH_HELP_EPILOG constant exists and has content."""
+        self.assertIn('Prompt Design Principles', swarm.RALPH_HELP_EPILOG)
+        self.assertIn('ONE task per iteration', swarm.RALPH_HELP_EPILOG)
+        self.assertIn('Quick Reference', swarm.RALPH_HELP_EPILOG)
+
+    def test_ralph_spawn_help_description_exists(self):
+        """Test RALPH_SPAWN_HELP_DESCRIPTION constant exists."""
+        self.assertIn('monitoring loop', swarm.RALPH_SPAWN_HELP_DESCRIPTION)
+        self.assertIn('--no-run', swarm.RALPH_SPAWN_HELP_DESCRIPTION)
+
+    def test_ralph_spawn_help_epilog_exists(self):
+        """Test RALPH_SPAWN_HELP_EPILOG constant has examples."""
+        self.assertIn('Examples:', swarm.RALPH_SPAWN_HELP_EPILOG)
+        self.assertIn('Intervention:', swarm.RALPH_SPAWN_HELP_EPILOG)
+        self.assertIn('Monitoring:', swarm.RALPH_SPAWN_HELP_EPILOG)
+        self.assertIn('--worktree', swarm.RALPH_SPAWN_HELP_EPILOG)
+
+    def test_ralph_init_help_epilog_exists(self):
+        """Test RALPH_INIT_HELP_EPILOG constant exists."""
+        self.assertIn('PROMPT.md', swarm.RALPH_INIT_HELP_EPILOG)
+        self.assertIn('customize', swarm.RALPH_INIT_HELP_EPILOG.lower())
+
+    def test_ralph_template_help_epilog_exists(self):
+        """Test RALPH_TEMPLATE_HELP_EPILOG constant exists."""
+        self.assertIn('stdout', swarm.RALPH_TEMPLATE_HELP_EPILOG)
+        self.assertIn('pbcopy', swarm.RALPH_TEMPLATE_HELP_EPILOG)
+
+    def test_ralph_status_help_epilog_exists(self):
+        """Test RALPH_STATUS_HELP_EPILOG constant exists."""
+        self.assertIn('iteration', swarm.RALPH_STATUS_HELP_EPILOG.lower())
+        self.assertIn('status', swarm.RALPH_STATUS_HELP_EPILOG.lower())
+
+    def test_ralph_pause_help_epilog_exists(self):
+        """Test RALPH_PAUSE_HELP_EPILOG constant exists."""
+        self.assertIn('Pauses', swarm.RALPH_PAUSE_HELP_EPILOG)
+        self.assertIn('resume', swarm.RALPH_PAUSE_HELP_EPILOG.lower())
+
+    def test_ralph_resume_help_epilog_exists(self):
+        """Test RALPH_RESUME_HELP_EPILOG constant exists."""
+        self.assertIn('Resumes', swarm.RALPH_RESUME_HELP_EPILOG)
+        self.assertIn('iteration count', swarm.RALPH_RESUME_HELP_EPILOG)
+
+    def test_ralph_run_help_epilog_exists(self):
+        """Test RALPH_RUN_HELP_EPILOG constant exists."""
+        self.assertIn('monitoring loop', swarm.RALPH_RUN_HELP_EPILOG)
+        self.assertIn('--no-run', swarm.RALPH_RUN_HELP_EPILOG)
+
+    def test_ralph_list_help_epilog_exists(self):
+        """Test RALPH_LIST_HELP_EPILOG constant exists."""
+        self.assertIn('ralph mode', swarm.RALPH_LIST_HELP_EPILOG)
+        self.assertIn('--format json', swarm.RALPH_LIST_HELP_EPILOG)
+
+
+class TestRalphHelpContent(unittest.TestCase):
+    """Test that ralph --help contains comprehensive documentation."""
+
+    def test_ralph_help_contains_workflow_description(self):
+        """Test ralph --help contains workflow overview."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for workflow description
+        self.assertIn('Ralph Wiggum pattern', result.stdout)
+        self.assertIn('context windows', result.stdout)
+
+    def test_ralph_help_contains_prompt_design_principles(self):
+        """Test ralph --help contains prompt design principles."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for prompt design principles
+        self.assertIn('Prompt Design Principles', result.stdout)
+        self.assertIn('ONE task per iteration', result.stdout)
+
+    def test_ralph_help_contains_quick_reference(self):
+        """Test ralph --help contains quick reference commands."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for quick reference
+        self.assertIn('Quick Reference', result.stdout)
+        self.assertIn('swarm ralph init', result.stdout)
+        self.assertIn('swarm send', result.stdout)
+
+    def test_ralph_spawn_help_contains_examples(self):
+        """Test ralph spawn --help contains usage examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for examples section
+        self.assertIn('Examples:', result.stdout)
+        self.assertIn('--prompt-file PROMPT.md', result.stdout)
+        self.assertIn('--max-iterations', result.stdout)
+
+    def test_ralph_spawn_help_contains_intervention_examples(self):
+        """Test ralph spawn --help contains intervention examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for intervention section
+        self.assertIn('Intervention:', result.stdout)
+        self.assertIn('swarm send', result.stdout)
+
+    def test_ralph_spawn_help_contains_monitoring_examples(self):
+        """Test ralph spawn --help contains monitoring examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for monitoring section
+        self.assertIn('Monitoring:', result.stdout)
+        self.assertIn('swarm attach', result.stdout)
+        self.assertIn('swarm logs', result.stdout)
+
+    def test_ralph_init_help_contains_epilog(self):
+        """Test ralph init --help contains epilog with examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'init', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for epilog content
+        self.assertIn('PROMPT.md', result.stdout)
+        self.assertIn('customize', result.stdout.lower())
+
+    def test_ralph_run_help_contains_epilog(self):
+        """Test ralph run --help contains epilog with examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for epilog content
+        self.assertIn('monitoring loop', result.stdout)
+        self.assertIn('--no-run', result.stdout)
+
+    def test_ralph_status_help_contains_epilog(self):
+        """Test ralph status --help contains epilog."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'status', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for epilog content
+        self.assertIn('iteration', result.stdout.lower())
+
+    def test_ralph_list_help_contains_epilog(self):
+        """Test ralph list --help contains epilog with examples."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Check for epilog content
+        self.assertIn('--format json', result.stdout)
+
+
 class TestRalphPromptTemplate(unittest.TestCase):
     """Test RALPH_PROMPT_TEMPLATE constant."""
 

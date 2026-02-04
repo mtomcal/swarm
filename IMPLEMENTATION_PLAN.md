@@ -68,17 +68,17 @@ Current ralph UX has friction points:
 
 ### Phase 3: CLI Help Improvements
 
-- [ ] **3.1 Enhance `swarm ralph --help` output**
+- [x] **3.1 Enhance `swarm ralph --help` output**
   - Add overview of ralph workflow
   - Include prompt design principles
   - Reference `swarm ralph init` for template
 
-- [ ] **3.2 Enhance `swarm ralph spawn --help` output**
+- [x] **3.2 Enhance `swarm ralph spawn --help` output**
   - Document all flags with examples
   - Explain auto-start default behavior
   - Note that `swarm send` works for intervention
 
-- [ ] **3.3 Add epilog with examples to subparsers**
+- [x] **3.3 Add epilog with examples to subparsers**
   - Show common usage patterns
   - Include worktree example
   - Show intervention example
@@ -99,7 +99,7 @@ Current ralph UX has friction points:
 
 ### Phase 5: Verification
 
-- [ ] **5.1 Run unit tests**
+- [x] **5.1 Run unit tests**
   ```bash
   python3 -m unittest test_cmd_ralph -v
   ```

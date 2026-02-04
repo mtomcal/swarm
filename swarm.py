@@ -77,6 +77,158 @@ IMPORTANT:
 - commit and push when you are done
 """.strip()
 
+# CLI Help Text Constants
+# Defined at module level for testability and coverage
+RALPH_HELP_DESCRIPTION = """\
+Autonomous agent looping using the Ralph Wiggum pattern.
+
+Ralph mode enables agents to work through task lists across multiple context
+windows without human intervention. Each iteration: reads a prompt file,
+spawns the agent, waits for completion/inactivity, then restarts.
+
+Workflow:
+  1. Create a task list (e.g., IMPLEMENTATION_PLAN.md)
+  2. Create a prompt file: swarm ralph init
+  3. Start the loop: swarm ralph spawn --name dev --prompt-file PROMPT.md \\
+                       --max-iterations 50 -- claude
+
+The agent reads the prompt each iteration, picks a task, implements it,
+commits changes, and updates the task list. The loop continues until
+max iterations or a done pattern is matched.
+"""
+
+RALPH_HELP_EPILOG = """\
+Prompt Design Principles:
+  - Keep prompts SHORT (<20 lines) to maximize context for work
+  - ONE task per iteration (prevents partial completion)
+  - Always verify code state before changes (don't assume)
+  - Commit and push each iteration (persists work across context windows)
+  - Update the task list (so next iteration knows what's done)
+
+Quick Reference:
+  swarm ralph init                    Create starter PROMPT.md
+  swarm ralph spawn ... -- claude     Start autonomous loop
+  swarm ralph status <name>           Check iteration progress
+  swarm ralph pause <name>            Pause the loop
+  swarm ralph resume <name>           Resume the loop
+  swarm send <name> "message"         Intervene mid-iteration
+
+See: https://github.com/ghuntley/how-to-ralph-wiggum
+"""
+
+RALPH_SPAWN_HELP_DESCRIPTION = """\
+Spawn a new worker with ralph loop mode enabled.
+
+By default, spawns the worker AND starts the monitoring loop (blocking).
+Use --no-run to spawn without starting the loop.
+"""
+
+RALPH_SPAWN_HELP_EPILOG = """\
+Examples:
+  # Basic autonomous loop (blocks while running)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+
+  # With isolated git worktree
+  swarm ralph spawn --name feature --prompt-file PROMPT.md --max-iterations 20 \\
+    --worktree -- claude
+
+  # Stop when pattern matched (checked after each agent exit)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
+    --done-pattern "All tasks complete" -- claude
+
+  # Stop immediately when pattern appears (continuous checking)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
+    --done-pattern "All tasks complete" --check-done-continuous -- claude
+
+  # Spawn only (run loop separately or later)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
+    --no-run -- claude
+  swarm ralph run dev
+
+Intervention:
+  # Send a message to the running agent mid-iteration
+  swarm send dev "please wrap up and commit your changes"
+  swarm send dev "skip that approach, try using X instead"
+
+Monitoring:
+  swarm ralph status dev      # Check iteration progress
+  swarm attach dev            # Watch agent live (detach: Ctrl-B D)
+  swarm logs dev --follow     # Stream agent output
+"""
+
+RALPH_INIT_HELP_EPILOG = """\
+Creates a starter PROMPT.md in the current directory with best-practice
+instructions for autonomous agent looping.
+
+The template is intentionally minimal - customize it for your project:
+  - Add project-specific test commands
+  - Specify which files to study
+  - Include deployment instructions if needed
+
+Example:
+  swarm ralph init
+  vim PROMPT.md  # customize for your project
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+"""
+
+RALPH_TEMPLATE_HELP_EPILOG = """\
+Prints the prompt template to stdout for piping or inspection.
+
+Examples:
+  swarm ralph template                     # View template
+  swarm ralph template > MY_PROMPT.md      # Save to custom file
+  swarm ralph template | pbcopy            # Copy to clipboard (macOS)
+"""
+
+RALPH_STATUS_HELP_EPILOG = """\
+Shows detailed ralph loop status including iteration progress, failures,
+and timing information.
+
+Output includes:
+  - Current status (running/paused/stopped/failed)
+  - Iteration progress (e.g., 7/100)
+  - Start times and failure counts
+  - Done pattern and timeout settings
+"""
+
+RALPH_PAUSE_HELP_EPILOG = """\
+Pauses the ralph loop. The current agent continues running, but when it
+exits, the loop will not restart a new iteration.
+
+Use 'swarm ralph resume <name>' to continue the loop.
+"""
+
+RALPH_RESUME_HELP_EPILOG = """\
+Resumes a paused ralph loop. Continues from the current iteration count
+(does not reset progress).
+
+If the worker is not currently running, spawns a fresh agent for the
+next iteration.
+"""
+
+RALPH_RUN_HELP_EPILOG = """\
+Runs the monitoring loop for an existing ralph worker. This command blocks
+while the loop is running.
+
+Typically used after 'ralph spawn --no-run' when you want to spawn and
+run the loop separately. By default, 'ralph spawn' runs the loop
+automatically.
+
+Example:
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
+    --no-run -- claude
+  swarm ralph run dev
+"""
+
+RALPH_LIST_HELP_EPILOG = """\
+Lists all workers that are running in ralph mode.
+
+Examples:
+  swarm ralph list                      # Table view
+  swarm ralph list --format json        # JSON for scripting
+  swarm ralph list --status running     # Only running loops
+"""
+
 
 @dataclass
 class TmuxInfo:
@@ -987,42 +1139,89 @@ def main() -> None:
                         help="Overwrite existing file")
 
     # ralph - autonomous agent looping (Ralph Wiggum pattern)
-    ralph_p = subparsers.add_parser("ralph", help="Ralph loop management (autonomous agent looping)")
+    ralph_p = subparsers.add_parser(
+        "ralph",
+        help="Ralph loop management (autonomous agent looping)",
+        description=RALPH_HELP_DESCRIPTION,
+        epilog=RALPH_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_subparsers = ralph_p.add_subparsers(dest="ralph_command", required=True)
 
     # ralph init - create PROMPT.md
-    ralph_init_p = ralph_subparsers.add_parser("init", help="Create PROMPT.md with starter template")
+    ralph_init_p = ralph_subparsers.add_parser(
+        "init",
+        help="Create PROMPT.md with starter template",
+        epilog=RALPH_INIT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_init_p.add_argument("--force", action="store_true",
                               help="Overwrite existing PROMPT.md")
 
     # ralph template - output template to stdout
-    ralph_subparsers.add_parser("template", help="Output prompt template to stdout")
+    ralph_subparsers.add_parser(
+        "template",
+        help="Output prompt template to stdout",
+        epilog=RALPH_TEMPLATE_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
 
     # ralph status - show ralph loop status
-    ralph_status_p = ralph_subparsers.add_parser("status", help="Show ralph loop status for a worker")
+    ralph_status_p = ralph_subparsers.add_parser(
+        "status",
+        help="Show ralph loop status for a worker",
+        epilog=RALPH_STATUS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_status_p.add_argument("name", help="Worker name")
 
     # ralph pause - pause the ralph loop
-    ralph_pause_p = ralph_subparsers.add_parser("pause", help="Pause ralph loop for a worker")
+    ralph_pause_p = ralph_subparsers.add_parser(
+        "pause",
+        help="Pause ralph loop for a worker",
+        epilog=RALPH_PAUSE_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_pause_p.add_argument("name", help="Worker name")
 
     # ralph resume - resume the ralph loop
-    ralph_resume_p = ralph_subparsers.add_parser("resume", help="Resume ralph loop for a worker")
+    ralph_resume_p = ralph_subparsers.add_parser(
+        "resume",
+        help="Resume ralph loop for a worker",
+        epilog=RALPH_RESUME_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_resume_p.add_argument("name", help="Worker name")
 
     # ralph run - run the ralph loop (main outer loop execution)
-    ralph_run_p = ralph_subparsers.add_parser("run", help="Run the ralph loop for a worker")
+    ralph_run_p = ralph_subparsers.add_parser(
+        "run",
+        help="Run the ralph loop for a worker",
+        epilog=RALPH_RUN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_run_p.add_argument("name", help="Worker name")
 
     # ralph list - list all ralph workers
-    ralph_list_p = ralph_subparsers.add_parser("list", help="List all ralph workers")
+    ralph_list_p = ralph_subparsers.add_parser(
+        "list",
+        help="List all ralph workers",
+        epilog=RALPH_LIST_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_list_p.add_argument("--format", choices=["table", "json", "names"],
                               default="table", help="Output format (default: table)")
     ralph_list_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
                               default="all", help="Filter by ralph status (default: all)")
 
     # ralph spawn - spawn a new ralph worker
-    ralph_spawn_p = ralph_subparsers.add_parser("spawn", help="Spawn a new ralph worker")
+    ralph_spawn_p = ralph_subparsers.add_parser(
+        "spawn",
+        help="Spawn a new ralph worker",
+        description=RALPH_SPAWN_HELP_DESCRIPTION,
+        epilog=RALPH_SPAWN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ralph_spawn_p.add_argument("--name", required=True, help="Unique identifier for this worker")
     ralph_spawn_p.add_argument("--prompt-file", required=True,
                                help="Path to prompt file (required)")
