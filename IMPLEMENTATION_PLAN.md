@@ -153,7 +153,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Include duration format docs
   - Include rate limit recovery explanation
 
-- [ ] **2.12 Add heartbeat unit tests**
+- [x] **2.12 Add heartbeat unit tests**
   - Test state persistence
   - Test interval calculation
   - Test expiration
