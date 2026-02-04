@@ -498,6 +498,74 @@ See Also:
   swarm send --help      Send commands to the worker
 """
 
+# Wait command help
+WAIT_HELP_DESCRIPTION = """\
+Wait for workers to finish and report their exit status.
+
+Blocks until the specified worker(s) stop running, polling status every second.
+Useful in scripts for sequencing operations, running post-completion tasks, or
+coordinating multiple workers. Exit codes allow conditional logic based on
+completion vs timeout.
+
+Exit Codes:
+  0 - All workers finished successfully (exited/stopped)
+  1 - Timeout reached with workers still running, or error occurred
+"""
+
+WAIT_HELP_EPILOG = """\
+Examples:
+  # Wait for a single worker to finish
+  swarm wait my-worker
+
+  # Wait with a timeout (fail if not done in 5 minutes)
+  swarm wait my-worker --timeout 300
+
+  # Wait for all running workers to finish
+  swarm wait --all
+
+  # Wait for all workers with timeout
+  swarm wait --all --timeout 600
+
+  # Use exit code in scripts for conditional logic
+  swarm wait my-worker --timeout 120 && echo "Done!" || echo "Timed out"
+
+  # Chain operations: wait then clean up
+  swarm wait my-worker && swarm clean my-worker --rm-worktree
+
+Common Patterns:
+  Wait for build to complete before testing:
+    swarm spawn --name build --tmux -- make build
+    swarm wait build --timeout 300
+    swarm spawn --name test --tmux -- make test
+
+  Coordinate parallel workers:
+    swarm spawn --name worker-1 --tmux --worktree -- claude
+    swarm spawn --name worker-2 --tmux --worktree -- claude
+    swarm wait --all --timeout 1800
+
+  Script with timeout handling:
+    if swarm wait my-worker --timeout 600; then
+      echo "Worker completed successfully"
+      swarm clean my-worker --rm-worktree
+    else
+      echo "Worker timed out or failed"
+      swarm logs my-worker --history
+    fi
+
+Tips:
+  - Use --timeout to prevent infinite waits on stuck workers
+  - Exit code 1 on timeout lets scripts detect and handle failures
+  - Combine with 'swarm logs' to check what happened after completion
+  - Workers print "<name>: exited" as they finish
+  - Status is polled every 1 second
+
+See Also:
+  swarm status --help    Check current worker state
+  swarm logs --help      View worker output after completion
+  swarm clean --help     Remove stopped workers from state
+  swarm kill --help      Forcefully stop workers that are stuck
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1616,10 +1684,23 @@ def main() -> None:
                        help="Kill all workers. Cannot be used with a worker name.")
 
     # wait
-    wait_p = subparsers.add_parser("wait", help="Wait for worker to finish")
-    wait_p.add_argument("name", nargs="?", help="Worker name")
-    wait_p.add_argument("--timeout", type=int, help="Max wait time in seconds")
-    wait_p.add_argument("--all", action="store_true", help="Wait for all workers")
+    wait_p = subparsers.add_parser(
+        "wait",
+        help="Wait for worker to finish",
+        description=WAIT_HELP_DESCRIPTION,
+        epilog=WAIT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    wait_p.add_argument("name", nargs="?",
+                       help="Worker name to wait for. Required unless using --all. "
+                            "Worker must be registered in swarm state.")
+    wait_p.add_argument("--timeout", type=int,
+                       help="Maximum time to wait in seconds. Default: no limit (wait "
+                            "forever). If timeout is reached with workers still running, "
+                            "exits with code 1. Use 0 for no timeout (same as default).")
+    wait_p.add_argument("--all", action="store_true",
+                       help="Wait for all running workers to finish. Cannot be combined "
+                            "with a worker name. Useful for coordinating parallel workers.")
 
     # clean
     clean_p = subparsers.add_parser("clean", help="Clean up dead workers")

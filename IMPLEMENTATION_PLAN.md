@@ -66,7 +66,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add description of log storage
   - Add examples: basic, follow, tail
 
-- [ ] **1.8 Enhance `swarm wait --help`**
+- [x] **1.8 Enhance `swarm wait --help`**
   - Add description of exit code propagation
   - Add examples: basic, with timeout, exit code check
 
