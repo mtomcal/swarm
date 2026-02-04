@@ -129,9 +129,9 @@ The spec already reflects the screen-stable approach with:
 
 After implementation:
 - [x] `python3 -m unittest test_cmd_ralph -v` passes (203 tests)
-- [ ] `python3 -m pytest tests/test_integration_ralph.py -v` passes (requires tmux)
+- [x] `python3 -m unittest tests.test_integration_ralph -v` passes (17 tests in ~10s)
 - [ ] Manual test: spawn ralph worker, verify it restarts within ~60s of Claude going idle
-- [ ] `--inactivity-timeout 10` works for quick testing
+- [x] `--inactivity-timeout 10` works for quick testing (verified in integration tests)
 
 ---
 
