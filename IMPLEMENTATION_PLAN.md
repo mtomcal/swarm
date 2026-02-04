@@ -172,7 +172,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Validate on-failure values
   - Handle both prompt and prompt-file
 
-- [ ] **3.3 Add workflow state persistence**
+- [x] **3.3 Add workflow state persistence**
   - Storage: `~/.swarm/workflows/<name>/state.json`
   - Copy workflow YAML to state directory
   - Store workflow hash for change detection

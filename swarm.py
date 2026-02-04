@@ -29,6 +29,7 @@ STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"
 RALPH_DIR = SWARM_DIR / "ralph"  # Ralph loop state directory
 HEARTBEATS_DIR = SWARM_DIR / "heartbeats"  # Heartbeat state directory
+WORKFLOWS_DIR = SWARM_DIR / "workflows"  # Workflow state directory
 
 # Agent instructions template for AGENTS.md/CLAUDE.md injection
 # Marker string 'Process Management (swarm)' used for idempotent detection
@@ -2082,6 +2083,281 @@ def list_heartbeat_states() -> list[HeartbeatState]:
                 continue
 
         return sorted(states, key=lambda s: s.worker_name)
+
+
+# Workflow state lock file path
+WORKFLOW_LOCK_FILE = SWARM_DIR / "workflow.lock"
+
+
+@contextmanager
+def workflow_file_lock():
+    """Context manager for exclusive locking of workflow state files.
+
+    This prevents race conditions when multiple swarm processes
+    attempt to read/modify/write workflow state files concurrently.
+
+    Uses fcntl.flock() for exclusive (LOCK_EX) file locking.
+    The lock is automatically released when the context exits,
+    even if an exception occurs.
+
+    Yields:
+        File object for the lock file (callers don't need to use this)
+    """
+    ensure_dirs()
+    lock_file = open(WORKFLOW_LOCK_FILE, 'w')
+    try:
+        # Acquire exclusive lock (blocks if another process holds it)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield lock_file
+    finally:
+        # Release lock and close file
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def get_workflow_state_dir(workflow_name: str) -> Path:
+    """Get the directory for a workflow's state.
+
+    Workflow state is stored per-workflow at:
+    ~/.swarm/workflows/<workflow-name>/
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        Path to the workflow state directory
+    """
+    return WORKFLOWS_DIR / workflow_name
+
+
+def get_workflow_state_path(workflow_name: str) -> Path:
+    """Get the path to a workflow's state file.
+
+    Workflow state is stored per-workflow at:
+    ~/.swarm/workflows/<workflow-name>/state.json
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        Path to the workflow state file
+    """
+    return get_workflow_state_dir(workflow_name) / "state.json"
+
+
+def get_workflow_yaml_copy_path(workflow_name: str) -> Path:
+    """Get the path where workflow YAML is copied.
+
+    A copy of the original workflow YAML is stored at:
+    ~/.swarm/workflows/<workflow-name>/workflow.yaml
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        Path to the workflow YAML copy
+    """
+    return get_workflow_state_dir(workflow_name) / "workflow.yaml"
+
+
+def get_workflow_logs_dir(workflow_name: str) -> Path:
+    """Get the directory for a workflow's logs.
+
+    Workflow logs are stored at:
+    ~/.swarm/workflows/<workflow-name>/logs/
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        Path to the workflow logs directory
+    """
+    return get_workflow_state_dir(workflow_name) / "logs"
+
+
+def compute_workflow_hash(yaml_content: str) -> str:
+    """Compute a hash of workflow YAML content.
+
+    Used to detect if the workflow definition has changed since
+    the workflow was started.
+
+    Args:
+        yaml_content: The raw YAML content string
+
+    Returns:
+        SHA-256 hash of the content (first 16 hex characters)
+    """
+    import hashlib
+    return hashlib.sha256(yaml_content.encode()).hexdigest()[:16]
+
+
+def load_workflow_state(workflow_name: str) -> Optional[WorkflowState]:
+    """Load workflow state from disk.
+
+    Reads workflow state from disk with exclusive file locking to
+    prevent race conditions with concurrent processes.
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        WorkflowState if it exists, None otherwise
+    """
+    with workflow_file_lock():
+        state_path = get_workflow_state_path(workflow_name)
+        if not state_path.exists():
+            return None
+
+        with open(state_path, "r") as f:
+            data = json.load(f)
+            return WorkflowState.from_dict(data)
+
+
+def save_workflow_state(workflow_state: WorkflowState) -> None:
+    """Save workflow state to disk.
+
+    Writes workflow state to disk with exclusive file locking to
+    prevent race conditions with concurrent processes.
+
+    Args:
+        workflow_state: WorkflowState to save
+    """
+    with workflow_file_lock():
+        state_dir = get_workflow_state_dir(workflow_state.name)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = get_workflow_state_path(workflow_state.name)
+
+        with open(state_path, "w") as f:
+            json.dump(workflow_state.to_dict(), f, indent=2)
+
+
+def delete_workflow_state(workflow_name: str) -> bool:
+    """Delete workflow state directory for a workflow.
+
+    Removes the entire workflow state directory including state file,
+    YAML copy, and logs, with exclusive file locking.
+
+    Args:
+        workflow_name: Name of the workflow
+
+    Returns:
+        True if directory was deleted, False if it didn't exist
+    """
+    import shutil
+    with workflow_file_lock():
+        state_dir = get_workflow_state_dir(workflow_name)
+        if state_dir.exists():
+            shutil.rmtree(state_dir)
+            return True
+        return False
+
+
+def list_workflow_states() -> list[WorkflowState]:
+    """List all workflow states.
+
+    Loads all workflow state files from the workflows directory
+    with exclusive file locking.
+
+    Returns:
+        List of WorkflowState objects, sorted by name
+    """
+    with workflow_file_lock():
+        if not WORKFLOWS_DIR.exists():
+            return []
+
+        states = []
+        for state_dir in WORKFLOWS_DIR.iterdir():
+            if not state_dir.is_dir():
+                continue
+            state_file = state_dir / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                with open(state_file, "r") as f:
+                    data = json.load(f)
+                    states.append(WorkflowState.from_dict(data))
+            except (json.JSONDecodeError, KeyError):
+                # Skip invalid state files
+                continue
+
+        return sorted(states, key=lambda s: s.name)
+
+
+def create_workflow_state(
+    definition: WorkflowDefinition,
+    yaml_path: str,
+    yaml_content: str,
+) -> WorkflowState:
+    """Create a new WorkflowState from a workflow definition.
+
+    Creates the workflow state directory, copies the original YAML file,
+    computes the hash for change detection, and initializes stage states.
+
+    Args:
+        definition: The parsed workflow definition
+        yaml_path: Path to the original workflow YAML file
+        yaml_content: Raw content of the workflow YAML file
+
+    Returns:
+        Initialized WorkflowState ready for execution
+    """
+    # Initialize stage states
+    stages = {}
+    for stage_def in definition.stages:
+        stages[stage_def.name] = StageState(status="pending")
+
+    # Compute hash for change detection
+    workflow_hash = compute_workflow_hash(yaml_content)
+
+    # Create workflow state
+    workflow_state = WorkflowState(
+        name=definition.name,
+        status="created",
+        current_stage=None,
+        current_stage_index=0,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        started_at=None,
+        scheduled_for=None,
+        completed_at=None,
+        stages=stages,
+        workflow_file=str(Path(yaml_path).resolve()),
+        workflow_hash=workflow_hash,
+    )
+
+    # Create state directory and copy YAML
+    with workflow_file_lock():
+        state_dir = get_workflow_state_dir(definition.name)
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create logs directory
+        logs_dir = get_workflow_logs_dir(definition.name)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy YAML to state directory
+        yaml_copy_path = get_workflow_yaml_copy_path(definition.name)
+        with open(yaml_copy_path, "w") as f:
+            f.write(yaml_content)
+
+        # Save state
+        state_path = get_workflow_state_path(definition.name)
+        with open(state_path, "w") as f:
+            json.dump(workflow_state.to_dict(), f, indent=2)
+
+    return workflow_state
+
+
+def workflow_exists(workflow_name: str) -> bool:
+    """Check if a workflow with the given name already exists.
+
+    Args:
+        workflow_name: Name of the workflow to check
+
+    Returns:
+        True if a workflow state exists, False otherwise
+    """
+    with workflow_file_lock():
+        state_path = get_workflow_state_path(workflow_name)
+        return state_path.exists()
 
 
 def run_heartbeat_monitor(worker_name: str) -> None:

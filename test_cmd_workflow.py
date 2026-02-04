@@ -1315,5 +1315,357 @@ class TestValidateWorkflowPromptFiles(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestWorkflowStatePersistence(unittest.TestCase):
+    """Test workflow state persistence functions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_workflow_state_dir(self):
+        """Test get_workflow_state_dir returns correct path."""
+        state_dir = swarm.get_workflow_state_dir("my-workflow")
+        self.assertEqual(state_dir, swarm.WORKFLOWS_DIR / "my-workflow")
+
+    def test_get_workflow_state_path(self):
+        """Test get_workflow_state_path returns correct path."""
+        state_path = swarm.get_workflow_state_path("my-workflow")
+        self.assertEqual(state_path, swarm.WORKFLOWS_DIR / "my-workflow" / "state.json")
+
+    def test_get_workflow_yaml_copy_path(self):
+        """Test get_workflow_yaml_copy_path returns correct path."""
+        yaml_path = swarm.get_workflow_yaml_copy_path("my-workflow")
+        self.assertEqual(yaml_path, swarm.WORKFLOWS_DIR / "my-workflow" / "workflow.yaml")
+
+    def test_get_workflow_logs_dir(self):
+        """Test get_workflow_logs_dir returns correct path."""
+        logs_dir = swarm.get_workflow_logs_dir("my-workflow")
+        self.assertEqual(logs_dir, swarm.WORKFLOWS_DIR / "my-workflow" / "logs")
+
+    def test_compute_workflow_hash(self):
+        """Test compute_workflow_hash produces consistent hash."""
+        content = "name: test\nstages:\n  - name: s1\n    type: worker\n    prompt: Do it"
+        hash1 = swarm.compute_workflow_hash(content)
+        hash2 = swarm.compute_workflow_hash(content)
+        self.assertEqual(hash1, hash2)
+        self.assertEqual(len(hash1), 16)  # First 16 chars of SHA-256 hex
+
+    def test_compute_workflow_hash_different_content(self):
+        """Test compute_workflow_hash produces different hash for different content."""
+        content1 = "name: test1"
+        content2 = "name: test2"
+        hash1 = swarm.compute_workflow_hash(content1)
+        hash2 = swarm.compute_workflow_hash(content2)
+        self.assertNotEqual(hash1, hash2)
+
+    def test_save_and_load_workflow_state(self):
+        """Test saving and loading workflow state."""
+        stages = {
+            "plan": swarm.StageState(status="completed", attempts=1),
+            "build": swarm.StageState(status="running"),
+        }
+        state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="build",
+            current_stage_index=1,
+            created_at="2026-02-04T10:00:00Z",
+            started_at="2026-02-04T10:00:00Z",
+            stages=stages,
+            workflow_file="/path/to/workflow.yaml",
+            workflow_hash="abc123",
+        )
+        swarm.save_workflow_state(state)
+
+        loaded = swarm.load_workflow_state("test-workflow")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.name, "test-workflow")
+        self.assertEqual(loaded.status, "running")
+        self.assertEqual(loaded.current_stage, "build")
+        self.assertEqual(loaded.current_stage_index, 1)
+        self.assertEqual(loaded.created_at, "2026-02-04T10:00:00Z")
+        self.assertEqual(loaded.started_at, "2026-02-04T10:00:00Z")
+        self.assertEqual(len(loaded.stages), 2)
+        self.assertEqual(loaded.stages["plan"].status, "completed")
+        self.assertEqual(loaded.stages["plan"].attempts, 1)
+        self.assertEqual(loaded.stages["build"].status, "running")
+        self.assertEqual(loaded.workflow_file, "/path/to/workflow.yaml")
+        self.assertEqual(loaded.workflow_hash, "abc123")
+
+    def test_save_workflow_state_creates_directory(self):
+        """Test save_workflow_state creates state directory if needed."""
+        state = swarm.WorkflowState(
+            name="new-workflow",
+            status="created",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        state_dir = swarm.get_workflow_state_dir("new-workflow")
+        self.assertFalse(state_dir.exists())
+
+        swarm.save_workflow_state(state)
+        self.assertTrue(state_dir.exists())
+
+    def test_load_nonexistent_returns_none(self):
+        """Test loading non-existent workflow returns None."""
+        loaded = swarm.load_workflow_state("nonexistent")
+        self.assertIsNone(loaded)
+
+    def test_delete_workflow_state(self):
+        """Test deleting workflow state removes directory."""
+        state = swarm.WorkflowState(
+            name="to-delete",
+            status="created",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        state_dir = swarm.get_workflow_state_dir("to-delete")
+        self.assertTrue(state_dir.exists())
+
+        result = swarm.delete_workflow_state("to-delete")
+        self.assertTrue(result)
+        self.assertFalse(state_dir.exists())
+
+    def test_delete_nonexistent_returns_false(self):
+        """Test deleting non-existent workflow returns False."""
+        result = swarm.delete_workflow_state("nonexistent")
+        self.assertFalse(result)
+
+    def test_list_workflow_states_empty(self):
+        """Test listing workflow states when none exist."""
+        states = swarm.list_workflow_states()
+        self.assertEqual(states, [])
+
+    def test_list_workflow_states(self):
+        """Test listing workflow states."""
+        state1 = swarm.WorkflowState(name="workflow-a", status="running", created_at="2026-02-04T10:00:00Z")
+        state2 = swarm.WorkflowState(name="workflow-b", status="completed", created_at="2026-02-04T11:00:00Z")
+        swarm.save_workflow_state(state1)
+        swarm.save_workflow_state(state2)
+
+        states = swarm.list_workflow_states()
+        self.assertEqual(len(states), 2)
+        # Should be sorted by name
+        self.assertEqual(states[0].name, "workflow-a")
+        self.assertEqual(states[1].name, "workflow-b")
+
+    def test_list_workflow_states_skips_invalid(self):
+        """Test list_workflow_states skips invalid state files."""
+        # Create a valid state
+        state = swarm.WorkflowState(name="valid", status="running", created_at="2026-02-04T10:00:00Z")
+        swarm.save_workflow_state(state)
+
+        # Create an invalid state file
+        invalid_dir = swarm.WORKFLOWS_DIR / "invalid"
+        invalid_dir.mkdir(parents=True, exist_ok=True)
+        with open(invalid_dir / "state.json", "w") as f:
+            f.write("not valid json")
+
+        states = swarm.list_workflow_states()
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0].name, "valid")
+
+    def test_workflow_exists(self):
+        """Test workflow_exists check."""
+        self.assertFalse(swarm.workflow_exists("test-workflow"))
+
+        state = swarm.WorkflowState(name="test-workflow", status="created", created_at="2026-02-04T10:00:00Z")
+        swarm.save_workflow_state(state)
+
+        self.assertTrue(swarm.workflow_exists("test-workflow"))
+
+    def test_state_survives_status_transitions(self):
+        """Test state persists correctly through status transitions."""
+        state = swarm.WorkflowState(
+            name="transition-test",
+            status="created",
+            created_at="2026-02-04T10:00:00Z",
+        )
+        swarm.save_workflow_state(state)
+
+        # Transition to scheduled
+        loaded = swarm.load_workflow_state("transition-test")
+        loaded.status = "scheduled"
+        loaded.scheduled_for = "2026-02-05T02:00:00Z"
+        swarm.save_workflow_state(loaded)
+
+        reloaded = swarm.load_workflow_state("transition-test")
+        self.assertEqual(reloaded.status, "scheduled")
+        self.assertEqual(reloaded.scheduled_for, "2026-02-05T02:00:00Z")
+
+        # Transition to running
+        reloaded.status = "running"
+        reloaded.started_at = "2026-02-05T02:00:00Z"
+        swarm.save_workflow_state(reloaded)
+
+        final = swarm.load_workflow_state("transition-test")
+        self.assertEqual(final.status, "running")
+        self.assertEqual(final.started_at, "2026-02-05T02:00:00Z")
+
+
+class TestCreateWorkflowState(unittest.TestCase):
+    """Test create_workflow_state function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_creates_workflow_state(self):
+        """Test create_workflow_state creates WorkflowState with correct fields."""
+        definition = swarm.WorkflowDefinition(
+            name="test-workflow",
+            description="Test workflow",
+            stages=[
+                swarm.StageDefinition(name="plan", type="worker", prompt="Plan it"),
+                swarm.StageDefinition(name="build", type="ralph", prompt="Build it", max_iterations=10),
+            ],
+        )
+        yaml_content = "name: test-workflow\nstages:\n  - name: plan\n    type: worker\n    prompt: Plan it"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        state = swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        self.assertEqual(state.name, "test-workflow")
+        self.assertEqual(state.status, "created")
+        self.assertIsNone(state.current_stage)
+        self.assertEqual(state.current_stage_index, 0)
+        self.assertIsNotNone(state.created_at)
+        self.assertIsNone(state.started_at)
+        self.assertIsNone(state.scheduled_for)
+        self.assertIsNone(state.completed_at)
+        self.assertEqual(len(state.stages), 2)
+        self.assertEqual(state.stages["plan"].status, "pending")
+        self.assertEqual(state.stages["build"].status, "pending")
+        self.assertEqual(state.workflow_file, str(Path(yaml_path).resolve()))
+        self.assertEqual(len(state.workflow_hash), 16)
+
+    def test_creates_state_directory(self):
+        """Test create_workflow_state creates state directory."""
+        definition = swarm.WorkflowDefinition(
+            name="dir-test",
+            stages=[swarm.StageDefinition(name="s1", type="worker", prompt="Do it")],
+        )
+        yaml_content = "name: dir-test"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        state_dir = swarm.get_workflow_state_dir("dir-test")
+        self.assertTrue(state_dir.exists())
+
+    def test_creates_logs_directory(self):
+        """Test create_workflow_state creates logs directory."""
+        definition = swarm.WorkflowDefinition(
+            name="logs-test",
+            stages=[swarm.StageDefinition(name="s1", type="worker", prompt="Do it")],
+        )
+        yaml_content = "name: logs-test"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        logs_dir = swarm.get_workflow_logs_dir("logs-test")
+        self.assertTrue(logs_dir.exists())
+
+    def test_copies_yaml_file(self):
+        """Test create_workflow_state copies YAML to state directory."""
+        definition = swarm.WorkflowDefinition(
+            name="yaml-copy-test",
+            stages=[swarm.StageDefinition(name="s1", type="worker", prompt="Do it")],
+        )
+        yaml_content = "name: yaml-copy-test\nstages:\n  - name: s1\n    type: worker\n    prompt: Do it"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        yaml_copy_path = swarm.get_workflow_yaml_copy_path("yaml-copy-test")
+        self.assertTrue(yaml_copy_path.exists())
+        with open(yaml_copy_path) as f:
+            copied_content = f.read()
+        self.assertEqual(copied_content, yaml_content)
+
+    def test_saves_state_file(self):
+        """Test create_workflow_state saves state.json."""
+        definition = swarm.WorkflowDefinition(
+            name="state-file-test",
+            stages=[swarm.StageDefinition(name="s1", type="worker", prompt="Do it")],
+        )
+        yaml_content = "name: state-file-test"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        state_path = swarm.get_workflow_state_path("state-file-test")
+        self.assertTrue(state_path.exists())
+
+        # Verify it can be loaded
+        loaded = swarm.load_workflow_state("state-file-test")
+        self.assertEqual(loaded.name, "state-file-test")
+
+    def test_computes_hash_from_yaml_content(self):
+        """Test create_workflow_state computes hash from YAML content."""
+        definition = swarm.WorkflowDefinition(
+            name="hash-test",
+            stages=[swarm.StageDefinition(name="s1", type="worker", prompt="Do it")],
+        )
+        yaml_content = "name: hash-test\nstages:\n  - name: s1"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        state = swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        expected_hash = swarm.compute_workflow_hash(yaml_content)
+        self.assertEqual(state.workflow_hash, expected_hash)
+
+    def test_initializes_all_stages_as_pending(self):
+        """Test create_workflow_state initializes all stages as pending."""
+        definition = swarm.WorkflowDefinition(
+            name="stages-test",
+            stages=[
+                swarm.StageDefinition(name="plan", type="worker", prompt="Plan"),
+                swarm.StageDefinition(name="build", type="ralph", prompt="Build", max_iterations=10),
+                swarm.StageDefinition(name="validate", type="worker", prompt="Validate"),
+            ],
+        )
+        yaml_content = "name: stages-test"
+        yaml_path = os.path.join(self.temp_dir, "workflow.yaml")
+
+        state = swarm.create_workflow_state(definition, yaml_path, yaml_content)
+
+        self.assertEqual(len(state.stages), 3)
+        for stage_name, stage_state in state.stages.items():
+            self.assertEqual(stage_state.status, "pending")
+            self.assertIsNone(stage_state.started_at)
+            self.assertIsNone(stage_state.completed_at)
+            self.assertIsNone(stage_state.worker_name)
+            self.assertEqual(stage_state.attempts, 0)
+            self.assertIsNone(stage_state.exit_reason)
+
+
 if __name__ == "__main__":
     unittest.main()
