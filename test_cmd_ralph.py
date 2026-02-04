@@ -7298,5 +7298,243 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
                 f"Blocked for: {detect_duration:.3f}s, expected >= 0.4s")
 
 
+class TestRalphSpawnNoRunFlag(unittest.TestCase):
+    """Test --no-run flag for ralph spawn command."""
+
+    def test_no_run_argument_exists(self):
+        """Test that --no-run argument is recognized by ralph spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--no-run', result.stdout)
+
+    def test_no_run_default_is_false(self):
+        """Test that --no-run defaults to False (auto-start is default)."""
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--no-run", action="store_true")
+        args = parser.parse_args([])
+        self.assertFalse(args.no_run)
+
+
+class TestRalphSpawnNoRunBehavior(unittest.TestCase):
+    """Test --no-run behavior in ralph spawn command."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Set up temp swarm dirs
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        # Create a test prompt file
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_no_run_does_not_call_loop(self):
+        """Test that --no-run flag prevents auto-start of monitoring loop."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-norun',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=True,  # Critical: --no-run is set
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('swarm.cmd_ralph_run') as mock_run:
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_spawn(args)
+
+        # Verify cmd_ralph_run was NOT called
+        mock_run.assert_not_called()
+
+    def test_no_no_run_calls_loop(self):
+        """Test that without --no-run flag, monitoring loop is auto-started."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-autorun',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=False,  # Critical: auto-start enabled (default)
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('swarm.cmd_ralph_run') as mock_run:
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_spawn(args)
+
+        # Verify cmd_ralph_run WAS called with correct args
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        self.assertEqual(call_args.name, 'ralph-autorun')
+
+
+class TestRalphSpawnCheckDoneContinuousArgument(unittest.TestCase):
+    """Test --check-done-continuous argument parsing."""
+
+    def test_check_done_continuous_argument_exists(self):
+        """Test that --check-done-continuous argument is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--check-done-continuous', result.stdout)
+
+
+class TestRalphSpawnCheckDoneContinuous(unittest.TestCase):
+    """Test --check-done-continuous is properly stored in RalphState."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Set up temp swarm dirs
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        # Create a test prompt file
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_check_done_continuous_stored_in_state_true(self):
+        """Test that check_done_continuous=True is stored in RalphState."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-continuous',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern='All tasks complete',
+            check_done_continuous=True,  # Critical: continuous checking enabled
+            no_run=True,  # Don't run loop for this test
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        # Verify ralph state has check_done_continuous=True
+        ralph_state = swarm.load_ralph_state('ralph-continuous')
+        self.assertIsNotNone(ralph_state)
+        self.assertTrue(ralph_state.check_done_continuous)
+
+    def test_check_done_continuous_stored_in_state_false(self):
+        """Test that check_done_continuous=False is stored in RalphState."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-nocontinuous',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern='All tasks complete',
+            check_done_continuous=False,  # Default: continuous checking disabled
+            no_run=True,  # Don't run loop for this test
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker'):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        # Verify ralph state has check_done_continuous=False
+        ralph_state = swarm.load_ralph_state('ralph-nocontinuous')
+        self.assertIsNotNone(ralph_state)
+        self.assertFalse(ralph_state.check_done_continuous)
+
+
 if __name__ == "__main__":
     unittest.main()

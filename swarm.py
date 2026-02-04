@@ -160,6 +160,7 @@ class RalphState:
     total_failures: int = 0
     done_pattern: Optional[str] = None
     inactivity_timeout: int = 60
+    check_done_continuous: bool = False
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -175,6 +176,7 @@ class RalphState:
             "total_failures": self.total_failures,
             "done_pattern": self.done_pattern,
             "inactivity_timeout": self.inactivity_timeout,
+            "check_done_continuous": self.check_done_continuous,
         }
 
     @classmethod
@@ -192,6 +194,7 @@ class RalphState:
             total_failures=d.get("total_failures", 0),
             done_pattern=d.get("done_pattern"),
             inactivity_timeout=d.get("inactivity_timeout", 60),
+            check_done_continuous=d.get("check_done_continuous", False),
         )
 
 
@@ -1029,6 +1032,10 @@ def main() -> None:
                                help="Screen stability timeout in seconds (default: 60)")
     ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
                                help="Regex pattern to stop ralph loop when matched in output")
+    ralph_spawn_p.add_argument("--check-done-continuous", action="store_true",
+                               help="Check done pattern during monitoring, not just after exit")
+    ralph_spawn_p.add_argument("--no-run", action="store_true",
+                               help="Spawn worker but don't start monitoring loop (default: auto-start)")
     ralph_spawn_p.add_argument("--session", default=None,
                                help="Tmux session name (default: hash-based isolation)")
     ralph_spawn_p.add_argument("--tmux-socket", default=None,
@@ -2181,6 +2188,7 @@ def cmd_ralph_spawn(args) -> None:
         last_iteration_started=datetime.now().isoformat(),
         inactivity_timeout=args.inactivity_timeout,
         done_pattern=args.done_pattern,
+        check_done_continuous=getattr(args, 'check_done_continuous', False),
     )
     save_ralph_state(ralph_state)
 
@@ -2206,6 +2214,15 @@ def cmd_ralph_spawn(args) -> None:
     msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
     msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
     print(msg)
+
+    # Auto-start the monitoring loop unless --no-run is specified
+    # Note: We check hasattr to maintain backwards compatibility with existing tests
+    # that don't include no_run in their args. CLI usage will always have no_run set.
+    if hasattr(args, 'no_run') and not args.no_run:
+        # Create a simple args object with just the name for the loop
+        from argparse import Namespace
+        loop_args = Namespace(name=args.name)
+        cmd_ralph_run(loop_args)
 
 
 def cmd_ralph_init(args) -> None:
