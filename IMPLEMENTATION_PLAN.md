@@ -31,7 +31,7 @@
 
 Improve help text for all existing commands to match the quality of `ralph spawn --help`.
 
-- [ ] **1.1 Enhance `swarm --help` (root command)**
+- [x] **1.1 Enhance `swarm --help` (root command)**
   - Add overview of swarm purpose
   - Add quick start example
   - Group commands by category

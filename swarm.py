@@ -79,6 +79,70 @@ IMPORTANT:
 
 # CLI Help Text Constants
 # Defined at module level for testability and coverage
+
+ROOT_HELP_DESCRIPTION = """\
+Spawn, track, and control AI agent processes with Unix-style simplicity.
+
+Swarm manages parallel agents in isolated git worktrees via tmux, enabling
+concurrent development without merge conflicts. Each worker gets its own
+branch and directory, automatically cleaned up when done.
+
+Key Features:
+  - Worktree isolation: Each agent works in its own git branch/directory
+  - Tmux integration: Attach, send commands, view logs in real-time
+  - Ralph mode: Autonomous multi-iteration loops across context windows
+  - Process control: Start, stop, pause, resume workers at will
+"""
+
+ROOT_HELP_EPILOG = """\
+Quick Start:
+  1. Spawn a worker:     swarm spawn --name my-agent --tmux --worktree -- claude
+  2. Check status:       swarm ls
+  3. Send a message:     swarm send my-agent "implement feature X"
+  4. View output:        swarm logs my-agent --follow
+  5. Clean up:           swarm kill my-agent --rm-worktree
+
+Command Groups:
+  Worker Lifecycle:
+    spawn               Create a new worker process
+    kill                Stop a worker (optionally remove worktree)
+    clean               Remove stopped workers and their worktrees
+    respawn             Restart a stopped worker with same config
+
+  Monitoring:
+    ls                  List all workers and their status
+    status              Show detailed status of a single worker
+    logs                View worker output (supports --follow)
+    attach              Attach to worker's tmux window
+
+  Interaction:
+    send                Send text/commands to a running worker
+    interrupt           Send Ctrl-C to interrupt current operation
+    eof                 Send Ctrl-D (end of file)
+    wait                Block until worker(s) complete
+
+  Autonomous Mode:
+    ralph spawn         Start autonomous multi-iteration loop
+    ralph status        Check loop progress (iterations, failures)
+    ralph pause/resume  Control loop execution
+
+  Setup:
+    init                Add swarm instructions to CLAUDE.md
+
+Examples:
+  # Spawn parallel workers for different features
+  swarm spawn --name auth --tmux --worktree -- claude
+  swarm spawn --name api --tmux --worktree -- claude
+
+  # Autonomous overnight work with ralph
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+
+  # Broadcast to all workers
+  swarm send --all "wrap up and commit your changes"
+
+State: ~/.swarm/state.json    Logs: ~/.swarm/logs/
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1029,7 +1093,9 @@ def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         prog="swarm",
-        description="Unix-style agent process manager"
+        description=ROOT_HELP_DESCRIPTION,
+        epilog=ROOT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
