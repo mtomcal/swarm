@@ -243,13 +243,13 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Include full YAML schema in `run --help`
   - Include examples for all common patterns
 
-- [ ] **3.16 Add workflow unit tests**
+- [x] **3.16 Add workflow unit tests**
   - Test YAML parsing
   - Test validation
   - Test state persistence
   - Test stage transitions
 
-- [ ] **3.17 Add workflow integration tests**
+- [x] **3.17 Add workflow integration tests**
   - Test simple 2-stage workflow
   - Test retry behavior
   - Test skip behavior
