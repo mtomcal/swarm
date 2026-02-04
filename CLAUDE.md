@@ -50,21 +50,30 @@ swarm spawn --name feature-auth --tmux --worktree -- claude
 State stored in `~/.swarm/state.json`. Logs in `~/.swarm/logs/`.
 
 ### Ralph Mode (Autonomous Looping)
-Ralph mode enables autonomous agent looping with fresh context windows:
+Ralph mode enables autonomous agent looping with fresh context windows.
+
+**Important**: `ralph spawn` creates the worker and sends the initial prompt, but `ralph run` must be executed separately to monitor and loop:
 ```bash
+# Step 1: Spawn the worker (starts iteration 1)
 swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude
+
+# Step 2: Run the monitoring loop (handles iterations 2+)
+swarm ralph run agent        # Monitors worker and restarts on inactivity/exit
+
+# Other commands
 swarm ralph status agent     # Check iteration progress
 swarm ralph pause agent      # Pause the loop
 swarm ralph resume agent     # Resume the loop
 swarm ralph init             # Create starter PROMPT.md
+swarm ralph list             # List all ralph workers
 ```
 
-Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is unchanged for `--inactivity-timeout` seconds (default: 60s). State in `~/.swarm/ralph/<name>/state.json`.
+Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is unchanged for `--inactivity-timeout` seconds (default: 60s). State in `~/.swarm/ralph/<name>/state.json`. Iteration logs in `~/.swarm/ralph/<name>/iterations.log`.
 
 ## Project Structure
 
 ### Core Files
-- `swarm.py` - Main implementation (~2876 lines), single-file CLI tool
+- `swarm.py` - Main implementation (~2997 lines), single-file CLI tool
 - `IMPLEMENTATION_PLAN.md` - Current development plan with task checkboxes
 - `specs/README.md` - Meta-spec defining how specs are written
 
@@ -75,16 +84,16 @@ Behavioral specs in priority order (P0 = critical):
 - **P2**: `ls.md`, `status.md`, `logs.md`, `wait.md`, `clean.md`, `respawn.md`, `interrupt-eof.md`, `attach.md`, `init.md`
 - **Supporting**: `data-structures.md`, `environment.md`, `cli-interface.md`
 
-### Test Files (26 total)
-Unit tests in root directory (`test_*.py`):
-- `test_cmd_ralph.py` - Ralph mode unit tests (203 tests)
+### Test Files (27 total)
+Unit tests in root directory (`test_*.py`, 25 files):
+- `test_cmd_ralph.py` - Ralph mode unit tests (211 tests)
 - `test_cmd_spawn.py`, `test_cmd_kill.py`, `test_cmd_ls.py`, etc. - Command-specific tests
 - `test_state_file_locking.py` - State management tests
 - `test_ready_patterns.py` - Agent readiness detection tests
 - `test_worktree_protection.py` - Git worktree safety tests
 
-Integration tests in `tests/`:
-- `tests/test_integration_ralph.py` - Ralph integration tests (17 tests, requires tmux)
+Integration tests in `tests/` (2 files):
+- `tests/test_integration_ralph.py` - Ralph integration tests (requires tmux)
 - `tests/test_tmux_isolation.py` - `TmuxIsolatedTestCase` base class for tmux tests
 
 ## Testing Guidelines
@@ -113,7 +122,8 @@ python3 -m unittest test_cmd_spawn -v           # Spawn command tests
 ### State Management
 - Worker state: `~/.swarm/state.json` (fcntl locked for concurrent access)
 - Ralph state: `~/.swarm/ralph/<name>/state.json`
-- Logs: `~/.swarm/logs/`
+- Ralph iteration logs: `~/.swarm/ralph/<name>/iterations.log`
+- Worker logs: `~/.swarm/logs/`
 
 ### Key Data Classes (swarm.py)
 - `Worker` - Worker process record (name, status, cmd, tmux/worktree info, metadata)
