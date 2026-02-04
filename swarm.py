@@ -1413,9 +1413,31 @@ Storage:
   Repo-local definitions: .swarm/workflows/ (searched first)
   Global definitions: ~/.swarm/workflows/
 
+File Resolution:
+  Workflow files can be specified by path or by name:
+
+    # By path (explicit file location)
+    swarm workflow run ./workflows/build.yaml
+    swarm workflow run /absolute/path/to/workflow.yaml
+
+    # By name (searches .swarm/workflows/ then ~/.swarm/workflows/)
+    swarm workflow run build              # Finds build.yaml or build.yml
+    swarm workflow run overnight-build    # Finds overnight-build.yaml
+
+  Search order for name-based lookup:
+    1. .swarm/workflows/<name>[.yaml|.yml]  (repo-local, searched first)
+    2. ~/.swarm/workflows/<name>[.yaml|.yml] (global)
+
 Examples:
+  # Run by path
   swarm workflow run ./build-feature.yaml
   swarm workflow run ./overnight-work.yaml --at "02:00"
+
+  # Run by name (from .swarm/workflows/ or ~/.swarm/workflows/)
+  swarm workflow run build                # Finds build.yaml in search paths
+  swarm workflow validate overnight       # Validates overnight.yaml
+
+  # Other workflow commands
   swarm workflow status feature-build
   swarm workflow cancel feature-build
   swarm workflow resume feature-build --from validate
@@ -1455,9 +1477,17 @@ Validation Checks:
   - No circular goto references
   - All prompt files exist and are readable
 
+File Resolution:
+  Workflow files can be specified by path or by name. Name-based lookup
+  searches .swarm/workflows/ (repo-local) then ~/.swarm/workflows/ (global).
+
 Examples:
-  # Validate a workflow file
+  # Validate a workflow file by path
   swarm workflow validate ./build-feature.yaml
+
+  # Validate by name (finds in .swarm/workflows/ or ~/.swarm/workflows/)
+  swarm workflow validate build
+  swarm workflow validate overnight
 
   # Validate before running
   swarm workflow validate ./workflow.yaml && swarm workflow run ./workflow.yaml
@@ -1622,9 +1652,26 @@ Flow Control:
   on-complete: stop       - End workflow successfully
   on-complete: goto:name  - Jump to named stage (future)
 
+File Resolution:
+  Workflow files can be specified by path or by name:
+
+    # By path (explicit file location)
+    swarm workflow run ./workflows/build.yaml
+
+    # By name (searches .swarm/workflows/ then ~/.swarm/workflows/)
+    swarm workflow run build              # Finds build.yaml or build.yml
+
+  Search order for name-based lookup:
+    1. .swarm/workflows/<name>[.yaml|.yml]  (repo-local, searched first)
+    2. ~/.swarm/workflows/<name>[.yaml|.yml] (global)
+
 Examples:
-  # Run workflow immediately
+  # Run workflow by path
   swarm workflow run ./build-feature.yaml
+
+  # Run workflow by name (from .swarm/workflows/ or ~/.swarm/workflows/)
+  swarm workflow run build
+  swarm workflow run overnight-build
 
   # Run overnight at 2am
   swarm workflow run ./overnight-work.yaml --at "02:00"
@@ -2555,6 +2602,80 @@ def validate_workflow_prompt_files(workflow: WorkflowDefinition, base_path: Opti
                 errors.append(f"prompt file not found: {stage.prompt_file}")
 
     return errors
+
+
+def resolve_workflow_file(file_arg: str) -> str:
+    """Resolve a workflow file path, checking repo-local then global locations.
+
+    Search order:
+    1. If file_arg is an absolute path or contains path separators, use it directly
+    2. If file_arg exists relative to current directory, use it
+    3. Check .swarm/workflows/<file_arg> (repo-local)
+    4. Check .swarm/workflows/<file_arg>.yaml (repo-local with extension)
+    5. Check ~/.swarm/workflows/<file_arg> (global)
+    6. Check ~/.swarm/workflows/<file_arg>.yaml (global with extension)
+
+    Args:
+        file_arg: The file argument from the command line. Can be:
+            - A full path: /path/to/workflow.yaml
+            - A relative path: ./workflows/build.yaml
+            - A name: build (looks up in .swarm/workflows/ then ~/.swarm/workflows/)
+
+    Returns:
+        Resolved path to the workflow file
+
+    Raises:
+        FileNotFoundError: If the workflow file cannot be found in any location
+    """
+    path = Path(file_arg)
+
+    # Case 1: Absolute path - use directly
+    if path.is_absolute():
+        if path.exists():
+            return str(path)
+        raise FileNotFoundError(f"workflow file not found: {file_arg}")
+
+    # Case 2: Has path separators (e.g., ./foo.yaml, dir/foo.yaml) - use relative to cwd
+    if os.sep in file_arg or file_arg.startswith("."):
+        resolved = Path.cwd() / path
+        if resolved.exists():
+            return str(resolved)
+        raise FileNotFoundError(f"workflow file not found: {file_arg}")
+
+    # Case 3: File exists in current directory
+    if path.exists():
+        return str(path)
+
+    # Case 4 & 5: Look up by name in .swarm/workflows/ (repo-local) then ~/.swarm/workflows/ (global)
+    search_dirs = [
+        Path.cwd() / ".swarm" / "workflows",  # Repo-local
+        WORKFLOWS_DIR,  # Global (~/.swarm/workflows/)
+    ]
+
+    for search_dir in search_dirs:
+        # Try exact name
+        candidate = search_dir / file_arg
+        if candidate.exists():
+            return str(candidate)
+
+        # Try with .yaml extension
+        candidate_yaml = search_dir / f"{file_arg}.yaml"
+        if candidate_yaml.exists():
+            return str(candidate_yaml)
+
+        # Try with .yml extension
+        candidate_yml = search_dir / f"{file_arg}.yml"
+        if candidate_yml.exists():
+            return str(candidate_yml)
+
+    # Nothing found - provide helpful error message
+    repo_local = Path.cwd() / ".swarm" / "workflows"
+    raise FileNotFoundError(
+        f"workflow file not found: {file_arg}\n"
+        f"  Searched: {file_arg} in current directory\n"
+        f"            {repo_local / file_arg}[.yaml|.yml]\n"
+        f"            {WORKFLOWS_DIR / file_arg}[.yaml|.yml]"
+    )
 
 
 # Heartbeat state lock file path
@@ -8158,7 +8279,13 @@ def cmd_workflow_validate(args) -> None:
         0: Validation passed
         1: Validation failed (errors printed to stderr)
     """
-    yaml_path = args.file
+    # Resolve the workflow file path (checks repo-local then global)
+    try:
+        yaml_path = resolve_workflow_file(args.file)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     errors = []
 
     # Parse and validate the YAML structure
@@ -8731,15 +8858,17 @@ def cmd_workflow_run(args) -> None:
         0: Workflow started or scheduled successfully
         1: Error (validation failed, duplicate name, etc.)
     """
-    yaml_path = args.file
+    # Resolve the workflow file path (checks repo-local then global)
+    try:
+        yaml_path = resolve_workflow_file(args.file)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Read the raw YAML content (needed for hashing)
     try:
         with open(yaml_path, 'r') as f:
             yaml_content = f.read()
-    except FileNotFoundError:
-        print(f"Error: workflow file not found: {yaml_path}", file=sys.stderr)
-        sys.exit(1)
     except IOError as e:
         print(f"Error: cannot read workflow file: {e}", file=sys.stderr)
         sys.exit(1)

@@ -1316,6 +1316,186 @@ class TestValidateWorkflowPromptFiles(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestResolveWorkflowFile(unittest.TestCase):
+    """Test resolve_workflow_file function for repo-local and global discovery."""
+
+    def setUp(self):
+        """Set up test fixtures with temp directories for repo-local and global workflows."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+
+        # Create a fake repo directory structure
+        self.repo_dir = Path(self.temp_dir) / "repo"
+        self.repo_dir.mkdir()
+
+        # Create repo-local .swarm/workflows directory
+        self.repo_local_workflows = self.repo_dir / ".swarm" / "workflows"
+        self.repo_local_workflows.mkdir(parents=True)
+
+        # Create a global workflows directory
+        self.global_workflows = Path(self.temp_dir) / "global" / "workflows"
+        self.global_workflows.mkdir(parents=True)
+        swarm.WORKFLOWS_DIR = self.global_workflows
+
+        # Change to the repo directory for tests
+        os.chdir(self.repo_dir)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow(self, path: Path) -> None:
+        """Create a minimal valid workflow YAML file."""
+        content = """name: test-workflow
+stages:
+  - name: test
+    type: worker
+    prompt: do something
+"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    def test_absolute_path_exists(self):
+        """Test resolving an absolute path that exists."""
+        workflow_path = self.repo_dir / "my-workflow.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file(str(workflow_path))
+        self.assertEqual(result, str(workflow_path))
+
+    def test_absolute_path_not_found(self):
+        """Test error when absolute path doesn't exist."""
+        workflow_path = self.repo_dir / "nonexistent.yaml"
+
+        with self.assertRaises(FileNotFoundError) as ctx:
+            swarm.resolve_workflow_file(str(workflow_path))
+
+        self.assertIn("workflow file not found", str(ctx.exception))
+
+    def test_relative_path_with_dot_slash(self):
+        """Test resolving relative path starting with ./"""
+        workflow_path = self.repo_dir / "workflows" / "build.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("./workflows/build.yaml")
+        self.assertEqual(result, str(self.repo_dir / "workflows" / "build.yaml"))
+
+    def test_relative_path_with_subdirectory(self):
+        """Test resolving relative path with subdirectory (no ./)."""
+        workflow_path = self.repo_dir / "configs" / "workflow.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("configs/workflow.yaml")
+        self.assertEqual(result, str(self.repo_dir / "configs" / "workflow.yaml"))
+
+    def test_relative_path_not_found(self):
+        """Test error when relative path doesn't exist."""
+        with self.assertRaises(FileNotFoundError) as ctx:
+            swarm.resolve_workflow_file("./nonexistent.yaml")
+
+        self.assertIn("workflow file not found", str(ctx.exception))
+
+    def test_file_in_current_directory(self):
+        """Test resolving a file that exists in current directory."""
+        workflow_path = self.repo_dir / "workflow.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("workflow.yaml")
+        # The function returns "workflow.yaml" when it exists in cwd
+        # (not the absolute path)
+        self.assertEqual(result, "workflow.yaml")
+
+    def test_name_in_repo_local_yaml(self):
+        """Test name-based lookup finds .yaml in repo-local .swarm/workflows/."""
+        workflow_path = self.repo_local_workflows / "build.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("build")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_name_in_repo_local_yml(self):
+        """Test name-based lookup finds .yml in repo-local .swarm/workflows/."""
+        workflow_path = self.repo_local_workflows / "deploy.yml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("deploy")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_name_in_global_yaml(self):
+        """Test name-based lookup finds .yaml in global ~/.swarm/workflows/."""
+        workflow_path = self.global_workflows / "common-build.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("common-build")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_name_in_global_yml(self):
+        """Test name-based lookup finds .yml in global ~/.swarm/workflows/."""
+        workflow_path = self.global_workflows / "common-deploy.yml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("common-deploy")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_repo_local_takes_priority_over_global(self):
+        """Test repo-local .swarm/workflows/ is searched before global."""
+        # Create same-named workflow in both locations
+        repo_local_path = self.repo_local_workflows / "build.yaml"
+        global_path = self.global_workflows / "build.yaml"
+        self._create_workflow(repo_local_path)
+        self._create_workflow(global_path)
+
+        result = swarm.resolve_workflow_file("build")
+        self.assertEqual(result, str(repo_local_path))
+
+    def test_yaml_takes_priority_over_yml(self):
+        """Test .yaml extension is checked before .yml."""
+        yaml_path = self.repo_local_workflows / "test.yaml"
+        yml_path = self.repo_local_workflows / "test.yml"
+        self._create_workflow(yaml_path)
+        self._create_workflow(yml_path)
+
+        result = swarm.resolve_workflow_file("test")
+        self.assertEqual(result, str(yaml_path))
+
+    def test_exact_name_in_repo_local(self):
+        """Test exact filename match (with extension) in repo-local."""
+        workflow_path = self.repo_local_workflows / "build.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("build.yaml")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_name_not_found_error_message(self):
+        """Test error message includes all searched locations."""
+        with self.assertRaises(FileNotFoundError) as ctx:
+            swarm.resolve_workflow_file("nonexistent")
+
+        error_msg = str(ctx.exception)
+        self.assertIn("workflow file not found", error_msg)
+        self.assertIn("nonexistent", error_msg)
+        self.assertIn(".swarm/workflows", error_msg)
+
+    def test_name_with_hyphen(self):
+        """Test name-based lookup works with hyphens in name."""
+        workflow_path = self.repo_local_workflows / "my-complex-workflow.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("my-complex-workflow")
+        self.assertEqual(result, str(workflow_path))
+
+    def test_name_with_underscore(self):
+        """Test name-based lookup works with underscores in name."""
+        workflow_path = self.global_workflows / "my_workflow.yaml"
+        self._create_workflow(workflow_path)
+
+        result = swarm.resolve_workflow_file("my_workflow")
+        self.assertEqual(result, str(workflow_path))
+
+
 class TestWorkflowStatePersistence(unittest.TestCase):
     """Test workflow state persistence functions."""
 

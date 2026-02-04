@@ -261,7 +261,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Same --heartbeat flags as regular spawn
   - Heartbeat during ralph loop
 
-- [ ] **4.2 Add repo-local workflow discovery**
+- [x] **4.2 Add repo-local workflow discovery**
   - Check `.swarm/workflows/` before global
   - Document in help text
 
