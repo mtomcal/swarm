@@ -159,8 +159,7 @@ class RalphState:
     consecutive_failures: int = 0
     total_failures: int = 0
     done_pattern: Optional[str] = None
-    inactivity_timeout: int = 300
-    inactivity_mode: str = "ready"  # output, ready, both
+    inactivity_timeout: int = 60
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -176,7 +175,6 @@ class RalphState:
             "total_failures": self.total_failures,
             "done_pattern": self.done_pattern,
             "inactivity_timeout": self.inactivity_timeout,
-            "inactivity_mode": self.inactivity_mode,
         }
 
     @classmethod
@@ -193,8 +191,7 @@ class RalphState:
             consecutive_failures=d.get("consecutive_failures", 0),
             total_failures=d.get("total_failures", 0),
             done_pattern=d.get("done_pattern"),
-            inactivity_timeout=d.get("inactivity_timeout", 300),
-            inactivity_mode=d.get("inactivity_mode", "ready"),
+            inactivity_timeout=d.get("inactivity_timeout", 60),
         )
 
 
@@ -907,11 +904,8 @@ def main() -> None:
                         help="Path to prompt file for ralph mode (required with --ralph)")
     spawn_p.add_argument("--max-iterations", type=int, default=None,
                         help="Maximum loop iterations for ralph mode (required with --ralph)")
-    spawn_p.add_argument("--inactivity-timeout", type=int, default=300,
-                        help="Inactivity timeout in seconds for ralph mode (default: 300)")
-    spawn_p.add_argument("--inactivity-mode", type=str, choices=["output", "ready", "both"],
-                        default="ready",
-                        help="Inactivity detection mode: output|ready|both (default: ready)")
+    spawn_p.add_argument("--inactivity-timeout", type=int, default=60,
+                        help="Screen stability timeout in seconds for ralph mode (default: 60)")
     spawn_p.add_argument("--done-pattern", type=str, default=None,
                         help="Regex pattern to stop ralph loop when matched in output")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
@@ -1227,7 +1221,6 @@ def cmd_spawn(args) -> None:
             started=datetime.now().isoformat(),
             last_iteration_started=datetime.now().isoformat(),
             inactivity_timeout=args.inactivity_timeout,
-            inactivity_mode=args.inactivity_mode,
             done_pattern=args.done_pattern,
         )
         save_ralph_state(ralph_state)
@@ -2173,7 +2166,6 @@ def cmd_ralph_status(args) -> None:
     print(f"Consecutive failures: {ralph_state.consecutive_failures}")
     print(f"Total failures: {ralph_state.total_failures}")
     print(f"Inactivity timeout: {ralph_state.inactivity_timeout}s")
-    print(f"Inactivity mode: {ralph_state.inactivity_mode}")
 
     if ralph_state.done_pattern:
         print(f"Done pattern: {ralph_state.done_pattern}")
@@ -2378,54 +2370,49 @@ def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple
         time.sleep(1)
 
 
-def detect_inactivity(worker: Worker, timeout: int, mode: str = "ready") -> bool:
-    """Detect if a worker has become inactive.
+def detect_inactivity(worker: Worker, timeout: int) -> bool:
+    """Detect if a worker has become inactive using screen-stable detection.
 
-    Supports three detection modes:
-    - "output": Detects when output stops changing for timeout seconds
-    - "ready": Detects when agent returns to ready state (prompt visible) for timeout seconds
-    - "both": Triggers on either condition (most sensitive)
+    Uses the "screen stable" approach inspired by Playwright's networkidle pattern:
+    waits until the screen has not changed for the specified timeout duration.
+
+    Algorithm:
+    1. Capture last 20 lines of tmux pane every 2 seconds
+    2. Strip ANSI escape codes to normalize content
+    3. Hash the normalized content (MD5)
+    4. If hash unchanged for timeout seconds, trigger restart
+    5. Any screen change resets the timer
 
     Args:
         worker: The worker to monitor
-        timeout: Inactivity timeout in seconds
-        mode: Detection mode ("output", "ready", or "both")
+        timeout: Seconds of screen stability before restart
 
     Returns:
         True if inactivity detected, False otherwise (worker exited or still active)
     """
+    import hashlib
     import re
 
     if not worker.tmux:
         return False
 
     socket = worker.tmux.socket
-    last_output = ""
-    output_inactive_start = None
-    ready_inactive_start = None
+    last_hash = None
+    stable_start = None
 
-    # Ready patterns (same as wait_for_agent_ready)
-    ready_patterns = [
-        r"bypass\s+permissions",
-        r"permissions?\s+mode",
-        r"shift\+tab\s+to\s+cycle",
-        r"Claude\s+Code\s+v\d+",
-        r"(?:^|\x1b\[[0-9;]*m)>\s",
-        r"❯\s",
-        r"opencode\s+v\d+",
-        r"tab\s+switch\s+agent",
-        r"ctrl\+p\s+commands",
-        r"(?:^|\x1b\[[0-9;]*m)\$\s",
-        r"(?:^|\x1b\[[0-9;]*m)>>>\s",
-    ]
+    # Regex to strip ANSI escape codes
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
 
-    def is_ready(output: str) -> bool:
-        """Check if output contains ready patterns."""
-        for line in output.split('\n'):
-            for pattern in ready_patterns:
-                if re.search(pattern, line):
-                    return True
-        return False
+    def normalize_content(output: str) -> str:
+        """Normalize screen content by taking last 20 lines and stripping ANSI codes."""
+        lines = output.split('\n')
+        last_20 = lines[-20:] if len(lines) > 20 else lines
+        joined = '\n'.join(last_20)
+        return ansi_escape.sub('', joined)
+
+    def hash_content(content: str) -> str:
+        """Hash normalized content with MD5."""
+        return hashlib.md5(content.encode()).hexdigest()
 
     while True:
         # Check if worker is still running
@@ -2440,35 +2427,27 @@ def detect_inactivity(worker: Worker, timeout: int, mode: str = "ready") -> bool
                 socket=socket
             )
 
-            # Output-based detection
-            if mode in ("output", "both"):
-                if current_output != last_output:
-                    last_output = current_output
-                    output_inactive_start = None
-                else:
-                    if output_inactive_start is None:
-                        output_inactive_start = time.time()
-                    elif (time.time() - output_inactive_start) >= timeout:
-                        return True
-            else:
-                # Still track output for ready mode
-                last_output = current_output
+            # Normalize and hash the content
+            normalized = normalize_content(current_output)
+            current_hash = hash_content(normalized)
 
-            # Ready-based detection
-            if mode in ("ready", "both"):
-                if is_ready(current_output):
-                    if ready_inactive_start is None:
-                        ready_inactive_start = time.time()
-                    elif (time.time() - ready_inactive_start) >= timeout:
-                        return True
-                else:
-                    ready_inactive_start = None
+            # Compare hashes
+            if current_hash != last_hash:
+                # Screen changed, reset timer
+                last_hash = current_hash
+                stable_start = None
+            else:
+                # Screen unchanged
+                if stable_start is None:
+                    stable_start = time.time()
+                elif (time.time() - stable_start) >= timeout:
+                    return True
 
         except subprocess.CalledProcessError:
             # Window might have closed
             return False
 
-        time.sleep(1)
+        time.sleep(2)
 
 
 def check_done_pattern(worker: Worker, pattern: str) -> bool:
@@ -2832,7 +2811,7 @@ def _run_ralph_loop(args) -> None:
                 continue
 
         # Monitor the worker - detect_inactivity blocks until worker exits or goes inactive
-        inactivity_detected = detect_inactivity(worker, ralph_state.inactivity_timeout, ralph_state.inactivity_mode)
+        inactivity_detected = detect_inactivity(worker, ralph_state.inactivity_timeout)
 
         # Reload ralph state (could have been paused while monitoring)
         ralph_state = load_ralph_state(args.name)
@@ -2846,7 +2825,7 @@ def _run_ralph_loop(args) -> None:
 
         if inactivity_detected:
             # Worker went inactive - restart it
-            print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s, mode={ralph_state.inactivity_mode}), restarting")
+            print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s), restarting")
             log_ralph_iteration(
                 args.name,
                 "TIMEOUT",

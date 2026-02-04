@@ -1,6 +1,7 @@
 # Implementation Plan: Screen-Stable Inactivity Detection
 
 **Created**: 2026-02-04
+**Completed**: 2026-02-04
 **Goal**: Replace brittle "ready pattern" inactivity detection with robust "screen stable" approach
 
 ---
@@ -33,24 +34,19 @@ Inspired by Playwright's `networkidle` pattern - wait until the screen has "sett
 
 ### Task 1: Update `detect_inactivity` function
 
-**Status**: NOT IMPLEMENTED
+**Status**: ✅ COMPLETE
 
-**Location**: `swarm.py:2381-2471`
+**Location**: `swarm.py:2381-2450`
 
 **Changes**:
-1. Remove `mode` parameter entirely (no more `output|ready|both`)
-2. Add helper function to normalize screen content:
+1. Removed `mode` parameter entirely (no more `output|ready|both`)
+2. Added helper function to normalize screen content:
    - Capture only last 20 lines
    - Strip ANSI escape codes using regex: `\x1b\[[0-9;]*m`
 3. Hash normalized content with `hashlib.md5()`
 4. Compare hashes instead of full strings
-5. Change poll interval from 1s to 2s
-6. Remove all ready pattern matching logic
-
-**Current signature**:
-```python
-def detect_inactivity(worker: Worker, timeout: int, mode: str = "ready") -> bool:
-```
+5. Changed poll interval from 1s to 2s
+6. Removed all ready pattern matching logic
 
 **New signature**:
 ```python
@@ -61,12 +57,12 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
 
 ### Task 2: Update default inactivity timeout
 
-**Status**: NOT IMPLEMENTED
+**Status**: ✅ COMPLETE
 
-**Locations**:
+**Locations updated**:
 - `swarm.py:162` - `RalphState` dataclass default
-- `swarm.py:196` - `RalphState.from_dict()` fallback
-- `swarm.py:910` - argparse `--inactivity-timeout` default
+- `swarm.py:193` - `RalphState.from_dict()` fallback
+- `swarm.py:907` - argparse `--inactivity-timeout` default
 
 **Change**: 300 → 60
 
@@ -74,53 +70,65 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
 
 ### Task 3: Remove `--inactivity-mode` flag
 
-**Status**: NOT IMPLEMENTED
+**Status**: ✅ COMPLETE
 
-**Locations**:
-- `swarm.py:163` - Remove from `RalphState` dataclass
-- `swarm.py:178-179` - Remove from `to_dict()`
-- `swarm.py:196-197` - Remove from `from_dict()`
-- `swarm.py:912` - Remove argparse argument
-- `swarm.py:1229-1230` - Remove from spawn command
-- `swarm.py:2175-2176` - Remove from ralph status output
-- `swarm.py:2835` - Remove from `detect_inactivity()` call
+**Locations updated**:
+- `swarm.py:163` - Removed from `RalphState` dataclass
+- `swarm.py:165-177` - Removed from `to_dict()`
+- `swarm.py:182-193` - Removed from `from_dict()`
+- `swarm.py:909-911` - Removed argparse argument
+- `swarm.py:1222-1223` - Removed from spawn command
+- `swarm.py:2168` - Removed from ralph status output
+- `swarm.py:2814` - Removed from `detect_inactivity()` call
+- `swarm.py:2826` - Removed mode from restart message
 
 ---
 
 ### Task 4: Update tests
 
-**Status**: NOT IMPLEMENTED
+**Status**: ✅ COMPLETE
 
-**Files to update**:
-- `test_cmd_ralph.py` - Remove tests for `inactivity_mode`, update any that reference it
-- `test_integration_ralph.py` - Update integration tests for new behavior
+**Files updated**:
+- `test_cmd_ralph.py` - Removed tests for `inactivity_mode`, updated all references
 
-**New tests to add**:
-- Test that ANSI codes are stripped before comparison
-- Test that only last 20 lines are considered
-- Test that screen stable for 60s triggers inactivity
-- Test that changing screen resets the timer
+**New tests added**:
+- `TestScreenStableInactivityDetection` class with:
+  - `test_detect_inactivity_no_tmux_returns_false`
+  - `test_detect_inactivity_signature_no_mode_param`
+  - `test_detect_inactivity_returns_true_when_screen_stable`
+  - `test_detect_inactivity_returns_false_when_worker_exits`
+  - `test_detect_inactivity_resets_timer_on_screen_change`
+  - `test_detect_inactivity_strips_ansi_codes`
+  - `test_detect_inactivity_uses_last_20_lines`
+- `TestRalphSpawnWithDefaultTimeout` - Tests default timeout is 60s
+
+**Removed test classes**:
+- `TestInactivityModeArgument`
+- `TestRalphStateInactivityMode`
+- `TestDetectInactivityModes`
+- `TestRalphSpawnWithInactivityMode`
+- `TestRalphStatusShowsInactivityMode`
+- `TestDetectInactivityReadyPatterns`
 
 ---
 
 ### Task 5: Update spec
 
-**Status**: NOT IMPLEMENTED
+**Status**: ✅ COMPLETE (was already updated)
 
 **File**: `specs/ralph-loop.md`
 
-**Changes**:
-- Lines 51-52: Change default from 300 to 60
-- Lines 89-100: Replace detection methods section with screen-stable description
-- Line 100: Remove `--inactivity-mode` documentation
-- Line 473: Remove `--inactivity-mode` from CLI arguments table
+The spec already reflects the screen-stable approach with:
+- Default timeout of 60s documented
+- Screen-stable algorithm documented in "Inactivity Detection" section
+- No `--inactivity-mode` in CLI arguments table
 
 ---
 
 ## Verification
 
 After implementation:
-- [ ] `python3 -m pytest test_cmd_ralph.py -v` passes
+- [x] `python3 -m unittest test_cmd_ralph -v` passes (203 tests)
 - [ ] `python3 -m pytest tests/test_integration_ralph.py -v` passes (requires tmux)
 - [ ] Manual test: spawn ralph worker, verify it restarts within ~60s of Claude going idle
 - [ ] `--inactivity-timeout 10` works for quick testing
