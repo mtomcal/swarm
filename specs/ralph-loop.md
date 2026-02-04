@@ -48,7 +48,7 @@ Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralp
 **Description**: The main ralph loop that manages agent lifecycle.
 
 **Inputs**:
-- `--inactivity-timeout` (int, optional): Seconds of inactivity before restart (default: 300 / 5 minutes)
+- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 60)
 - `--done-pattern` (str, optional): Regex pattern that stops the loop when matched in output
 
 **Behavior**:
@@ -81,23 +81,24 @@ Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralp
 
 ### Inactivity Detection
 
-**Description**: Detect when an agent has become inactive (stuck or waiting).
+**Description**: Detect when an agent has become inactive using screen-stable detection (inspired by Playwright's `networkidle` pattern).
 
 **Inputs**:
-- `--inactivity-timeout` (int, optional): Timeout in seconds (default: 300)
+- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 60)
 
-**Detection Methods** (both available, configurable):
-1. **Output-based**: No new output in tmux pane for N seconds
-2. **Ready-based**: Agent returns to ready state (prompt visible) for N seconds
+**Algorithm**:
+1. Capture last 20 lines of tmux pane every 2 seconds
+2. Strip ANSI escape codes to normalize content
+3. Hash the normalized content (MD5)
+4. If hash unchanged for `--inactivity-timeout` seconds, trigger restart
+5. Any screen change resets the timer
 
 **Behavior**:
-1. Start inactivity timer when agent becomes ready OR output stops
-2. Reset timer on any new output
-3. When timer expires, trigger restart
-
-**Configuration**:
-- Default uses ready-based detection (more reliable for Claude Code)
-- `--inactivity-mode output|ready|both` to select method
+1. Poll screen content every 2 seconds
+2. Compare normalized content hash to previous
+3. If unchanged, accumulate stable time
+4. If changed, reset stable time to 0
+5. When stable time >= timeout, trigger restart
 
 ### Prompt File Handling
 
@@ -399,7 +400,7 @@ Started: 2024-01-15 10:30:00
 Current iteration started: 2024-01-15 12:45:00
 Consecutive failures: 0
 Total failures: 2
-Inactivity timeout: 300s
+Inactivity timeout: 60s
 Done pattern: All tasks complete
 ```
 
@@ -468,8 +469,7 @@ done
 | `--ralph` | flag | No | false | Enable ralph loop mode |
 | `--prompt-file` | str | If ralph | - | Path to prompt file |
 | `--max-iterations` | int | If ralph | - | Maximum loop iterations |
-| `--inactivity-timeout` | int | No | 300 | Inactivity timeout (seconds) |
-| `--inactivity-mode` | str | No | ready | Detection mode: output\|ready\|both |
+| `--inactivity-timeout` | int | No | 60 | Screen stability timeout (seconds) |
 | `--done-pattern` | str | No | null | Regex to stop loop |
 
 ### Ralph Subcommands
