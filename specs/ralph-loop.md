@@ -2,14 +2,14 @@
 
 ## Overview
 
-The `--ralph` flag enables autonomous agent looping based on the "Ralph Wiggum" pattern. This creates an outer loop that continuously restarts an agent with fresh context windows, allowing long-running autonomous development workflows. Each iteration reads a prompt file from disk, spawns the agent, waits for completion or inactivity timeout, then restarts. This pattern enables agents to work through task lists (like IMPLEMENTATION_PLAN.md) across multiple context windows without human intervention.
+The `swarm ralph spawn` command enables autonomous agent looping based on the "Ralph Wiggum" pattern. This creates an outer loop that continuously restarts an agent with fresh context windows, allowing long-running autonomous development workflows. Each iteration reads a prompt file from disk, spawns the agent, waits for completion or inactivity timeout, then restarts. This pattern enables agents to work through task lists (like IMPLEMENTATION_PLAN.md) across multiple context windows without human intervention.
 
 Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralph-wiggum) for AI-driven development.
 
 ## Dependencies
 
 - **External**:
-  - tmux (required - ralph implies tmux mode)
+  - tmux (required - ralph spawn always uses tmux mode)
   - Filesystem access for prompt files, logs, and state
 - **Internal**:
   - `spawn.md` (worker creation)
@@ -20,26 +20,30 @@ Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralp
 
 ## Behavior
 
-### Ralph Mode Activation
+### Ralph Spawn Command
 
-**Description**: Enable ralph loop mode for a worker.
+**Description**: Spawn a new worker with ralph loop mode enabled.
+
+**Command**:
+```bash
+swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <command>
+```
 
 **Inputs**:
-- `--ralph` (flag, required): Enable ralph loop mode
+- `--name` (str, required): Unique worker identifier
 - `--prompt-file` (str, required): Path to prompt file read each iteration
 - `--max-iterations` (int, required): Maximum number of loop iterations
+- `-- <command>` (required): Command to spawn (e.g., `claude`)
 
 **Behavior**:
-1. Validate `--ralph` is used with required flags
-2. Automatically enable `--tmux` mode (ralph requires tmux)
-3. Validate prompt file exists and is readable
+1. Validate prompt file exists and is readable
+2. Automatically use tmux mode (no `--tmux` flag needed)
+3. Create worker and ralph state
 4. Warn if `--max-iterations` exceeds 50
 
 **Error Conditions**:
 | Condition | Behavior |
 |-----------|----------|
-| `--ralph` without `--prompt-file` | Exit 1 with "swarm: error: --ralph requires --prompt-file" |
-| `--ralph` without `--max-iterations` | Exit 1 with "swarm: error: --ralph requires --max-iterations" |
 | Prompt file not found | Exit 1 with "swarm: error: prompt file not found: <path>" |
 | `--max-iterations` > 50 | Warning to stderr: "swarm: warning: high iteration count (>50) may consume significant resources" |
 
@@ -450,7 +454,7 @@ watch -n 5 'for w in $(swarm ls --format names); do echo "=== $w ==="; swarm ral
 
 To get notified when ralph completes or fails, wrap the spawn:
 ```bash
-swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 100 -- claude \
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude \
   && notify-send "Ralph complete" \
   || notify-send "Ralph failed"
 ```
@@ -464,27 +468,34 @@ done
 
 ## CLI Arguments
 
+### Ralph Spawn Arguments
+
 | Argument | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `--ralph` | flag | No | false | Enable ralph loop mode |
-| `--prompt-file` | str | If ralph | - | Path to prompt file |
-| `--max-iterations` | int | If ralph | - | Maximum loop iterations |
+| `--name` | str | Yes | - | Unique worker identifier |
+| `--prompt-file` | str | Yes | - | Path to prompt file |
+| `--max-iterations` | int | Yes | - | Maximum loop iterations |
 | `--inactivity-timeout` | int | No | 60 | Screen stability timeout (seconds) |
 | `--done-pattern` | str | No | null | Regex to stop loop |
 
-### Ralph Subcommands
+### Ralph Management Subcommands
 
 | Command | Description |
 |---------|-------------|
+| `swarm ralph spawn --name <n> --prompt-file <f> --max-iterations <n> -- <cmd>` | Spawn ralph worker |
 | `swarm ralph pause <name>` | Pause ralph loop |
 | `swarm ralph resume <name>` | Resume ralph loop |
 | `swarm ralph status <name>` | Show ralph loop status |
+| `swarm ralph list` | List all ralph workers |
+| `swarm ralph init` | Create PROMPT.md template |
+| `swarm ralph template` | Output template to stdout |
+| `swarm ralph run <name>` | Run the ralph loop (internal) |
 
 ## Scenarios
 
 ### Scenario: Basic ralph loop
 - **Given**: Prompt file exists at `./PROMPT.md`
-- **When**: `swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
 - **Then**:
   - Worker spawned in tmux mode
   - Prompt file read and passed to claude

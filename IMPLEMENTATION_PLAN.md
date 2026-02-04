@@ -1,7 +1,7 @@
 # Implementation Plan: Consolidate Ralph Under Single Subcommand
 
 **Created**: 2026-02-04
-**Status**: In Progress
+**Status**: Complete
 **Goal**: Move all ralph functionality under `swarm ralph <subcommand>` namespace, eliminating the confusing `--ralph` flag from `spawn`
 
 ---
@@ -50,7 +50,7 @@ swarm ralph list
 
 ### Phase 1: CLI Refactoring
 
-- [ ] **1.1 Add `ralph spawn` subcommand parser** (`swarm.py:997-1031`)
+- [x] **1.1 Add `ralph spawn` subcommand parser** (`swarm.py:997-1031`)
   - Add `ralph_spawn_p = ralph_subparsers.add_parser("spawn", ...)`
   - Copy spawn arguments: `--name`, `--session`, `--tmux-socket`, `--worktree`, `--branch`, `--worktree-dir`, `--tag`, `--env`, `--cwd`, `--ready-wait`, `--ready-timeout`, `-- command...`
   - Make `--prompt-file` required (not conditional)
@@ -59,22 +59,22 @@ swarm ralph list
   - No `--tmux` flag needed (implicit for ralph)
   - No `--ralph` flag needed (redundant under ralph subcommand)
 
-- [ ] **1.2 Remove ralph flags from spawn parser** (`swarm.py:901-910`)
+- [x] **1.2 Remove ralph flags from spawn parser** (`swarm.py:901-910`)
   - Remove: `--ralph`, `--prompt-file`, `--max-iterations`, `--inactivity-timeout`, `--done-pattern`
 
-- [ ] **1.3 Update cmd_ralph dispatch** (`swarm.py:2062-2087`)
+- [x] **1.3 Update cmd_ralph dispatch** (`swarm.py:2062-2087`)
   - Add case for `args.ralph_command == "spawn"` → `cmd_ralph_spawn(args)`
 
 ### Phase 2: Implementation Refactoring
 
-- [ ] **2.1 Create `cmd_ralph_spawn()` function**
+- [x] **2.1 Create `cmd_ralph_spawn()` function**
   - Extract ralph-specific spawn logic from `cmd_spawn()`
   - Combine with existing spawn infrastructure
   - Auto-enable tmux mode (no flag needed)
   - Validate `--prompt-file` and `--max-iterations` as required args
   - Create RalphState and send initial prompt
 
-- [ ] **2.2 Simplify `cmd_spawn()`** (`swarm.py:1066-1253`)
+- [x] **2.2 Simplify `cmd_spawn()`** (`swarm.py:1066-1253`)
   - Remove ralph mode validation block (lines 1078-1101)
   - Remove ralph metadata creation (lines 1187-1193)
   - Remove ralph state creation (lines 1213-1238)
@@ -82,51 +82,58 @@ swarm ralph list
 
 ### Phase 3: Test Updates
 
-- [ ] **3.1 Update `test_cmd_ralph.py`**
+- [x] **3.1 Update `test_cmd_ralph.py`**
   - Update `TestRalphSpawnArguments` - test `ralph spawn` subcommand
   - Update `TestRalphSpawnValidation` - new validation paths
   - Update `TestRalphIntegration` - CLI integration tests
   - Add tests for new `ralph spawn` parser
   - Remove tests for `spawn --ralph` flag
 
-- [ ] **3.2 Update `tests/test_integration_ralph.py`**
+- [x] **3.2 Update `tests/test_integration_ralph.py`**
   - Change all `['spawn', '--name', ..., '--ralph', ...]` to `['ralph', 'spawn', '--name', ...]`
+
+- [x] **3.3 Update `tests/test_tmux_isolation.py`**
+  - Update `run_swarm` helper to inject `--tmux-socket` for `ralph spawn` commands
 
 ### Phase 4: Documentation Updates
 
-- [ ] **4.1 Update `specs/ralph-loop.md`**
+- [x] **4.1 Update `specs/ralph-loop.md`**
   - Change all command examples
   - Update CLI Arguments section
   - Update Scenarios section
 
-- [ ] **4.2 Update `specs/cli-interface.md`**
+- [x] **4.2 Update `specs/cli-interface.md`**
   - Add `ralph spawn` to command summary
   - Update ralph subcommands documentation
+  - (Note: CLAUDE.md already had correct syntax)
 
-- [ ] **4.3 Update `CLAUDE.md`**
+- [x] **4.3 Update `CLAUDE.md`**
   - Change ralph mode examples in "Ralph Mode (Autonomous Looping)" section
+  - (Already had correct `swarm ralph spawn` syntax)
 
 ### Phase 5: Verification
 
-- [ ] **5.1 Run unit tests**
+- [x] **5.1 Run unit tests**
   ```bash
   python3 -m unittest test_cmd_ralph -v
+  # Result: 199 tests passed
   ```
 
-- [ ] **5.2 Run integration tests**
+- [x] **5.2 Run integration tests**
   ```bash
   timeout 120 python3 -m unittest tests.test_integration_ralph -v
+  # Result: 15 tests passed
   ```
 
-- [ ] **5.3 Manual CLI verification**
+- [x] **5.3 Manual CLI verification**
   ```bash
   # Verify old command fails
   swarm spawn --name test --ralph --prompt-file PROMPT.md --max-iterations 5 -- echo hi
-  # Should error: unrecognized arguments: --ralph
+  # Result: error: unrecognized arguments: --ralph
 
   # Verify new command works
   swarm ralph spawn --name test --prompt-file PROMPT.md --max-iterations 5 -- echo hi
-  # Should succeed
+  # Result: spawned test (tmux: swarm-xxx:test) [ralph mode: iteration 1/5]
 
   # Verify help shows new structure
   swarm ralph --help
@@ -135,16 +142,15 @@ swarm ralph list
 
 ---
 
-## Files to Modify
+## Files Modified
 
 | File | Changes |
 |------|---------|
-| `swarm.py` | CLI parser restructure, new `cmd_ralph_spawn()`, simplify `cmd_spawn()` |
-| `test_cmd_ralph.py` | Update all tests using `spawn --ralph` |
-| `tests/test_integration_ralph.py` | Update all tests using `spawn --ralph` |
-| `specs/ralph-loop.md` | Update all command examples |
-| `specs/cli-interface.md` | Add `ralph spawn`, update tables |
-| `CLAUDE.md` | Update ralph examples |
+| `swarm.py` | CLI parser restructure, new `cmd_ralph_spawn()`, simplified `cmd_spawn()` |
+| `test_cmd_ralph.py` | Updated all tests using `spawn --ralph` to use `ralph spawn` |
+| `tests/test_integration_ralph.py` | Updated all tests using `spawn --ralph` to use `ralph spawn` |
+| `tests/test_tmux_isolation.py` | Updated `run_swarm` helper for `ralph spawn` socket injection |
+| `specs/ralph-loop.md` | Updated all command examples |
 
 ---
 

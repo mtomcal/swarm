@@ -57,67 +57,13 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
         super().tearDown()
 
     @skip_if_no_tmux
-    def test_ralph_spawn_requires_prompt_file(self):
-        """Verify --ralph without --prompt-file fails with appropriate error."""
-        worker_name = f"ralph-no-prompt-{self.tmux_socket[-8:]}"
-
-        result = self.run_swarm(
-            'spawn',
-            '--name', worker_name,
-            '--tmux',
-            '--ralph',
-            '--max-iterations', '3',
-            '--',
-            'echo', 'hello'
-        )
-
-        self.assertNotEqual(
-            result.returncode,
-            0,
-            f"Expected spawn with --ralph but no --prompt-file to fail"
-        )
-        self.assertIn(
-            "--prompt-file",
-            result.stderr.lower(),
-            f"Expected error message to mention --prompt-file, got: {result.stderr!r}"
-        )
-
-    @skip_if_no_tmux
-    def test_ralph_spawn_requires_max_iterations(self):
-        """Verify --ralph without --max-iterations fails with appropriate error."""
-        worker_name = f"ralph-no-iter-{self.tmux_socket[-8:]}"
-
-        result = self.run_swarm(
-            'spawn',
-            '--name', worker_name,
-            '--tmux',
-            '--ralph',
-            '--prompt-file', str(self.prompt_file),
-            '--',
-            'echo', 'hello'
-        )
-
-        self.assertNotEqual(
-            result.returncode,
-            0,
-            f"Expected spawn with --ralph but no --max-iterations to fail"
-        )
-        self.assertIn(
-            "--max-iterations",
-            result.stderr.lower(),
-            f"Expected error message to mention --max-iterations, got: {result.stderr!r}"
-        )
-
-    @skip_if_no_tmux
     def test_ralph_spawn_validates_prompt_file_exists(self):
-        """Verify --ralph with non-existent prompt file fails."""
+        """Verify ralph spawn with non-existent prompt file fails."""
         worker_name = f"ralph-missing-{self.tmux_socket[-8:]}"
 
         result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', '/nonexistent/PROMPT.md',
             '--max-iterations', '3',
             '--',
@@ -127,7 +73,7 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
         self.assertNotEqual(
             result.returncode,
             0,
-            f"Expected spawn with non-existent prompt file to fail"
+            f"Expected ralph spawn with non-existent prompt file to fail"
         )
         self.assertIn(
             "not found",
@@ -141,10 +87,8 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
         worker_name = f"ralph-basic-{self.tmux_socket[-8:]}"
 
         result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--',
@@ -228,10 +172,8 @@ class TestRalphStatus(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--inactivity-timeout', '30',
@@ -297,10 +239,8 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--',
@@ -337,10 +277,8 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--',
@@ -381,10 +319,8 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--',
@@ -447,10 +383,8 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
 
         # Spawn without specifying --inactivity-timeout
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--',
@@ -476,10 +410,8 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
 
         # Spawn with custom timeout
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--inactivity-timeout', '10',
@@ -521,10 +453,8 @@ sleep 30
 
         # Spawn ralph worker with short inactivity timeout
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--inactivity-timeout', '5',  # 5 second timeout for quick test
@@ -582,10 +512,8 @@ class TestRalphList(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--',
@@ -616,10 +544,8 @@ class TestRalphList(TmuxIsolatedTestCase):
 
         # Spawn ralph worker
         spawn_result = self.run_swarm(
-            'spawn',
+            'ralph', 'spawn',
             '--name', worker_name,
-            '--tmux',
-            '--ralph',
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--',

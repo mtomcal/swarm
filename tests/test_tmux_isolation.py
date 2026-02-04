@@ -160,9 +160,10 @@ class TmuxIsolatedTestCase(unittest.TestCase):
         # Build command with tmux socket injection
         args_list = list(args)
 
-        # Inject --tmux-socket flag if spawning with --tmux
+        # Inject --tmux-socket flag if spawning with --tmux or using ralph spawn
         # Must insert BEFORE '--' separator if present, otherwise append
-        if "--tmux" in args_list:
+        needs_socket = "--tmux" in args_list or (len(args_list) >= 2 and args_list[0] == "ralph" and args_list[1] == "spawn")
+        if needs_socket:
             if "--" in args_list:
                 # Insert before the '--' separator
                 dash_idx = args_list.index("--")

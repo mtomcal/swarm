@@ -52,7 +52,7 @@ State stored in `~/.swarm/state.json`. Logs in `~/.swarm/logs/`.
 ### Ralph Mode (Autonomous Looping)
 Ralph mode enables autonomous agent looping with fresh context windows:
 ```bash
-swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 100 -- claude
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude
 swarm ralph status agent     # Check iteration progress
 swarm ralph pause agent      # Pause the loop
 swarm ralph resume agent     # Resume the loop
@@ -63,11 +63,29 @@ Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is 
 
 ## Project Structure
 
-- `swarm.py` - Main implementation (~2876 lines)
-- `test_cmd_ralph.py` - Unit tests for ralph mode (203 tests)
-- `tests/test_integration_ralph.py` - Integration tests requiring tmux (17 tests)
-- `tests/test_tmux_isolation.py` - TmuxIsolatedTestCase base class for integration tests
-- `specs/` - Behavioral specifications (one per feature)
+### Core Files
+- `swarm.py` - Main implementation (~2876 lines), single-file CLI tool
+- `IMPLEMENTATION_PLAN.md` - Current development plan with task checkboxes
+- `specs/README.md` - Meta-spec defining how specs are written
+
+### Specifications (`specs/`)
+Behavioral specs in priority order (P0 = critical):
+- **P0**: `worktree-isolation.md`, `ready-detection.md`, `state-management.md`
+- **P1**: `spawn.md`, `ralph-loop.md`, `kill.md`, `send.md`, `tmux-integration.md`
+- **P2**: `ls.md`, `status.md`, `logs.md`, `wait.md`, `clean.md`, `respawn.md`, `interrupt-eof.md`, `attach.md`, `init.md`
+- **Supporting**: `data-structures.md`, `environment.md`, `cli-interface.md`
+
+### Test Files (26 total)
+Unit tests in root directory (`test_*.py`):
+- `test_cmd_ralph.py` - Ralph mode unit tests (203 tests)
+- `test_cmd_spawn.py`, `test_cmd_kill.py`, `test_cmd_ls.py`, etc. - Command-specific tests
+- `test_state_file_locking.py` - State management tests
+- `test_ready_patterns.py` - Agent readiness detection tests
+- `test_worktree_protection.py` - Git worktree safety tests
+
+Integration tests in `tests/`:
+- `tests/test_integration_ralph.py` - Ralph integration tests (17 tests, requires tmux)
+- `tests/test_tmux_isolation.py` - `TmuxIsolatedTestCase` base class for tmux tests
 
 ## Testing Guidelines
 
@@ -75,12 +93,33 @@ Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is 
 ```bash
 python3 -m unittest test_cmd_ralph -v           # Ralph unit tests
 python3 -m unittest tests.test_integration_ralph -v  # Integration tests (requires tmux)
+python3 -m unittest test_cmd_spawn -v           # Spawn command tests
 ```
 
 ### Integration Test Tips
 - **Always use `timeout`** to prevent hanging tests: `timeout 60 python3 -m unittest ...`
 - Integration tests use `TmuxIsolatedTestCase` from `tests/test_tmux_isolation.py`
 - Each test gets a unique tmux socket for isolation
-- Commands using `--ralph` call `wait_for_agent_ready()` which looks for prompt patterns
 - Use commands that output ready patterns (e.g., `'bash', '-c', 'echo "$ ready"; sleep 30'`)
 - Simple `sleep` commands will hang because they never produce a ready pattern
+
+### Test Patterns
+- Unit tests mock `State()` and filesystem, don't require tmux
+- Integration tests inherit from `TmuxIsolatedTestCase` and use `self.run_swarm()` helper
+- Cleanup in `tearDown()`: kill workers, clean state, remove temp dirs
+
+## Architecture Notes
+
+### State Management
+- Worker state: `~/.swarm/state.json` (fcntl locked for concurrent access)
+- Ralph state: `~/.swarm/ralph/<name>/state.json`
+- Logs: `~/.swarm/logs/`
+
+### Key Data Classes (swarm.py)
+- `Worker` - Worker process record (name, status, cmd, tmux/worktree info, metadata)
+- `TmuxInfo` - Tmux session/window/socket info
+- `WorktreeInfo` - Git worktree path/branch/base_repo
+- `RalphState` - Ralph loop state (iteration, status, failures, timeouts)
+
+### CLI Structure
+Commands defined in `main()` via argparse subparsers. Each command has a `cmd_<name>(args)` handler function. Ralph has nested subparsers under `swarm ralph <subcommand>`.

@@ -897,17 +897,6 @@ def main() -> None:
                         help="Wait for agent to be ready before returning (tmux only)")
     spawn_p.add_argument("--ready-timeout", type=int, default=120,
                         help="Timeout in seconds for --ready-wait (default: 120, suitable for Claude Code startup)")
-    # Ralph mode arguments
-    spawn_p.add_argument("--ralph", action="store_true",
-                        help="Enable ralph loop mode (autonomous agent looping)")
-    spawn_p.add_argument("--prompt-file", type=str, default=None,
-                        help="Path to prompt file for ralph mode (required with --ralph)")
-    spawn_p.add_argument("--max-iterations", type=int, default=None,
-                        help="Maximum loop iterations for ralph mode (required with --ralph)")
-    spawn_p.add_argument("--inactivity-timeout", type=int, default=60,
-                        help="Screen stability timeout in seconds for ralph mode (default: 60)")
-    spawn_p.add_argument("--done-pattern", type=str, default=None,
-                        help="Regex pattern to stop ralph loop when matched in output")
     spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                         help="Command to run (after --)")
 
@@ -1029,6 +1018,38 @@ def main() -> None:
     ralph_list_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
                               default="all", help="Filter by ralph status (default: all)")
 
+    # ralph spawn - spawn a new ralph worker
+    ralph_spawn_p = ralph_subparsers.add_parser("spawn", help="Spawn a new ralph worker")
+    ralph_spawn_p.add_argument("--name", required=True, help="Unique identifier for this worker")
+    ralph_spawn_p.add_argument("--prompt-file", required=True,
+                               help="Path to prompt file (required)")
+    ralph_spawn_p.add_argument("--max-iterations", type=int, required=True,
+                               help="Maximum loop iterations (required)")
+    ralph_spawn_p.add_argument("--inactivity-timeout", type=int, default=60,
+                               help="Screen stability timeout in seconds (default: 60)")
+    ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
+                               help="Regex pattern to stop ralph loop when matched in output")
+    ralph_spawn_p.add_argument("--session", default=None,
+                               help="Tmux session name (default: hash-based isolation)")
+    ralph_spawn_p.add_argument("--tmux-socket", default=None,
+                               help="Tmux socket name (for testing/isolation)")
+    ralph_spawn_p.add_argument("--worktree", action="store_true",
+                               help="Create a git worktree")
+    ralph_spawn_p.add_argument("--branch", help="Branch name for worktree (default: same as --name)")
+    ralph_spawn_p.add_argument("--worktree-dir", default=None,
+                               help="Parent dir for worktrees (default: <repo>-worktrees)")
+    ralph_spawn_p.add_argument("--tag", action="append", default=[], dest="tags",
+                               help="Tag for filtering (repeatable)")
+    ralph_spawn_p.add_argument("--env", action="append", default=[],
+                               help="Environment variable KEY=VAL (repeatable)")
+    ralph_spawn_p.add_argument("--cwd", help="Working directory")
+    ralph_spawn_p.add_argument("--ready-wait", action="store_true",
+                               help="Wait for agent to be ready before returning")
+    ralph_spawn_p.add_argument("--ready-timeout", type=int, default=120,
+                               help="Timeout in seconds for --ready-wait (default: 120)")
+    ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
+                               help="Command to run (after --)")
+
     args = parser.parse_args()
 
     # Dispatch to command handlers
@@ -1074,31 +1095,6 @@ def cmd_spawn(args) -> None:
     if not cmd:
         print("swarm: error: no command provided (use -- command...)", file=sys.stderr)
         sys.exit(1)
-
-    # Ralph mode validation
-    if args.ralph:
-        # --ralph requires --prompt-file
-        if args.prompt_file is None:
-            print("swarm: error: --ralph requires --prompt-file", file=sys.stderr)
-            sys.exit(1)
-
-        # --ralph requires --max-iterations
-        if args.max_iterations is None:
-            print("swarm: error: --ralph requires --max-iterations", file=sys.stderr)
-            sys.exit(1)
-
-        # Validate prompt file exists
-        prompt_path = Path(args.prompt_file)
-        if not prompt_path.exists():
-            print(f"swarm: error: prompt file not found: {args.prompt_file}", file=sys.stderr)
-            sys.exit(1)
-
-        # Warn for high iteration count
-        if args.max_iterations > 50:
-            print("swarm: warning: high iteration count (>50) may consume significant resources", file=sys.stderr)
-
-        # Auto-enable tmux mode for ralph
-        args.tmux = True
 
     # Load state and check for duplicate name
     state = State()
@@ -1184,14 +1180,6 @@ def cmd_spawn(args) -> None:
             print(f"swarm: error: failed to spawn process: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Build metadata for ralph workers
-    metadata = {}
-    if args.ralph:
-        metadata = {
-            "ralph": True,
-            "ralph_iteration": 1,  # Starting with iteration 1
-        }
-
     # Create Worker object
     worker = Worker(
         name=args.name,
@@ -1204,38 +1192,10 @@ def cmd_spawn(args) -> None:
         tmux=tmux_info,
         worktree=worktree_info,
         pid=pid,
-        metadata=metadata,
     )
 
     # Add to state
     state.add_worker(worker)
-
-    # Create ralph state if in ralph mode
-    if args.ralph:
-        ralph_state = RalphState(
-            worker_name=args.name,
-            prompt_file=str(Path(args.prompt_file).resolve()),
-            max_iterations=args.max_iterations,
-            current_iteration=1,  # Starting at iteration 1, not 0
-            status="running",
-            started=datetime.now().isoformat(),
-            last_iteration_started=datetime.now().isoformat(),
-            inactivity_timeout=args.inactivity_timeout,
-            done_pattern=args.done_pattern,
-        )
-        save_ralph_state(ralph_state)
-
-        # Log the iteration start
-        log_ralph_iteration(
-            args.name,
-            "START",
-            iteration=1,
-            max_iterations=args.max_iterations
-        )
-
-        # Send the prompt to the worker for the first iteration
-        prompt_content = Path(args.prompt_file).read_text()
-        send_prompt_to_worker(worker, prompt_content)
 
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:
@@ -1245,10 +1205,7 @@ def cmd_spawn(args) -> None:
 
     # Print success message
     if tmux_info:
-        msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
-        if args.ralph:
-            msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
-        print(msg)
+        print(f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})")
     else:
         print(f"spawned {args.name} (pid: {pid})")
 
@@ -2063,6 +2020,7 @@ def cmd_ralph(args) -> None:
     """Ralph loop management commands.
 
     Dispatches to ralph subcommands:
+    - spawn: Spawn a new ralph worker
     - init: Create PROMPT.md with starter template
     - template: Output template to stdout
     - status: Show ralph loop status for a worker
@@ -2071,7 +2029,9 @@ def cmd_ralph(args) -> None:
     - run: Run the ralph loop (main outer loop execution)
     - list: List all ralph workers
     """
-    if args.ralph_command == "init":
+    if args.ralph_command == "spawn":
+        cmd_ralph_spawn(args)
+    elif args.ralph_command == "init":
         cmd_ralph_init(args)
     elif args.ralph_command == "template":
         cmd_ralph_template(args)
@@ -2085,6 +2045,167 @@ def cmd_ralph(args) -> None:
         cmd_ralph_run(args)
     elif args.ralph_command == "list":
         cmd_ralph_list(args)
+
+
+def cmd_ralph_spawn(args) -> None:
+    """Spawn a new ralph worker.
+
+    Spawns a worker in tmux mode with ralph loop configuration.
+    Creates both the worker and ralph state for autonomous looping.
+
+    Args:
+        args: Namespace with spawn arguments
+    """
+    # Parse command from args.cmd (strip leading '--' if present)
+    cmd = args.cmd
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+
+    # Validate command is not empty
+    if not cmd:
+        print("swarm: error: no command provided (use -- command...)", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate prompt file exists
+    prompt_path = Path(args.prompt_file)
+    if not prompt_path.exists():
+        print(f"swarm: error: prompt file not found: {args.prompt_file}", file=sys.stderr)
+        sys.exit(1)
+
+    # Warn for high iteration count
+    if args.max_iterations > 50:
+        print("swarm: warning: high iteration count (>50) may consume significant resources", file=sys.stderr)
+
+    # Load state and check for duplicate name
+    state = State()
+    if state.get_worker(args.name) is not None:
+        print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine working directory
+    cwd = Path.cwd()
+    worktree_info = None
+
+    if args.worktree:
+        # Get git root
+        try:
+            git_root = get_git_root()
+        except subprocess.CalledProcessError:
+            print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
+            sys.exit(1)
+
+        # Compute worktree path relative to git root
+        if args.worktree_dir is None:
+            # Default: <repo-name>-worktrees as sibling to repo
+            worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
+        else:
+            worktree_dir = Path(args.worktree_dir)
+            if not worktree_dir.is_absolute():
+                worktree_dir = git_root.parent / worktree_dir
+
+        worktree_path = worktree_dir / args.name
+
+        # Determine branch name
+        branch = args.branch if args.branch else args.name
+
+        # Create worktree
+        try:
+            create_worktree(worktree_path, branch)
+        except subprocess.CalledProcessError as e:
+            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Set cwd to worktree
+        cwd = worktree_path
+
+        # Store worktree info
+        worktree_info = WorktreeInfo(
+            path=str(worktree_path),
+            branch=branch,
+            base_repo=str(git_root)
+        )
+    elif args.cwd:
+        cwd = Path(args.cwd)
+
+    # Parse environment variables from KEY=VAL format
+    env_dict = {}
+    for env_str in args.env:
+        if "=" not in env_str:
+            print(f"swarm: error: invalid env format '{env_str}' (expected KEY=VAL)", file=sys.stderr)
+            sys.exit(1)
+        key, val = env_str.split("=", 1)
+        env_dict[key] = val
+
+    # Spawn the worker in tmux (always tmux for ralph)
+    session = args.session if args.session else get_default_session_name()
+    socket = args.tmux_socket
+    try:
+        create_tmux_window(session, args.name, cwd, cmd, socket)
+        tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
+    except subprocess.CalledProcessError as e:
+        print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Build metadata for ralph worker
+    metadata = {
+        "ralph": True,
+        "ralph_iteration": 1,  # Starting with iteration 1
+    }
+
+    # Create Worker object
+    worker = Worker(
+        name=args.name,
+        status="running",
+        cmd=cmd,
+        started=datetime.now().isoformat(),
+        cwd=str(cwd),
+        env=env_dict,
+        tags=args.tags,
+        tmux=tmux_info,
+        worktree=worktree_info,
+        pid=None,
+        metadata=metadata,
+    )
+
+    # Add to state
+    state.add_worker(worker)
+
+    # Create ralph state
+    ralph_state = RalphState(
+        worker_name=args.name,
+        prompt_file=str(Path(args.prompt_file).resolve()),
+        max_iterations=args.max_iterations,
+        current_iteration=1,  # Starting at iteration 1, not 0
+        status="running",
+        started=datetime.now().isoformat(),
+        last_iteration_started=datetime.now().isoformat(),
+        inactivity_timeout=args.inactivity_timeout,
+        done_pattern=args.done_pattern,
+    )
+    save_ralph_state(ralph_state)
+
+    # Log the iteration start
+    log_ralph_iteration(
+        args.name,
+        "START",
+        iteration=1,
+        max_iterations=args.max_iterations
+    )
+
+    # Send the prompt to the worker for the first iteration
+    prompt_content = Path(args.prompt_file).read_text()
+    send_prompt_to_worker(worker, prompt_content)
+
+    # Wait for agent to be ready if requested
+    if args.ready_wait:
+        socket = tmux_info.socket if tmux_info else None
+        if not wait_for_agent_ready(tmux_info.session, tmux_info.window, args.ready_timeout, socket):
+            print(f"swarm: warning: agent '{args.name}' did not become ready within {args.ready_timeout}s", file=sys.stderr)
+
+    # Print success message
+    msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
+    msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
+    print(msg)
 
 
 def cmd_ralph_init(args) -> None:

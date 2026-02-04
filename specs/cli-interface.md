@@ -44,6 +44,20 @@ swarm <command> [options] [arguments]
 | `clean` | Clean up dead workers | Yes |
 | `respawn` | Respawn a dead worker | No |
 | `init` | Initialize swarm in project | No |
+| `ralph` | Ralph mode subcommands | No |
+
+### Ralph Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `ralph spawn` | Spawn a new ralph worker |
+| `ralph status` | Get ralph worker status |
+| `ralph pause` | Pause ralph loop |
+| `ralph resume` | Resume ralph loop |
+| `ralph init` | Create PROMPT.md template |
+| `ralph template` | Output template to stdout |
+| `ralph list` | List ralph workers |
+| `ralph run` | Run ralph loop (internal) |
 
 ### Global Exit Codes
 
