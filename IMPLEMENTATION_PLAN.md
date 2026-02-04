@@ -47,7 +47,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add examples for each format (table, json, names)
   - Add filter examples (--status, --tag)
 
-- [ ] **1.4 Enhance `swarm status --help`**
+- [x] **1.4 Enhance `swarm status --help`**
   - Add description of status output fields
   - Add examples showing different worker states
 

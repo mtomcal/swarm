@@ -260,6 +260,57 @@ See Also:
   swarm kill --help      Stop workers
 """
 
+# Status command help
+STATUS_HELP_DESCRIPTION = """\
+Show detailed status information for a single worker.
+
+Displays the worker's current state (running/stopped) along with execution
+context: tmux session and window (for tmux workers), process ID (for background
+workers), worktree path (if using git isolation), and uptime since spawn.
+
+Exit Codes:
+  0  Worker is running
+  1  Worker is stopped
+  2  Worker not found
+"""
+
+STATUS_HELP_EPILOG = """\
+Output Format:
+  <name>: <status> (<context>, uptime <duration>)
+
+  Where:
+    status    running or stopped (live-checked against tmux/process)
+    context   tmux window (e.g., "tmux window swarm-abc:feature1")
+              or process ID (e.g., "pid 12345")
+              plus worktree path if applicable
+    uptime    Time since spawn (e.g., 5s, 2m, 1h, 3d)
+
+Examples:
+  # Check if a worker is running
+  swarm status my-worker
+
+  # Use in a script with exit code
+  if swarm status worker1 >/dev/null 2>&1; then
+    echo "Worker is running"
+  else
+    echo "Worker is not running"
+  fi
+
+  # Check all workers in a loop
+  swarm ls --format names | while read name; do
+    swarm status "$name"
+  done
+
+  # Get status with full output
+  swarm status feature-auth
+  # Output: feature-auth: running (tmux window swarm-abc:feature-auth, worktree /code-worktrees/feature-auth, uptime 2h)
+
+See Also:
+  swarm ls --help        List all workers with status
+  swarm logs --help      View worker output
+  swarm attach --help    Attach to worker's tmux window
+"""
+
 RALPH_HELP_DESCRIPTION = """\
 Autonomous agent looping using the Ralph Wiggum pattern.
 
@@ -1287,8 +1338,15 @@ def main() -> None:
                           "in their tag list are shown.")
 
     # status
-    status_p = subparsers.add_parser("status", help="Get worker status")
-    status_p.add_argument("name", help="Worker name")
+    status_p = subparsers.add_parser(
+        "status",
+        help="Get worker status",
+        description=STATUS_HELP_DESCRIPTION,
+        epilog=STATUS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    status_p.add_argument("name",
+                         help="Worker name. Must match a registered worker exactly.")
 
     # send
     send_p = subparsers.add_parser("send", help="Send text to worker")
