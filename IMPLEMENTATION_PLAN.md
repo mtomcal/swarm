@@ -52,16 +52,16 @@ Current ralph UX has friction points:
   - Store in RalphState dataclass
   - Persist in ralph state JSON
 
-- [ ] **2.2 Modify `detect_inactivity()` to check done pattern**
+- [x] **2.2 Modify `detect_inactivity()` to check done pattern**
   - If `check_done_continuous` is True
   - Check done pattern each poll cycle (every 2 seconds)
   - Return early if pattern matched (with distinct return value)
 
-- [ ] **2.3 Update `_run_ralph_loop()` to handle continuous done**
+- [x] **2.3 Update `_run_ralph_loop()` to handle continuous done**
   - Distinguish between inactivity timeout vs done pattern match
   - Log appropriately: "[ralph] agent: done pattern matched, stopping loop"
 
-- [ ] **2.4 Add tests for continuous done pattern**
+- [x] **2.4 Add tests for continuous done pattern**
   - Test: pattern matched during monitoring stops loop immediately
   - Test: pattern NOT matched continues monitoring
   - Test: flag persists in ralph state

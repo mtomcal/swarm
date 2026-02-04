@@ -2508,7 +2508,12 @@ def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple
         time.sleep(1)
 
 
-def detect_inactivity(worker: Worker, timeout: int) -> bool:
+def detect_inactivity(
+    worker: Worker,
+    timeout: int,
+    done_pattern: Optional[str] = None,
+    check_done_continuous: bool = False
+) -> str:
     """Detect if a worker has become inactive using screen-stable detection.
 
     Uses the "screen stable" approach inspired by Playwright's networkidle pattern:
@@ -2520,19 +2525,25 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
     3. Hash the normalized content (MD5)
     4. If hash unchanged for timeout seconds, trigger restart
     5. Any screen change resets the timer
+    6. If check_done_continuous, check done pattern each poll cycle
 
     Args:
         worker: The worker to monitor
         timeout: Seconds of screen stability before restart
+        done_pattern: Optional regex pattern to check for completion
+        check_done_continuous: If True, check done pattern during monitoring
 
     Returns:
-        True if inactivity detected, False otherwise (worker exited or still active)
+        String indicating why monitoring ended:
+        - "exited": Worker exited on its own
+        - "inactive": Inactivity timeout reached
+        - "done_pattern": Done pattern matched (only if check_done_continuous)
     """
     import hashlib
     import re
 
     if not worker.tmux:
-        return False
+        return "exited"
 
     socket = worker.tmux.socket
     last_hash = None
@@ -2540,6 +2551,15 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
 
     # Regex to strip ANSI escape codes
     ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+
+    # Compile done pattern regex if provided for continuous checking
+    done_regex = None
+    if check_done_continuous and done_pattern:
+        try:
+            done_regex = re.compile(done_pattern)
+        except re.error:
+            # Invalid pattern - skip continuous checking
+            pass
 
     def normalize_content(output: str) -> str:
         """Normalize screen content by taking last 20 lines and stripping ANSI codes."""
@@ -2555,7 +2575,7 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
     while True:
         # Check if worker is still running
         if refresh_worker_status(worker) == "stopped":
-            return False
+            return "exited"
 
         try:
             # Capture current output
@@ -2564,6 +2584,10 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
                 worker.tmux.window,
                 socket=socket
             )
+
+            # Check done pattern continuously if enabled
+            if done_regex and done_regex.search(current_output):
+                return "done_pattern"
 
             # Normalize and hash the content
             normalized = normalize_content(current_output)
@@ -2579,11 +2603,11 @@ def detect_inactivity(worker: Worker, timeout: int) -> bool:
                 if stable_start is None:
                     stable_start = time.time()
                 elif (time.time() - stable_start) >= timeout:
-                    return True
+                    return "inactive"
 
         except subprocess.CalledProcessError:
             # Window might have closed
-            return False
+            return "exited"
 
         time.sleep(2)
 
@@ -2948,8 +2972,14 @@ def _run_ralph_loop(args) -> None:
                 time.sleep(backoff)
                 continue
 
-        # Monitor the worker - detect_inactivity blocks until worker exits or goes inactive
-        inactivity_detected = detect_inactivity(worker, ralph_state.inactivity_timeout)
+        # Monitor the worker - detect_inactivity blocks until worker exits, goes inactive,
+        # or done pattern matches (if check_done_continuous)
+        monitor_result = detect_inactivity(
+            worker,
+            ralph_state.inactivity_timeout,
+            done_pattern=ralph_state.done_pattern,
+            check_done_continuous=ralph_state.check_done_continuous
+        )
 
         # Reload ralph state (could have been paused while monitoring)
         ralph_state = load_ralph_state(args.name)
@@ -2961,7 +2991,23 @@ def _run_ralph_loop(args) -> None:
         state = State()
         worker = state.get_worker(args.name)
 
-        if inactivity_detected:
+        if monitor_result == "done_pattern":
+            # Done pattern matched during continuous monitoring
+            print(f"[ralph] {args.name}: done pattern matched, stopping loop")
+            log_ralph_iteration(
+                args.name,
+                "DONE",
+                total_iterations=ralph_state.current_iteration,
+                reason="done_pattern"
+            )
+            ralph_state.status = "stopped"
+            save_ralph_state(ralph_state)
+            # Kill the worker since we're stopping
+            if worker:
+                kill_worker_for_ralph(worker, state)
+            return
+
+        if monitor_result == "inactive":
             # Worker went inactive - restart it
             print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s), restarting")
             log_ralph_iteration(
@@ -2975,7 +3021,7 @@ def _run_ralph_loop(args) -> None:
             if worker:
                 kill_worker_for_ralph(worker, state)
         else:
-            # Worker exited on its own
+            # Worker exited on its own (monitor_result == "exited")
             duration = format_duration(time.time() - iteration_start)
             print(f"[ralph] {args.name}: iteration {ralph_state.current_iteration} completed (exit: 0, duration: {duration})")
             log_ralph_iteration(
@@ -2990,8 +3036,8 @@ def _run_ralph_loop(args) -> None:
             ralph_state.consecutive_failures = 0
             save_ralph_state(ralph_state)
 
-            # Check for done pattern
-            if ralph_state.done_pattern and worker:
+            # Check for done pattern (after exit, non-continuous mode)
+            if ralph_state.done_pattern and worker and not ralph_state.check_done_continuous:
                 if check_done_pattern(worker, ralph_state.done_pattern):
                     print(f"[ralph] {args.name}: done pattern matched, stopping loop")
                     log_ralph_iteration(

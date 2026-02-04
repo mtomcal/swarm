@@ -2,6 +2,7 @@
 """Tests for swarm ralph command - TDD tests for ralph subcommands."""
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -3296,11 +3297,180 @@ class TestCheckDonePattern(unittest.TestCase):
             self.assertFalse(result)
 
 
+class TestContinuousDonePatternDetection(unittest.TestCase):
+    """Test continuous done pattern detection in detect_inactivity."""
+
+    def test_detect_inactivity_returns_done_pattern_when_matched_continuous(self):
+        """Test detect_inactivity returns 'done_pattern' when pattern matches with continuous checking."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('swarm.tmux_capture_pane', return_value='All tasks complete\nDone'):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="All tasks complete",
+                        check_done_continuous=True
+                    )
+                    self.assertEqual(result, "done_pattern",
+                        "Should return 'done_pattern' when pattern matches during continuous checking")
+
+    def test_detect_inactivity_no_done_pattern_check_without_continuous_flag(self):
+        """Test detect_inactivity does NOT check done pattern when check_done_continuous is False."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.refresh_worker_status', side_effect=['running', 'stopped']):
+            with patch('swarm.tmux_capture_pane', return_value='All tasks complete\nDone'):
+                with patch('time.sleep'):
+                    # Even though pattern is in output, it should return "exited" not "done_pattern"
+                    # because check_done_continuous is False
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="All tasks complete",
+                        check_done_continuous=False
+                    )
+                    self.assertEqual(result, "exited",
+                        "Should return 'exited' (not 'done_pattern') when continuous checking is disabled")
+
+    def test_detect_inactivity_continues_when_pattern_not_matched(self):
+        """Test detect_inactivity continues monitoring when pattern doesn't match."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        call_count = [0]
+        def mock_capture(*args, **kwargs):
+            call_count[0] += 1
+            # Pattern never matches
+            return 'Still working on tasks'
+
+        # Worker stops after a few checks
+        def mock_refresh(w):
+            if call_count[0] >= 3:
+                return 'stopped'
+            return 'running'
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="All tasks complete",
+                        check_done_continuous=True
+                    )
+                    # Should eventually return "exited" because worker stopped
+                    self.assertEqual(result, "exited")
+                    # Verify multiple calls were made (pattern was checked each cycle)
+                    self.assertGreaterEqual(call_count[0], 2)
+
+    def test_detect_inactivity_handles_invalid_regex_pattern(self):
+        """Test detect_inactivity handles invalid regex patterns gracefully."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.refresh_worker_status', side_effect=['running', 'stopped']):
+            with patch('swarm.tmux_capture_pane', return_value='some output'):
+                with patch('time.sleep'):
+                    # Invalid regex pattern - should not crash
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="[invalid",  # Invalid regex
+                        check_done_continuous=True
+                    )
+                    # Should continue and return normally
+                    self.assertEqual(result, "exited")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_done_pattern_takes_priority_over_inactivity(
+        self, mock_sleep, mock_time, mock_capture, mock_refresh
+    ):
+        """Test done pattern detection stops immediately, before inactivity timeout."""
+        mock_refresh.return_value = 'running'
+        # Output contains done pattern on first check
+        mock_capture.return_value = 'Task complete!\nAll tasks complete'
+        mock_time.return_value = 0  # Time doesn't matter - should return immediately
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(
+            worker,
+            timeout=300,  # Long timeout
+            done_pattern="All tasks complete",
+            check_done_continuous=True
+        )
+        self.assertEqual(result, "done_pattern",
+            "Done pattern match should return immediately, not wait for timeout")
+        # Should have only made one capture call before returning
+        self.assertEqual(mock_capture.call_count, 1)
+
+    def test_detect_inactivity_done_pattern_regex_match(self):
+        """Test done pattern uses regex matching."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('swarm.tmux_capture_pane', return_value='IMPLEMENTATION_PLAN.md: 100% complete'):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern=r"IMPLEMENTATION_PLAN.*100%",  # Regex pattern
+                        check_done_continuous=True
+                    )
+                    self.assertEqual(result, "done_pattern",
+                        "Should match regex pattern in output")
+
+
 class TestDetectInactivity(unittest.TestCase):
     """Test detect_inactivity function."""
 
     def test_detect_inactivity_no_tmux(self):
-        """Test detect_inactivity returns False for non-tmux worker."""
+        """Test detect_inactivity returns 'exited' for non-tmux worker."""
         worker = swarm.Worker(
             name='test-worker',
             status='running',
@@ -3310,7 +3480,7 @@ class TestDetectInactivity(unittest.TestCase):
             pid=12345
         )
         result = swarm.detect_inactivity(worker, timeout=1)
-        self.assertFalse(result)
+        self.assertEqual(result, "exited")
 
 
 class TestKillWorkerForRalph(unittest.TestCase):
@@ -3619,11 +3789,11 @@ class TestRalphRunMainLoop(unittest.TestCase):
             return 'stopped'
 
         inactivity_count = [0]
-        def mock_inactivity(w, t, mode='ready'):
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False):
             inactivity_count[0] += 1
             if inactivity_count[0] == 1:
-                return True  # First check shows inactivity
-            return False
+                return "inactive"  # First check shows inactivity
+            return "exited"
 
         with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
             with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
@@ -3737,7 +3907,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
                 with patch('swarm.send_prompt_to_worker'):
                     with patch.object(swarm.State, 'add_worker'):
                         with patch.object(swarm.State, 'remove_worker'):
-                            with patch('swarm.detect_inactivity', return_value=False):
+                            with patch('swarm.detect_inactivity', return_value="exited"):
                                 with patch('swarm.check_done_pattern', return_value=False):
                                     with patch('builtins.print'):
                                         # Mock spawn to return a worker
@@ -3797,7 +3967,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
 
         with patch('swarm.load_ralph_state', side_effect=mock_load):
             with patch('swarm.refresh_worker_status', return_value='running'):
-                with patch('swarm.detect_inactivity', return_value=False):
+                with patch('swarm.detect_inactivity', return_value="exited"):
                     with patch('builtins.print') as mock_print:
                         with patch('time.sleep'):  # Speed up the test
                             swarm.cmd_ralph_run(args)
@@ -3954,7 +4124,7 @@ class TestRalphRunEdgeCases(unittest.TestCase):
 
         with patch('swarm.load_ralph_state', side_effect=mock_load):
             with patch('swarm.refresh_worker_status', return_value='running'):
-                with patch('swarm.detect_inactivity', return_value=False):
+                with patch('swarm.detect_inactivity', return_value="exited"):
                     with patch('builtins.print') as mock_print:
                         with patch('time.sleep'):
                             swarm.cmd_ralph_run(args)
@@ -4510,8 +4680,8 @@ class TestRalphListDispatch(unittest.TestCase):
 class TestScreenStableInactivityDetection(unittest.TestCase):
     """Test detect_inactivity function with screen-stable detection algorithm."""
 
-    def test_detect_inactivity_no_tmux_returns_false(self):
-        """Test detect_inactivity returns False for non-tmux worker."""
+    def test_detect_inactivity_no_tmux_returns_exited(self):
+        """Test detect_inactivity returns 'exited' for non-tmux worker."""
         worker = swarm.Worker(
             name='test-worker',
             status='running',
@@ -4521,22 +4691,23 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
             pid=12345
         )
         result = swarm.detect_inactivity(worker, timeout=1)
-        self.assertFalse(result, "Should return False for non-tmux worker")
+        self.assertEqual(result, "exited", "Should return 'exited' for non-tmux worker")
 
-    def test_detect_inactivity_signature_no_mode_param(self):
-        """Test detect_inactivity no longer has mode parameter."""
+    def test_detect_inactivity_signature_has_new_params(self):
+        """Test detect_inactivity has the expected parameters."""
         import inspect
         sig = inspect.signature(swarm.detect_inactivity)
         params = list(sig.parameters.keys())
         self.assertNotIn('mode', params, "mode parameter should be removed")
-        self.assertEqual(params, ['worker', 'timeout'], "Should only have worker and timeout params")
+        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous'],
+                         "Should have worker, timeout, done_pattern, and check_done_continuous params")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
     @patch('time.time')
     @patch('time.sleep')
-    def test_detect_inactivity_returns_true_when_screen_stable(self, mock_sleep, mock_time, mock_capture, mock_refresh):
-        """Test screen-stable detection: returns True when screen unchanged for timeout."""
+    def test_detect_inactivity_returns_inactive_when_screen_stable(self, mock_sleep, mock_time, mock_capture, mock_refresh):
+        """Test screen-stable detection: returns 'inactive' when screen unchanged for timeout."""
         mock_refresh.return_value = 'running'
         # Return same output for all calls (screen is stable)
         mock_capture.return_value = 'same stable content\nline 2\nline 3'
@@ -4553,12 +4724,12 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         )
 
         result = swarm.detect_inactivity(worker, timeout=1)
-        self.assertTrue(result, "Should return True when screen stable for timeout duration")
+        self.assertEqual(result, "inactive", "Should return 'inactive' when screen stable for timeout duration")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
-    def test_detect_inactivity_returns_false_when_worker_exits(self, mock_capture, mock_refresh):
-        """Test detect_inactivity returns False when worker exits."""
+    def test_detect_inactivity_returns_exited_when_worker_exits(self, mock_capture, mock_refresh):
+        """Test detect_inactivity returns 'exited' when worker exits."""
         mock_refresh.side_effect = ['running', 'stopped']  # Worker stops
         mock_capture.return_value = 'some output'
 
@@ -4574,7 +4745,7 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         with patch('time.sleep'):
             result = swarm.detect_inactivity(worker, timeout=60)
 
-        self.assertFalse(result, "Should return False when worker exits")
+        self.assertEqual(result, "exited", "Should return 'exited' when worker exits")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
@@ -4606,7 +4777,7 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         )
 
         result = swarm.detect_inactivity(worker, timeout=3)
-        self.assertTrue(result, "Should return True after screen stabilizes for timeout")
+        self.assertEqual(result, "inactive", "Should return 'inactive' after screen stabilizes for timeout")
 
     def test_detect_inactivity_strips_ansi_codes(self):
         """Test that ANSI escape codes are stripped before comparison."""
@@ -4722,8 +4893,8 @@ class TestDetectInactivityErrorHandling(unittest.TestCase):
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
     @patch('time.sleep')
-    def test_detect_inactivity_returns_false_on_subprocess_error(self, mock_sleep, mock_capture, mock_refresh):
-        """Test detect_inactivity returns False when tmux capture fails."""
+    def test_detect_inactivity_returns_exited_on_subprocess_error(self, mock_sleep, mock_capture, mock_refresh):
+        """Test detect_inactivity returns 'exited' when tmux capture fails."""
         mock_refresh.return_value = 'running'
         mock_capture.side_effect = subprocess.CalledProcessError(1, 'tmux')
 
@@ -4737,7 +4908,7 @@ class TestDetectInactivityErrorHandling(unittest.TestCase):
         )
 
         result = swarm.detect_inactivity(worker, timeout=1)
-        self.assertFalse(result)
+        self.assertEqual(result, "exited")
 
 
 class TestRalphRunSigterm(unittest.TestCase):
@@ -5550,13 +5721,13 @@ class TestRalphRunIntegration(unittest.TestCase):
 
         detect_calls = []
 
-        def capture_detect_inactivity(worker, timeout):
+        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False):
             """Capture detect_inactivity calls."""
             detect_calls.append({
                 'worker_name': worker.name,
                 'timeout': timeout,
             })
-            return False  # Worker exited normally
+            return "exited"  # Worker exited normally
 
         # Set up timeout
         def timeout_handler(signum, frame):
@@ -5894,10 +6065,10 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
             })
 
         # Simulate detect_inactivity behavior:
-        # - First call: return True (inactivity detected) - triggers kill then restart
-        # - Second call: return False (worker exited) - loop completes
+        # - First call: return "inactive" (inactivity detected) - triggers kill then restart
+        # - Second call: return "exited" (worker exited) - loop completes
         detect_call_count = [0]
-        def mock_detect_inactivity(worker, timeout):
+        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False):
             detect_call_count[0] += 1
             operations.append({
                 'op': 'detect_inactivity',
@@ -5905,9 +6076,9 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
                 'timeout': timeout,
                 'call_number': detect_call_count[0]
             })
-            # First call: return True (inactivity) to trigger kill/restart
-            # After that: return False (worker exited) so loop completes
-            return detect_call_count[0] == 1
+            # First call: return "inactive" (inactivity) to trigger kill/restart
+            # After that: return "exited" (worker exited) so loop completes
+            return "inactive" if detect_call_count[0] == 1 else "exited"
 
         # Track refresh_worker_status to control the flow
         # Return 'running' initially, then 'stopped' after kill to trigger respawn
@@ -6051,11 +6222,11 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
             )
 
         detect_count = [0]
-        def mock_detect(worker, timeout):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
             detect_count[0] += 1
             if detect_count[0] == 1:
-                return True  # Trigger restart on first call
-            return False  # Exit normally after that
+                return "inactive"  # Trigger restart on first call
+            return "exited"  # Exit normally after that
 
         def mock_kill(worker, state):
             killed[0] = True
@@ -6184,9 +6355,9 @@ class TestDetectInactivityBlockingIntegration(unittest.TestCase):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
-        # CRITICAL: Must return False (worker exited, not inactivity)
-        self.assertFalse(result,
-            "detect_inactivity must return False when worker exits")
+        # CRITICAL: Must return "exited" (worker exited, not inactivity)
+        self.assertEqual(result, "exited",
+            "detect_inactivity must return 'exited' when worker exits")
 
         # CRITICAL: Must return quickly (not wait for 300s timeout)
         self.assertLess(elapsed, 5.0,
@@ -6246,9 +6417,9 @@ class TestDetectInactivityBlockingIntegration(unittest.TestCase):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
-        # CRITICAL: Must return True (inactivity detected)
-        self.assertTrue(result,
-            "detect_inactivity must return True after inactivity timeout")
+        # CRITICAL: Must return "inactive" (inactivity detected)
+        self.assertEqual(result, "inactive",
+            "detect_inactivity must return 'inactive' after inactivity timeout")
 
         # CRITICAL: Must wait approximately the timeout duration
         self.assertGreaterEqual(elapsed, 2.0,
@@ -6307,9 +6478,9 @@ class TestDetectInactivityBlockingIntegration(unittest.TestCase):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
-        # CRITICAL: Must return True (ready state detected for timeout)
-        self.assertTrue(result,
-            "detect_inactivity must return True when ready pattern detected for timeout")
+        # CRITICAL: Must return "inactive" (ready state detected for timeout)
+        self.assertEqual(result, "inactive",
+            "detect_inactivity must return 'inactive' when ready pattern detected for timeout")
 
         # CRITICAL: Must wait approximately the timeout duration
         self.assertGreaterEqual(elapsed, 2.0,
@@ -6378,9 +6549,9 @@ class TestDetectInactivityBlockingIntegration(unittest.TestCase):
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
 
-        # CRITICAL: Must return True (inactivity after output stopped)
-        self.assertTrue(result,
-            "detect_inactivity must return True after output stops and timeout elapses")
+        # CRITICAL: Must return "inactive" (inactivity after output stopped)
+        self.assertEqual(result, "inactive",
+            "detect_inactivity must return 'inactive' after output stops and timeout elapses")
 
         # CRITICAL: Must have waited longer than just the timeout
         # (because output was changing initially)
@@ -6535,10 +6706,10 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
         # Then on iteration 2, max_iterations is reached, loop exits
         detect_calls = [0]
 
-        def mock_detect(worker, timeout):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
             detect_calls[0] += 1
-            # Always return False (worker exited) to advance iterations
-            return False
+            # Always return "exited" (worker exited) to advance iterations
+            return "exited"
 
         # Mock refresh to show worker stopped initially (triggers respawn)
         refresh_calls = [0]
@@ -6997,8 +7168,8 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_calls = []
 
-        def mock_detect(worker, timeout):
-            """Simulate detect_inactivity with blocking and return False (worker exit)."""
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+            """Simulate detect_inactivity with blocking and return 'exited' (worker exit)."""
             detect_calls.append({
                 'worker': worker.name,
                 'timeout': timeout,
@@ -7006,8 +7177,8 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
             })
             # Simulate brief blocking (realistic behavior)
             time.sleep(0.1)
-            # Return False = worker exited (not inactivity)
-            return False
+            # Return "exited" = worker exited (not inactivity)
+            return "exited"
 
         def track_kill(worker, state):
             """Track kill_worker_for_ralph - should NOT be called in this path."""
@@ -7111,15 +7282,15 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_call_count = [0]
 
-        def mock_detect(worker, timeout):
-            """Return True on first call (inactivity), False on second (exit)."""
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+            """Return 'inactive' on first call (inactivity), 'exited' on second (exit)."""
             detect_call_count[0] += 1
             time.sleep(0.1)  # Brief blocking for realism
             # First call: inactivity detected
             if detect_call_count[0] == 1:
-                return True
+                return "inactive"
             # After that: worker exited
-            return False
+            return "exited"
 
         def track_kill(worker, state):
             """Track kill_worker_for_ralph - SHOULD be called after inactivity."""
@@ -7227,13 +7398,13 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         detect_start_times = []
         detect_end_times = []
 
-        def mock_detect_with_blocking(worker, timeout):
+        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False):
             """Simulate detect_inactivity that blocks for 0.5 seconds."""
             detect_start_times.append(time.time())
             # This simulates the blocking behavior of real detect_inactivity
             time.sleep(0.5)
             detect_end_times.append(time.time())
-            return False  # Worker exited
+            return "exited"  # Worker exited
 
         # Worker is stopped initially to trigger respawn, then running for detect_inactivity
         refresh_count = [0]
@@ -7534,6 +7705,232 @@ class TestRalphSpawnCheckDoneContinuous(unittest.TestCase):
         ralph_state = swarm.load_ralph_state('ralph-nocontinuous')
         self.assertIsNotNone(ralph_state)
         self.assertFalse(ralph_state.check_done_continuous)
+
+
+class TestRalphLoopContinuousDonePattern(unittest.TestCase):
+    """Test ralph loop handles continuous done pattern checking correctly."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Create prompt file
+        self.prompt_path = Path(self.temp_dir) / "PROMPT.md"
+        self.prompt_path.write_text("Test prompt content")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_loop_stops_on_continuous_done_pattern_match(self):
+        """Test ralph loop stops immediately when continuous done pattern matches."""
+        import signal
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='continuous-done-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='continuous-done-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with check_done_continuous=True
+        ralph_state = swarm.RalphState(
+            worker_name='continuous-done-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=60,
+            done_pattern='All tasks complete',
+            check_done_continuous=True  # Enable continuous checking
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='continuous-done-worker')
+
+        # Set up timeout to prevent hanging
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', return_value='running'):
+                # detect_inactivity returns "done_pattern" when continuous checking matches
+                with patch('swarm.detect_inactivity', return_value="done_pattern"):
+                    with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Check that done pattern message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('done pattern matched', output)
+
+        # Check state is stopped
+        updated_state = swarm.load_ralph_state('continuous-done-worker')
+        self.assertEqual(updated_state.status, 'stopped')
+
+        # Kill should be called when done pattern matches during monitoring
+        self.assertEqual(mock_kill.call_count, 1,
+            "Worker should be killed when done pattern matches during monitoring")
+
+    def test_ralph_loop_passes_continuous_flag_to_detect_inactivity(self):
+        """Test ralph loop passes check_done_continuous to detect_inactivity."""
+        import signal
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='flag-test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='flag-test-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with check_done_continuous=True
+        ralph_state = swarm.RalphState(
+            worker_name='flag-test-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,  # Allow one iteration
+            current_iteration=1,  # Already on iteration 1
+            status='running',
+            inactivity_timeout=999,
+            done_pattern='test pattern',
+            check_done_continuous=True
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='flag-test-worker')
+        detect_calls = []
+
+        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+            detect_calls.append({
+                'timeout': timeout,
+                'done_pattern': done_pattern,
+                'check_done_continuous': check_done_continuous
+            })
+            return "exited"
+
+        # Mock refresh to show worker running initially
+        refresh_count = [0]
+        def mock_refresh(w):
+            refresh_count[0] += 1
+            # After detect_inactivity call, worker should be stopped to allow loop to continue
+            if refresh_count[0] > 2:
+                return 'stopped'
+            return 'running'
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                with patch('swarm.detect_inactivity', side_effect=capture_detect):
+                    with patch('swarm.check_done_pattern', return_value=False):
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Verify detect_inactivity was called with correct parameters
+        self.assertGreaterEqual(len(detect_calls), 1)
+        call = detect_calls[0]
+        self.assertEqual(call['timeout'], 999)
+        self.assertEqual(call['done_pattern'], 'test pattern')
+        self.assertTrue(call['check_done_continuous'],
+            "check_done_continuous should be passed as True to detect_inactivity")
+
+    def test_ralph_loop_without_continuous_checks_after_exit(self):
+        """Test ralph loop checks done pattern after exit when continuous is False."""
+        import signal
+
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='after-exit-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='after-exit-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 1}
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with check_done_continuous=False (default)
+        ralph_state = swarm.RalphState(
+            worker_name='after-exit-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            inactivity_timeout=60,
+            done_pattern='All tasks complete',
+            check_done_continuous=False  # Non-continuous: check only after exit
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='after-exit-worker')
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Test timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+
+        try:
+            with patch('swarm.refresh_worker_status', return_value='running'):
+                # detect_inactivity returns "exited" (not "done_pattern" since continuous is off)
+                with patch('swarm.detect_inactivity', return_value="exited"):
+                    # check_done_pattern should be called after exit
+                    with patch('swarm.check_done_pattern', return_value=True) as mock_check:
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_ralph_run(args)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        # Verify check_done_pattern was called (after-exit check)
+        self.assertEqual(mock_check.call_count, 1,
+            "check_done_pattern should be called after worker exits when continuous=False")
+
+        # Check that done pattern message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('done pattern matched', output)
 
 
 if __name__ == "__main__":
