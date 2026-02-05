@@ -289,7 +289,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   python3 -m unittest discover -v
   ```
 
-- [ ] **5.2 Run integration tests**
+- [x] **5.2 Run integration tests**
   ```bash
   timeout 300 python3 -m unittest tests.test_integration_ralph -v
   ```
@@ -340,6 +340,56 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   swarm heartbeat start --help
   swarm workflow --help
   swarm workflow run --help
+  ```
+
+### Phase 6: Coverage and Test Quality
+
+Current coverage: 84% (513 lines missing). Target: 90%+
+
+- [ ] **6.1 Add tests for main() argument parsing**
+  - The `main()` function (lines 4249-4905) has no direct test coverage
+  - Add tests that invoke argument parsing for all commands
+  - Test help text generation
+  - Test argument validation and error messages
+  - Use `unittest.mock` to avoid actual command execution
+
+- [ ] **6.2 Add tests for uncovered error paths**
+  - Review lines 8229-8523 (workflow monitor, stage transitions)
+  - Add tests for edge cases: worker death during stage, retry exhaustion
+  - Add tests for workflow cancellation mid-stage
+  - Test heartbeat expiration scenarios
+
+- [ ] **6.3 Add tests for uncovered utility functions**
+  - Lines 9031-9187: review and add tests for any untested helpers
+  - Lines 9241-9282: add tests for edge cases
+  - Ensure all public functions have test coverage
+
+- [ ] **6.4 Audit tests for low-quality patterns**
+  - Search for tests that only check "no exception thrown"
+  - Search for tests with no assertions or weak assertions
+  - Search for tests that mock too much (testing mocks, not code)
+  - Search for flaky tests (timing-dependent, order-dependent)
+  - Search for tests with hardcoded paths or environment assumptions
+  - Document findings in `TEST_AUDIT.md`
+
+- [ ] **6.5 Fix or rewrite low-quality tests**
+  - Convert "no exception" tests to proper assertion-based tests
+  - Add meaningful assertions to weak tests
+  - Replace over-mocked tests with more realistic tests
+  - Fix or skip flaky tests with documentation
+
+- [ ] **6.6 Search for risky test patterns**
+  - Tests that modify global state without cleanup
+  - Tests that leave temp files/directories behind
+  - Tests that depend on execution order
+  - Tests that could interfere with real swarm state (~/.swarm/)
+  - Tests with subprocess calls that could hang indefinitely
+  - Add `timeout` decorators to any test that could hang
+
+- [ ] **6.7 Verify coverage reaches 90%+**
+  ```bash
+  python3 -m coverage run --source=swarm -m unittest discover -b
+  python3 -m coverage report --fail-under=90
   ```
 
 ---
@@ -394,5 +444,6 @@ All features are additive:
 | Phase 3: Workflow | 17 tasks | High (orchestration logic) |
 | Phase 4: Integration | 6 tasks | Medium (cross-cutting) |
 | Phase 5: Verification | 5 tasks | Low (testing) |
+| Phase 6: Coverage & Test Quality | 7 tasks | Medium (test improvements) |
 
-Total: 54 tasks
+Total: 61 tasks
