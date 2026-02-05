@@ -423,6 +423,12 @@ All test files reviewed use proper cleanup. **No action needed.**
    - Added `call_count >= 1` checks with argument verification for multi-call scenarios
 9. [ ] Consider reducing mock depth in heavily-mocked tests
 10. [ ] Update integration tests to use SWARM_DIR env var for full isolation
+11. [ ] Add timeout to subprocess.run in test helper functions (task 7.3)
+   - test_state_file_recovery.py:run_swarm()
+   - test_kill_integration.py:run_swarm()
+   - test_lifecycle_pid.py:run_swarm()
+   - tests/test_tmux_isolation.py:tmux_cmd() and run_swarm()
+   - Low risk since commands are fast, but would provide defense in depth
 
 ---
 
@@ -638,6 +644,142 @@ The analysis confirms the findings from task 7.1 (memory profiling): the test su
 3. Test data objects created during execution (~13 MB, properly cleaned up)
 
 All potentially risky patterns (subprocess management, file handles, tmux sessions) have proper cleanup mechanisms in place.
+
+---
+
+## 17. Subprocess and Process Management Audit (Task 7.3)
+
+Comprehensive audit of subprocess.Popen and subprocess.run usage in tests, checking for proper termination, zombie process risks, output collection, and blocking reads.
+
+### 1. subprocess.Popen Objects
+
+**Total Popen usage across test files:**
+
+| File | Count | Status |
+|------|-------|--------|
+| test_cmd_workflow.py | 15 | ✓ All properly managed with try/except TimeoutExpired pattern |
+| test_core_functions.py | 2 | ✓ All use try/finally with terminate() and wait(timeout=30) |
+| tests/test_integration_workflow.py | 7 | ✓ All use kill() + communicate(timeout=5) |
+
+**Pattern analysis:**
+
+All Popen objects follow one of these safe patterns:
+
+1. **Try/except TimeoutExpired (test_cmd_workflow.py):**
+```python
+proc = subprocess.Popen(...)
+try:
+    proc.communicate(timeout=2)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.communicate(timeout=5)  # Fixed in task 6.6 - now has timeout
+```
+
+2. **Try/finally with terminate (test_core_functions.py):**
+```python
+proc = subprocess.Popen(["sleep", "10"])
+try:
+    result = swarm.process_alive(proc.pid)
+    self.assertTrue(result)
+finally:
+    proc.terminate()
+    proc.wait(timeout=30)
+```
+
+3. **Direct kill after polling (tests/test_integration_workflow.py):**
+```python
+proc = subprocess.Popen(...)
+# Wait for condition
+proc.kill()
+proc.communicate(timeout=5)
+```
+
+**Finding: All Popen objects are properly terminated.** No orphaned processes or zombie process risks identified.
+
+### 2. subprocess.run Without Timeout
+
+Several test files have helper functions that call subprocess.run without timeout. These are for quick operations (--help, status checks) but could theoretically hang.
+
+| File | Function/Location | Risk Level |
+|------|-------------------|------------|
+| test_state_file_recovery.py:21 | `run_swarm()` helper | Low - runs simple commands |
+| test_kill_integration.py:19 | `run_swarm()` helper | Low - runs simple commands |
+| test_lifecycle_pid.py:18 | `run_swarm()` helper | Low - runs simple commands |
+| test_status_integration.py:34,71 | Direct calls | Low - runs status/lookup |
+| tests/test_tmux_isolation.py:40,58 | `tearDown()` and `tmux_cmd()` | Low - tmux commands |
+| test_cmd_heartbeat.py:122-192 | --help flag tests | Low - always returns immediately |
+| test_cmd_ralph.py:25-252 | --help flag tests | Low - always returns immediately |
+| test_cmd_init.py:29-79 | --help and simple commands | Low - always returns immediately |
+
+**Assessment:** The subprocess.run calls without timeout are for:
+- `--help` flag tests (immediate return)
+- Simple status/lookup commands (very fast)
+- tmux list/kill commands in tearDown (fast, tmux is reliable)
+
+**Recommendation:** Add `timeout=30` to all subprocess.run calls for defense in depth, but this is low priority since:
+1. All commands are simple and fast-returning
+2. No actual hangs have been observed
+3. The risk of hanging is minimal given the command types
+
+### 3. Zombie Process Analysis
+
+**How swarm tests prevent zombies:**
+
+1. **Popen cleanup:** All Popen objects call either:
+   - `communicate()` which waits for process termination
+   - `terminate()` + `wait()` which signals and waits
+   - `kill()` + `communicate()` which forcefully terminates and waits
+
+2. **tearDown cleanup:** Test classes with Popen usage have proper cleanup:
+   - `TmuxIsolatedTestCase.tearDown()` kills the tmux server
+   - Unit tests mock Popen so no real processes created
+
+**Finding: No zombie process accumulation risk identified.**
+
+### 4. Blocking Read Analysis
+
+**Potential blocking reads on subprocess pipes:**
+
+- All Popen objects use `stdout=subprocess.PIPE, stderr=subprocess.PIPE`
+- All such objects call `communicate()` which properly drains pipes
+- No manual reads (`proc.stdout.read()`, `for line in proc.stdout`) found that could block
+
+**Finding: No blocking read risks identified.**
+
+### 5. Output Collection via communicate()
+
+All Popen objects properly use `communicate()` to collect output, ensuring:
+1. Pipe buffers don't fill up (causing deadlock)
+2. Output is captured for assertion/debugging
+3. Process is waited on for clean termination
+
+### Summary
+
+**Subprocess management in tests is well-handled:**
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| Popen termination | ✓ Safe | All use terminate+wait or kill+communicate |
+| Zombie prevention | ✓ Safe | communicate() or wait() always called |
+| Blocking reads | ✓ Safe | Only communicate() used, no manual reads |
+| subprocess.run timeout | ⚠ Low risk | Many calls lack timeout, but commands are fast |
+| Output collection | ✓ Safe | communicate() used everywhere |
+
+**Recommendations (low priority):**
+
+1. Add `timeout=30` parameter to helper functions:
+   - `test_state_file_recovery.py:run_swarm()`
+   - `test_kill_integration.py:run_swarm()`
+   - `test_lifecycle_pid.py:run_swarm()`
+   - `tests/test_tmux_isolation.py:tmux_cmd()`
+
+2. Add default timeout to `TmuxIsolatedTestCase.run_swarm()`:
+   ```python
+   if "timeout" not in kwargs:
+       kwargs["timeout"] = 30
+   ```
+
+These changes would provide defense in depth but are not critical since no actual hanging has been observed.
 
 ---
 
