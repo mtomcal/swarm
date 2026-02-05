@@ -5536,13 +5536,25 @@ def cmd_kill(args) -> None:
         # Update ralph state if this is a ralph worker
         ralph_state = load_ralph_state(worker.name)
         if ralph_state:
-            ralph_state.status = "stopped"
-            save_ralph_state(ralph_state)
+            # Log the iteration before potentially deleting state
             log_ralph_iteration(
                 worker.name, "DONE",
                 total_iterations=ralph_state.current_iteration,
                 reason="killed"
             )
+
+            if args.rm_worktree:
+                # Delete ralph state directory when --rm-worktree is specified
+                ralph_state_dir = RALPH_DIR / worker.name
+                try:
+                    import shutil
+                    shutil.rmtree(ralph_state_dir)
+                except OSError as e:
+                    print(f"swarm: warning: cannot remove ralph state for '{worker.name}': {e}", file=sys.stderr)
+            else:
+                # Just update status if not removing
+                ralph_state.status = "stopped"
+                save_ralph_state(ralph_state)
 
         # Stop heartbeat if active for this worker
         heartbeat_state = load_heartbeat_state(worker.name)

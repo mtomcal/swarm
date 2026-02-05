@@ -72,7 +72,7 @@ Update specs BEFORE implementation to define expected behavior.
 
 ### Phase 2: Bug Fixes
 
-- [ ] **2.1 Fix: Ralph state cleanup on kill (B1)**
+- [x] **2.1 Fix: Ralph state cleanup on kill (B1)**
   - In `cmd_kill()`, delete `~/.swarm/ralph/<name>/` when killing ralph workers with `--rm-worktree`
   - Test: Kill ralph worker with `--rm-worktree`, verify ralph state directory removed
   - File: `swarm.py` (cmd_kill function)

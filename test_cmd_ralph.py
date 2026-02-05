@@ -5596,6 +5596,155 @@ class TestCmdKillRalphWorker(unittest.TestCase):
             updated_state = swarm.load_ralph_state(name)
             self.assertEqual(updated_state.status, 'stopped')
 
+    def test_kill_ralph_worker_with_rm_worktree_removes_ralph_state(self):
+        """Test killing a ralph worker with --rm-worktree removes ralph state directory."""
+        # Create a worker with tmux and worktree
+        state = swarm.State()
+        worktree_path = Path(self.temp_dir) / 'worktrees' / 'ralph-worker'
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=str(worktree_path),
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker'),
+            worktree=swarm.WorktreeInfo(path=str(worktree_path), branch='ralph-worker', base_repo='/tmp/repo'),
+            metadata={'ralph': True, 'ralph_iteration': 3}
+        )
+        state.add_worker(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/tmp/PROMPT.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Verify ralph state directory exists before kill
+        ralph_state_dir = swarm.RALPH_DIR / 'ralph-worker'
+        self.assertTrue(ralph_state_dir.exists())
+        self.assertTrue((ralph_state_dir / 'state.json').exists())
+
+        # Mock subprocess and remove_worktree, then kill with --rm-worktree
+        with patch('subprocess.run') as mock_run, \
+             patch.object(swarm, 'remove_worktree', return_value=(True, '')):
+            mock_run.return_value = None
+            args = Namespace(name='ralph-worker', all=False, rm_worktree=True, force_dirty=False)
+            swarm.cmd_kill(args)
+
+        # Verify ralph state directory was removed
+        self.assertFalse(ralph_state_dir.exists())
+        self.assertIsNone(swarm.load_ralph_state('ralph-worker'))
+
+    def test_kill_ralph_worker_without_rm_worktree_preserves_ralph_state(self):
+        """Test killing a ralph worker without --rm-worktree preserves ralph state."""
+        # Create a worker with tmux
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker'),
+            metadata={'ralph': True, 'ralph_iteration': 3}
+        )
+        state.add_worker(worker)
+        state.save()
+
+        # Create ralph state
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/tmp/PROMPT.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Verify ralph state directory exists before kill
+        ralph_state_dir = swarm.RALPH_DIR / 'ralph-worker'
+        self.assertTrue(ralph_state_dir.exists())
+
+        # Mock subprocess and kill WITHOUT --rm-worktree
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = None
+            args = Namespace(name='ralph-worker', all=False, rm_worktree=False)
+            swarm.cmd_kill(args)
+
+        # Verify ralph state directory still exists but status is stopped
+        self.assertTrue(ralph_state_dir.exists())
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertIsNotNone(updated_state)
+        self.assertEqual(updated_state.status, 'stopped')
+
+    def test_kill_all_with_rm_worktree_removes_all_ralph_states(self):
+        """Test --all --rm-worktree removes ralph state for all ralph workers."""
+        state = swarm.State()
+
+        # Create two ralph workers with worktrees
+        worktree_path1 = Path(self.temp_dir) / 'worktrees' / 'ralph-1'
+        worktree_path2 = Path(self.temp_dir) / 'worktrees' / 'ralph-2'
+        worktree_path1.mkdir(parents=True, exist_ok=True)
+        worktree_path2.mkdir(parents=True, exist_ok=True)
+
+        worker1 = swarm.Worker(
+            name='ralph-1',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=str(worktree_path1),
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-1'),
+            worktree=swarm.WorktreeInfo(path=str(worktree_path1), branch='ralph-1', base_repo='/tmp/repo'),
+            metadata={'ralph': True}
+        )
+        worker2 = swarm.Worker(
+            name='ralph-2',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=str(worktree_path2),
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-2'),
+            worktree=swarm.WorktreeInfo(path=str(worktree_path2), branch='ralph-2', base_repo='/tmp/repo'),
+            metadata={'ralph': True}
+        )
+        state.add_worker(worker1)
+        state.add_worker(worker2)
+        state.save()
+
+        # Create ralph states
+        for name in ['ralph-1', 'ralph-2']:
+            ralph_state = swarm.RalphState(
+                worker_name=name,
+                prompt_file='/tmp/PROMPT.md',
+                max_iterations=10,
+                current_iteration=2,
+                status='running'
+            )
+            swarm.save_ralph_state(ralph_state)
+
+        # Verify ralph state directories exist before kill
+        for name in ['ralph-1', 'ralph-2']:
+            self.assertTrue((swarm.RALPH_DIR / name).exists())
+
+        # Mock subprocess and remove_worktree, then kill all with --rm-worktree
+        with patch('subprocess.run') as mock_run, \
+             patch.object(swarm, 'remove_worktree', return_value=(True, '')):
+            mock_run.return_value = None
+            args = Namespace(name=None, all=True, rm_worktree=True, force_dirty=False)
+            swarm.cmd_kill(args)
+
+        # Verify both ralph state directories were removed
+        for name in ['ralph-1', 'ralph-2']:
+            self.assertFalse((swarm.RALPH_DIR / name).exists())
+            self.assertIsNone(swarm.load_ralph_state(name))
+
 
 class TestRalphSpawnSendsPrompt(unittest.TestCase):
     """Integration test: spawn --ralph sends prompt to worker.
