@@ -151,7 +151,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Spawn, kill, spawn with `--clean-state`, verify fresh state
   - File: `swarm.py` (cmd_ralph_spawn)
 
-- [ ] **3.5 Feature: Document test artifact prevention (F7)**
+- [x] **3.5 Feature: Document test artifact prevention (F7)**
   - Add "Best Practices" section to `specs/ralph-loop.md`
   - Document prompt guidelines to avoid test file creation
   - Add example `.gitignore` patterns for common test artifacts
