@@ -414,58 +414,115 @@ class TestCreateWorktree(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch('subprocess.run')
-    def test_create_worktree_creates_new_branch(self, mock_run):
+    @patch('swarm._is_truly_bare_repo', return_value=False)
+    @patch('swarm._check_and_fix_core_bare', return_value=False)
+    def test_create_worktree_creates_new_branch(self, mock_core_bare, mock_bare_repo):
         """Test create_worktree creates worktree with new branch."""
-        # First call (with -b) fails, second call (without -b) succeeds
-        mock_run.side_effect = [
-            MagicMock(returncode=1),  # git worktree add -b fails (branch exists)
-            MagicMock(returncode=0),  # git worktree add without -b succeeds
-        ]
-
         worktree_path = Path(self.temp_dir) / "worktrees" / "test-worktree"
-        swarm.create_worktree(worktree_path, "test-branch")
+
+        original_run = subprocess.run
+        call_history = []
+
+        def mock_run(cmd, *args, **kwargs):
+            call_history.append(cmd)
+            if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
+                if "-b" in cmd:
+                    # First call fails (branch exists)
+                    return MagicMock(returncode=1, stderr="branch already exists")
+                else:
+                    # Second call succeeds and creates directory
+                    worktree_path.mkdir(parents=True, exist_ok=True)
+                    return MagicMock(returncode=0)
+            elif isinstance(cmd, list) and "rev-parse" in cmd and "--git-dir" in cmd:
+                # Validation check succeeds
+                return MagicMock(returncode=0)
+            return original_run(cmd, *args, **kwargs)
+
+        with patch('subprocess.run', side_effect=mock_run):
+            swarm.create_worktree(worktree_path, "test-branch")
 
         # Verify git worktree add was called
-        self.assertEqual(mock_run.call_count, 2)
-        first_call = mock_run.call_args_list[0]
-        self.assertEqual(first_call[0][0], ["git", "worktree", "add", "-b", "test-branch", str(worktree_path)])
+        worktree_calls = [c for c in call_history if isinstance(c, list) and "worktree" in c and "add" in c]
+        self.assertEqual(len(worktree_calls), 2)
+        self.assertEqual(worktree_calls[0], ["git", "worktree", "add", "-b", "test-branch", str(worktree_path)])
 
-    @patch('subprocess.run')
-    def test_create_worktree_new_branch_succeeds_first_try(self, mock_run):
+    @patch('swarm._is_truly_bare_repo', return_value=False)
+    @patch('swarm._check_and_fix_core_bare', return_value=False)
+    def test_create_worktree_new_branch_succeeds_first_try(self, mock_core_bare, mock_bare_repo):
         """Test create_worktree succeeds on first try when creating new branch."""
-        mock_run.return_value = MagicMock(returncode=0)
-
         worktree_path = Path(self.temp_dir) / "worktrees" / "test-worktree"
-        swarm.create_worktree(worktree_path, "new-branch")
 
-        # Verify only one call was made (first try succeeded)
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        self.assertEqual(call_args, ["git", "worktree", "add", "-b", "new-branch", str(worktree_path)])
+        original_run = subprocess.run
+        worktree_add_calls = []
 
-    @patch('subprocess.run')
-    def test_create_worktree_existing_branch(self, mock_run):
+        def mock_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
+                worktree_add_calls.append(cmd)
+                # Succeeds and creates directory
+                worktree_path.mkdir(parents=True, exist_ok=True)
+                return MagicMock(returncode=0)
+            elif isinstance(cmd, list) and "rev-parse" in cmd and "--git-dir" in cmd:
+                # Validation check succeeds
+                return MagicMock(returncode=0)
+            return original_run(cmd, *args, **kwargs)
+
+        with patch('subprocess.run', side_effect=mock_run):
+            swarm.create_worktree(worktree_path, "new-branch")
+
+        # Verify only one worktree add call was made (first try succeeded)
+        self.assertEqual(len(worktree_add_calls), 1)
+        self.assertEqual(worktree_add_calls[0], ["git", "worktree", "add", "-b", "new-branch", str(worktree_path)])
+
+    @patch('swarm._is_truly_bare_repo', return_value=False)
+    @patch('swarm._check_and_fix_core_bare', return_value=False)
+    def test_create_worktree_existing_branch(self, mock_core_bare, mock_bare_repo):
         """Test create_worktree uses existing branch if it exists."""
-        # First call fails (branch already exists), second call succeeds
-        mock_run.side_effect = [
-            MagicMock(returncode=1),
-            MagicMock(returncode=0),
-        ]
-
         worktree_path = Path(self.temp_dir) / "worktrees" / "test-worktree"
-        swarm.create_worktree(worktree_path, "existing-branch")
+
+        original_run = subprocess.run
+        worktree_add_calls = []
+
+        def mock_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
+                worktree_add_calls.append(cmd)
+                if "-b" in cmd:
+                    # First call fails (branch exists)
+                    return MagicMock(returncode=1, stderr="branch already exists")
+                else:
+                    # Second call succeeds and creates directory
+                    worktree_path.mkdir(parents=True, exist_ok=True)
+                    return MagicMock(returncode=0)
+            elif isinstance(cmd, list) and "rev-parse" in cmd and "--git-dir" in cmd:
+                # Validation check succeeds
+                return MagicMock(returncode=0)
+            return original_run(cmd, *args, **kwargs)
+
+        with patch('subprocess.run', side_effect=mock_run):
+            swarm.create_worktree(worktree_path, "existing-branch")
 
         # Verify second call used existing branch
-        second_call = mock_run.call_args_list[1]
-        self.assertEqual(second_call[0][0], ["git", "worktree", "add", str(worktree_path), "existing-branch"])
+        self.assertEqual(len(worktree_add_calls), 2)
+        self.assertEqual(worktree_add_calls[1], ["git", "worktree", "add", str(worktree_path), "existing-branch"])
 
-    def test_create_worktree_creates_parent_directory(self):
+    @patch('swarm._is_truly_bare_repo', return_value=False)
+    @patch('swarm._check_and_fix_core_bare', return_value=False)
+    def test_create_worktree_creates_parent_directory(self, mock_core_bare, mock_bare_repo):
         """Test create_worktree creates parent directories as needed."""
         worktree_path = Path(self.temp_dir) / "deeply" / "nested" / "worktree"
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        original_run = subprocess.run
+
+        def mock_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
+                # Succeeds and creates directory
+                worktree_path.mkdir(parents=True, exist_ok=True)
+                return MagicMock(returncode=0)
+            elif isinstance(cmd, list) and "rev-parse" in cmd and "--git-dir" in cmd:
+                # Validation check succeeds
+                return MagicMock(returncode=0)
+            return original_run(cmd, *args, **kwargs)
+
+        with patch('subprocess.run', side_effect=mock_run):
             swarm.create_worktree(worktree_path, "nested-branch")
 
         # Verify parent directory was created

@@ -308,5 +308,172 @@ class TestCleanCommandProtection(unittest.TestCase):
         self.assertEqual(mock_remove.call_args[1]['force'], True)
 
 
+class TestCreateWorktreeErrorHandling(unittest.TestCase):
+    """Test cases for create_worktree error handling."""
+
+    def test_core_bare_true_is_fixed(self):
+        """Test that core.bare=true is detected and fixed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            # Create initial commit (required for worktrees)
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("initial content")
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            # Set core.bare to true (the bug)
+            subprocess.run(["git", "config", "core.bare", "true"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            # Verify it's set
+            result = subprocess.run(
+                ["git", "config", "--get", "core.bare"],
+                cwd=tmpdir, capture_output=True, text=True, timeout=30
+            )
+            self.assertEqual(result.stdout.strip(), "true")
+
+            # Call the helper function (running in tmpdir context)
+            import os
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                fixed = swarm._check_and_fix_core_bare()
+                self.assertTrue(fixed)
+
+                # Verify it's now false
+                result = subprocess.run(
+                    ["git", "config", "--get", "core.bare"],
+                    capture_output=True, text=True, timeout=30
+                )
+                self.assertEqual(result.stdout.strip(), "false")
+            finally:
+                os.chdir(original_cwd)
+
+    def test_core_bare_false_no_change(self):
+        """Test that core.bare=false is left alone."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo (core.bare defaults to false)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            import os
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                fixed = swarm._check_and_fix_core_bare()
+                self.assertFalse(fixed)
+            finally:
+                os.chdir(original_cwd)
+
+    def test_worktree_creation_failure_cleans_up(self):
+        """Test that failed worktree creation cleans up partial state."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            # Create initial commit
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("initial content")
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            worktree_path = Path(tmpdir) / "worktrees" / "test-worker"
+
+            import os
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+
+                # Mock subprocess.run to make git worktree add fail
+                call_count = [0]
+                original_run = subprocess.run
+
+                def mock_run(cmd, *args, **kwargs):
+                    call_count[0] += 1
+                    if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
+                        # Return failure for worktree add
+                        result = Mock()
+                        result.returncode = 1
+                        result.stdout = ""
+                        result.stderr = "fatal: simulated failure"
+                        return result
+                    return original_run(cmd, *args, **kwargs)
+
+                with patch('subprocess.run', side_effect=mock_run):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        swarm.create_worktree(worktree_path, "test-branch")
+
+                self.assertIn("Failed to create worktree", str(ctx.exception))
+            finally:
+                os.chdir(original_cwd)
+
+    def test_worktree_validation_failure_raises_error(self):
+        """Test that worktree validation failure raises RuntimeError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            # Create initial commit
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("initial content")
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
+
+            worktree_path = Path(tmpdir) / "worktrees" / "test-worker"
+
+            import os
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+
+                # Mock subprocess.run to succeed for worktree add but fail validation
+                original_run = subprocess.run
+
+                def mock_run(cmd, *args, **kwargs):
+                    if isinstance(cmd, list):
+                        # Let worktree add succeed
+                        if "worktree" in cmd and "add" in cmd:
+                            # Create the directory but not a valid worktree
+                            worktree_path.parent.mkdir(parents=True, exist_ok=True)
+                            worktree_path.mkdir(exist_ok=True)
+                            result = Mock()
+                            result.returncode = 0
+                            result.stdout = ""
+                            result.stderr = ""
+                            return result
+                        # Make the rev-parse validation fail
+                        if "rev-parse" in cmd and "--git-dir" in cmd:
+                            result = Mock()
+                            result.returncode = 1
+                            result.stdout = ""
+                            result.stderr = "fatal: not a git repository"
+                            return result
+                    return original_run(cmd, *args, **kwargs)
+
+                with patch('subprocess.run', side_effect=mock_run):
+                    with self.assertRaises(RuntimeError) as ctx:
+                        swarm.create_worktree(worktree_path, "test-branch")
+
+                self.assertIn("not a valid git worktree", str(ctx.exception))
+            finally:
+                os.chdir(original_cwd)
+
+    def test_truly_bare_repo_raises_error(self):
+        """Test that truly bare repos raise RuntimeError."""
+        # Mock the bare repo detection
+        with patch('swarm._check_and_fix_core_bare', return_value=False), \
+             patch('swarm._is_truly_bare_repo', return_value=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                swarm.create_worktree(Path("/tmp/test"), "test-branch")
+
+            self.assertIn("repository is bare", str(ctx.exception))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -84,7 +84,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Simulate failures at each stage, verify no orphaned state
   - File: `swarm.py` (cmd_ralph_spawn function)
 
-- [ ] **2.3 Fix: Worktree error handling (B3)**
+- [x] **2.3 Fix: Worktree error handling (B3)**
   - Add proper error checking in `create_worktree()`
   - Validate worktree actually created before returning
   - Add `core.bare` check and auto-fix at start of worktree operations

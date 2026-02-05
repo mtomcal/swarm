@@ -3821,17 +3821,79 @@ def get_git_root() -> Path:
     return Path(result.stdout.strip())
 
 
+def _check_and_fix_core_bare() -> bool:
+    """Check if core.bare is misconfigured and fix it.
+
+    Returns:
+        True if core.bare was fixed, False if no fix was needed.
+    """
+    result = subprocess.run(
+        ["git", "config", "--get", "core.bare"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip().lower() == "true":
+        # Fix the misconfiguration
+        subprocess.run(
+            ["git", "config", "core.bare", "false"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        print("swarm: warning: Fixed core.bare=true in git config", file=sys.stderr)
+        return True
+    return False
+
+
+def _is_truly_bare_repo() -> bool:
+    """Check if this is actually a bare repository (not just misconfigured).
+
+    Returns:
+        True if the repository is genuinely bare (no working directory).
+    """
+    # A bare repo has no worktree, check if we can get the git dir
+    result = subprocess.run(
+        ["git", "rev-parse", "--is-bare-repository"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip().lower() == "true":
+        # Double-check: a truly bare repo won't have a working tree
+        wt_result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+        # If we can't get the toplevel, it's truly bare
+        return wt_result.returncode != 0
+    return False
+
+
 def create_worktree(path: Path, branch: str) -> None:
     """Create a git worktree.
 
     Creates a new worktree at the specified path with the given branch name.
     If the branch doesn't exist, it's created from the current HEAD.
+
+    Raises:
+        RuntimeError: If worktree creation fails or the repository is bare.
     """
     path = Path(path)
-    # Create parent directory if needed
+
+    # Step 1: Check for and fix core.bare misconfiguration
+    _check_and_fix_core_bare()
+
+    # Step 2: Check if this is a truly bare repository
+    if _is_truly_bare_repo():
+        raise RuntimeError(
+            "Cannot create worktree: repository is bare. "
+            "Worktrees require a working directory."
+        )
+
+    # Step 3: Create parent directory if needed
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Try to create with new branch first, fall back to existing branch
+    # Step 4: Try to create with new branch first, fall back to existing branch
     result = subprocess.run(
         ["git", "worktree", "add", "-b", branch, str(path)],
         capture_output=True,
@@ -3839,11 +3901,68 @@ def create_worktree(path: Path, branch: str) -> None:
     )
     if result.returncode != 0:
         # Branch might already exist, try without -b
-        subprocess.run(
+        result = subprocess.run(
             ["git", "worktree", "add", str(path), branch],
             capture_output=True,
             text=True,
-            check=True,
+        )
+        if result.returncode != 0:
+            # Clean up any partial state
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                capture_output=True,
+                text=True,
+            )
+            # Remove partial directory if it was created but is empty/invalid
+            if path.exists():
+                try:
+                    # Only remove if it's not a valid git worktree
+                    git_check = subprocess.run(
+                        ["git", "-C", str(path), "rev-parse", "--git-dir"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if git_check.returncode != 0:
+                        import shutil
+                        shutil.rmtree(path, ignore_errors=True)
+                except Exception:
+                    pass
+
+            raise RuntimeError(
+                f"Failed to create worktree at {path}: {result.stderr.strip()}"
+            )
+
+    # Step 5: Validate worktree was created successfully
+    if not path.exists():
+        # Clean up git's worktree registry
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            capture_output=True,
+            text=True,
+        )
+        raise RuntimeError(
+            f"Worktree creation failed: directory not created at {path}. "
+            "Try running 'git worktree prune' and retry."
+        )
+
+    # Verify it's actually a valid git worktree
+    git_check = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if git_check.returncode != 0:
+        # Clean up the invalid directory
+        import shutil
+        shutil.rmtree(path, ignore_errors=True)
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            capture_output=True,
+            text=True,
+        )
+        raise RuntimeError(
+            f"Worktree creation failed: {path} is not a valid git worktree. "
+            "Try running 'git worktree prune' and retry."
         )
 
 
