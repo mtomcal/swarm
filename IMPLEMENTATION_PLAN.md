@@ -136,7 +136,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Run ralph, use `ralph logs` to view history
   - File: `swarm.py` (new cmd_ralph_logs function)
 
-- [ ] **3.3 Feature: ETA in ralph status (F3)**
+- [x] **3.3 Feature: ETA in ralph status (F3)**
   - Track iteration start/end times in RalphState
   - Calculate average iteration duration
   - Display ETA in `swarm ralph status` output
