@@ -10,6 +10,9 @@ import io
 import sys
 import unittest
 from contextlib import redirect_stderr
+from unittest.mock import patch
+
+import swarm
 
 
 def create_parser():
@@ -1137,6 +1140,387 @@ class TestErrorMessages(unittest.TestCase):
             with redirect_stderr(stderr):
                 self.parser.parse_args(["spawn", "--name", "w1", "--ready-timeout", "not-a-number", "--", "cmd"])
         self.assertEqual(cm.exception.code, 2)
+
+
+class TestMainFunctionDispatch(unittest.TestCase):
+    """Test the actual main() function in swarm.py dispatches to correct handlers."""
+
+    def test_main_spawn_dispatches_to_cmd_spawn(self):
+        """Test main() dispatches spawn command to cmd_spawn."""
+        with patch('sys.argv', ['swarm', 'spawn', '--name', 'test', '--', 'echo', 'hi']):
+            with patch('swarm.cmd_spawn') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'test')
+                self.assertEqual(args.cmd, ['--', 'echo', 'hi'])
+
+    def test_main_ls_dispatches_to_cmd_ls(self):
+        """Test main() dispatches ls command to cmd_ls."""
+        with patch('sys.argv', ['swarm', 'ls']):
+            with patch('swarm.cmd_ls') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_ls_with_format_dispatches_correctly(self):
+        """Test main() parses ls --format correctly."""
+        with patch('sys.argv', ['swarm', 'ls', '--format', 'json']):
+            with patch('swarm.cmd_ls') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.format, 'json')
+
+    def test_main_status_dispatches_to_cmd_status(self):
+        """Test main() dispatches status command to cmd_status."""
+        with patch('sys.argv', ['swarm', 'status', 'worker1']):
+            with patch('swarm.cmd_status') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'worker1')
+
+    def test_main_send_dispatches_to_cmd_send(self):
+        """Test main() dispatches send command to cmd_send."""
+        with patch('sys.argv', ['swarm', 'send', 'worker1', 'hello']):
+            with patch('swarm.cmd_send') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'worker1')
+                self.assertEqual(args.text, 'hello')
+
+    def test_main_kill_dispatches_to_cmd_kill(self):
+        """Test main() dispatches kill command to cmd_kill."""
+        with patch('sys.argv', ['swarm', 'kill', 'worker1']):
+            with patch('swarm.cmd_kill') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'worker1')
+
+    def test_main_kill_all_dispatches_to_cmd_kill(self):
+        """Test main() dispatches kill --all correctly."""
+        with patch('sys.argv', ['swarm', 'kill', '--all']):
+            with patch('swarm.cmd_kill') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertTrue(args.all)
+
+    def test_main_logs_dispatches_to_cmd_logs(self):
+        """Test main() dispatches logs command to cmd_logs."""
+        with patch('sys.argv', ['swarm', 'logs', 'worker1']):
+            with patch('swarm.cmd_logs') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'worker1')
+
+    def test_main_wait_dispatches_to_cmd_wait(self):
+        """Test main() dispatches wait command to cmd_wait."""
+        with patch('sys.argv', ['swarm', 'wait', 'worker1']):
+            with patch('swarm.cmd_wait') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_clean_dispatches_to_cmd_clean(self):
+        """Test main() dispatches clean command to cmd_clean."""
+        with patch('sys.argv', ['swarm', 'clean', 'worker1']):
+            with patch('swarm.cmd_clean') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_respawn_dispatches_to_cmd_respawn(self):
+        """Test main() dispatches respawn command to cmd_respawn."""
+        with patch('sys.argv', ['swarm', 'respawn', 'worker1']):
+            with patch('swarm.cmd_respawn') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_init_dispatches_to_cmd_init(self):
+        """Test main() dispatches init command to cmd_init."""
+        with patch('sys.argv', ['swarm', 'init']):
+            with patch('swarm.cmd_init') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_interrupt_dispatches_to_cmd_interrupt(self):
+        """Test main() dispatches interrupt command to cmd_interrupt."""
+        with patch('sys.argv', ['swarm', 'interrupt', 'worker1']):
+            with patch('swarm.cmd_interrupt') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_eof_dispatches_to_cmd_eof(self):
+        """Test main() dispatches eof command to cmd_eof."""
+        with patch('sys.argv', ['swarm', 'eof', 'worker1']):
+            with patch('swarm.cmd_eof') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_attach_dispatches_to_cmd_attach(self):
+        """Test main() dispatches attach command to cmd_attach."""
+        with patch('sys.argv', ['swarm', 'attach', 'worker1']):
+            with patch('swarm.cmd_attach') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+
+    def test_main_ralph_spawn_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph spawn to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'spawn', '--name', 'agent1',
+                                '--prompt-file', 'PROMPT.md', '--max-iterations', '10',
+                                '--', 'claude']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'spawn')
+                self.assertEqual(args.name, 'agent1')
+
+    def test_main_ralph_status_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph status to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'status', 'agent1']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'status')
+
+    def test_main_ralph_list_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph list to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'list']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'list')
+
+    def test_main_ralph_pause_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph pause to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'pause', 'agent1']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'pause')
+
+    def test_main_ralph_resume_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph resume to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'resume', 'agent1']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'resume')
+
+    def test_main_ralph_run_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph run to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'run', 'agent1']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'run')
+
+    def test_main_ralph_init_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph init to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'init']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'init')
+
+    def test_main_ralph_template_dispatches_to_cmd_ralph(self):
+        """Test main() dispatches ralph template to cmd_ralph."""
+        with patch('sys.argv', ['swarm', 'ralph', 'template']):
+            with patch('swarm.cmd_ralph') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.ralph_command, 'template')
+
+    def test_main_heartbeat_start_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat start to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'start', 'worker1', '--interval', '4h']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'start')
+                self.assertEqual(args.worker, 'worker1')
+                self.assertEqual(args.interval, '4h')
+
+    def test_main_heartbeat_stop_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat stop to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'stop', 'worker1']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'stop')
+
+    def test_main_heartbeat_list_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat list to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'list']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'list')
+
+    def test_main_heartbeat_status_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat status to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'status', 'worker1']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'status')
+
+    def test_main_heartbeat_pause_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat pause to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'pause', 'worker1']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'pause')
+
+    def test_main_heartbeat_resume_dispatches_to_cmd_heartbeat(self):
+        """Test main() dispatches heartbeat resume to cmd_heartbeat."""
+        with patch('sys.argv', ['swarm', 'heartbeat', 'resume', 'worker1']):
+            with patch('swarm.cmd_heartbeat') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.heartbeat_command, 'resume')
+
+    def test_main_workflow_validate_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow validate to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'validate', 'workflow.yaml']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'validate')
+                self.assertEqual(args.file, 'workflow.yaml')
+
+    def test_main_workflow_run_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow run to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'run', 'workflow.yaml']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'run')
+
+    def test_main_workflow_run_with_schedule_at(self):
+        """Test main() parses workflow run --at correctly."""
+        with patch('sys.argv', ['swarm', 'workflow', 'run', 'workflow.yaml', '--at', '02:00']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.at_time, '02:00')
+
+    def test_main_workflow_run_with_schedule_in(self):
+        """Test main() parses workflow run --in correctly."""
+        with patch('sys.argv', ['swarm', 'workflow', 'run', 'workflow.yaml', '--in', '4h']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.in_delay, '4h')
+
+    def test_main_workflow_status_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow status to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'status', 'my-workflow']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'status')
+
+    def test_main_workflow_list_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow list to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'list']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'list')
+
+    def test_main_workflow_cancel_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow cancel to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'cancel', 'my-workflow']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'cancel')
+
+    def test_main_workflow_resume_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow resume to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'resume', 'my-workflow']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'resume')
+
+    def test_main_workflow_resume_with_from_stage(self):
+        """Test main() parses workflow resume --from correctly."""
+        with patch('sys.argv', ['swarm', 'workflow', 'resume', 'my-workflow', '--from', 'build']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.from_stage, 'build')
+
+    def test_main_workflow_resume_all_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow resume-all to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'resume-all']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'resume-all')
+
+    def test_main_workflow_logs_dispatches_to_cmd_workflow(self):
+        """Test main() dispatches workflow logs to cmd_workflow."""
+        with patch('sys.argv', ['swarm', 'workflow', 'logs', 'my-workflow']):
+            with patch('swarm.cmd_workflow') as mock_cmd:
+                swarm.main()
+                mock_cmd.assert_called_once()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.workflow_command, 'logs')
+
+    def test_main_spawn_with_all_flags(self):
+        """Test main() parses spawn with all flags correctly."""
+        with patch('sys.argv', ['swarm', 'spawn', '--name', 'full',
+                                '--tmux', '--session', 'sess', '--tmux-socket', 'sock',
+                                '--worktree', '--branch', 'dev', '--worktree-dir', '/wt',
+                                '--tag', 't1', '--tag', 't2',
+                                '--env', 'A=1', '--cwd', '/work',
+                                '--ready-wait', '--ready-timeout', '30',
+                                '--heartbeat', '1h', '--heartbeat-expire', '12h',
+                                '--heartbeat-message', 'ping',
+                                '--', 'claude']):
+            with patch('swarm.cmd_spawn') as mock_cmd:
+                swarm.main()
+                args = mock_cmd.call_args[0][0]
+                self.assertEqual(args.name, 'full')
+                self.assertTrue(args.tmux)
+                self.assertEqual(args.session, 'sess')
+                self.assertEqual(args.tmux_socket, 'sock')
+                self.assertTrue(args.worktree)
+                self.assertEqual(args.branch, 'dev')
+                self.assertEqual(args.worktree_dir, '/wt')
+                self.assertEqual(args.tags, ['t1', 't2'])
+                self.assertEqual(args.env, ['A=1'])
+                self.assertEqual(args.cwd, '/work')
+                self.assertTrue(args.ready_wait)
+                self.assertEqual(args.ready_timeout, 30)
+                self.assertEqual(args.heartbeat, '1h')
+                self.assertEqual(args.heartbeat_expire, '12h')
+                self.assertEqual(args.heartbeat_message, 'ping')
 
 
 if __name__ == "__main__":

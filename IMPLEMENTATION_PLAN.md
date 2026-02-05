@@ -344,7 +344,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 ### Phase 6: Coverage and Test Quality
 
-Current coverage: 84% (513 lines missing). Target: 90%+
+Current coverage: 94% (181 lines missing). Target: 90%+ ✓
 
 - [x] **6.1 Add tests for main() argument parsing**
   - The `main()` function (lines 4249-4905) has no direct test coverage
@@ -390,11 +390,13 @@ Current coverage: 84% (513 lines missing). Target: 90%+
   - **DONE**: Added timeout=30 to 2 proc.wait() calls in test_core_functions.py
   - **DONE**: Updated TEST_AUDIT.md with findings for sections 10-14
 
-- [ ] **6.7 Verify coverage reaches 90%+**
+- [x] **6.7 Verify coverage reaches 90%+**
   ```bash
   python3 -m coverage run --source=swarm -m unittest discover -b
   python3 -m coverage report --fail-under=90
   ```
+  - **DONE**: Added 41 tests in TestMainFunctionDispatch class in test_cmd_main.py
+  - **DONE**: Coverage increased from 89% to 94%
 
 ---
 
