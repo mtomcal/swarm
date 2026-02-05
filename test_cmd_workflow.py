@@ -422,7 +422,7 @@ class TestStageDefinitionDataclass(unittest.TestCase):
         self.assertEqual(stage.max_retries, 3)
         self.assertEqual(stage.on_complete, "next")
         self.assertIsNone(stage.max_iterations)
-        self.assertEqual(stage.inactivity_timeout, 60)
+        self.assertEqual(stage.inactivity_timeout, 180)
         self.assertFalse(stage.check_done_continuous)
         self.assertIsNone(stage.heartbeat)
         self.assertIsNone(stage.worktree)
@@ -3331,7 +3331,7 @@ class TestSpawnWorkflowStage(unittest.TestCase):
             'max_retries': 3,
             'on_complete': 'next',
             'max_iterations': None,
-            'inactivity_timeout': 60,
+            'inactivity_timeout': 180,
             'check_done_continuous': False,
             'heartbeat': None,
             'heartbeat_expire': None,

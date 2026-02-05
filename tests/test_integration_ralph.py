@@ -6,7 +6,7 @@ Tests verify that the ralph loop correctly:
 - Stops when max iterations are reached
 - Handles done pattern matching
 - Supports pause and resume
-- Works with the default 60s inactivity timeout
+- Works with the default 180s inactivity timeout
 """
 
 import json
@@ -133,7 +133,7 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
         self.assertEqual(ralph_state['worker_name'], worker_name)
         self.assertEqual(ralph_state['max_iterations'], 3)
         self.assertEqual(ralph_state['status'], 'running')
-        self.assertEqual(ralph_state['inactivity_timeout'], 60)  # Default is 60s
+        self.assertEqual(ralph_state['inactivity_timeout'], 180)  # Default is 180s
 
 
 class TestRalphStatus(TmuxIsolatedTestCase):
@@ -383,8 +383,8 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
         super().tearDown()
 
     @skip_if_no_tmux
-    def test_ralph_default_inactivity_timeout_is_60s(self):
-        """Verify default inactivity timeout is 60 seconds."""
+    def test_ralph_default_inactivity_timeout_is_180s(self):
+        """Verify default inactivity timeout is 180 seconds."""
         worker_name = f"ralph-default-timeout-{self.tmux_socket[-8:]}"
 
         # Spawn without specifying --inactivity-timeout
@@ -399,15 +399,15 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
         )
         self.assertEqual(spawn_result.returncode, 0)
 
-        # Check ralph state has 60s default
+        # Check ralph state has 180s default
         ralph_state_file = Path.home() / ".swarm" / "ralph" / worker_name / "state.json"
         with open(ralph_state_file) as f:
             ralph_state = json.load(f)
 
         self.assertEqual(
             ralph_state['inactivity_timeout'],
-            60,
-            f"Expected default inactivity timeout of 60s, got: {ralph_state['inactivity_timeout']}"
+            180,
+            f"Expected default inactivity timeout of 180s, got: {ralph_state['inactivity_timeout']}"
         )
 
     @skip_if_no_tmux

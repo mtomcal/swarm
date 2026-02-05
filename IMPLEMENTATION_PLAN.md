@@ -113,7 +113,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Run `swarm ralph spawn --tmux ...`, verify no error
   - File: `swarm.py` (argparse for ralph spawn)
 
-- [ ] **2.7 Fix: Increase default inactivity timeout (B7)**
+- [x] **2.7 Fix: Increase default inactivity timeout (B7)**
   - Change default from 60s to 180s
   - Update help text to explain the default
   - Test: Spawn ralph without `--inactivity-timeout`, verify 180s used

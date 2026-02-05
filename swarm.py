@@ -1577,7 +1577,7 @@ Workflow YAML Format:
 
         # Ralph-specific (type: ralph only):
         max-iterations: 50      # Required for ralph
-        inactivity-timeout: 60  # Seconds (default: 60)
+        inactivity-timeout: 180 # Seconds (default: 180)
         check-done-continuous: true
 
         # Stage overrides (optional):
@@ -2154,7 +2154,7 @@ class RalphState:
     consecutive_failures: int = 0
     total_failures: int = 0
     done_pattern: Optional[str] = None
-    inactivity_timeout: int = 60
+    inactivity_timeout: int = 180
     check_done_continuous: bool = False
     exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
 
@@ -2194,7 +2194,7 @@ class RalphState:
             consecutive_failures=d.get("consecutive_failures", 0),
             total_failures=d.get("total_failures", 0),
             done_pattern=d.get("done_pattern"),
-            inactivity_timeout=d.get("inactivity_timeout", 60),
+            inactivity_timeout=d.get("inactivity_timeout", 180),
             check_done_continuous=d.get("check_done_continuous", False),
             exit_reason=d.get("exit_reason"),
         )
@@ -2360,7 +2360,7 @@ class StageDefinition:
 
     # Ralph-specific options
     max_iterations: Optional[int] = None  # Required for ralph type
-    inactivity_timeout: int = 60  # Seconds
+    inactivity_timeout: int = 180  # Seconds (default: 180 for CI/pre-commit hooks)
     check_done_continuous: bool = False
 
     # Stage-specific overrides
@@ -2410,7 +2410,7 @@ class StageDefinition:
             max_retries=d.get("max_retries") or d.get("max-retries", 3),
             on_complete=d.get("on_complete") or d.get("on-complete", "next"),
             max_iterations=d.get("max_iterations") or d.get("max-iterations"),
-            inactivity_timeout=d.get("inactivity_timeout") or d.get("inactivity-timeout", 60),
+            inactivity_timeout=d.get("inactivity_timeout") or d.get("inactivity-timeout", 180),
             check_done_continuous=d.get("check_done_continuous") or d.get("check-done-continuous", False),
             heartbeat=d.get("heartbeat"),
             heartbeat_expire=d.get("heartbeat_expire") or d.get("heartbeat-expire"),
@@ -4768,8 +4768,8 @@ def main() -> None:
                                help="Path to prompt file (required)")
     ralph_spawn_p.add_argument("--max-iterations", type=int, required=True,
                                help="Maximum loop iterations (required)")
-    ralph_spawn_p.add_argument("--inactivity-timeout", type=int, default=60,
-                               help="Screen stability timeout in seconds (default: 60)")
+    ralph_spawn_p.add_argument("--inactivity-timeout", type=int, default=180,
+                               help="Screen stability timeout in seconds (default: 180). Increase for repos with slow CI/pre-commit hooks.")
     ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
                                help="Regex pattern to stop ralph loop when matched in output")
     ralph_spawn_p.add_argument("--check-done-continuous", action="store_true",

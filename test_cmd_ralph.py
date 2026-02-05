@@ -1847,13 +1847,13 @@ class TestRalphSpawnNewArguments(unittest.TestCase):
         self.assertIn('--done-pattern', result.stdout)
 
     def test_inactivity_timeout_default_value(self):
-        """Test --inactivity-timeout has default value of 60."""
+        """Test --inactivity-timeout has default value of 180."""
         # Parse args to verify default
         import argparse
         parser = argparse.ArgumentParser()
-        parser.add_argument("--inactivity-timeout", type=int, default=60)
+        parser.add_argument("--inactivity-timeout", type=int, default=180)
         args = parser.parse_args([])
-        self.assertEqual(args.inactivity_timeout, 60)
+        self.assertEqual(args.inactivity_timeout, 180)
 
 
 class TestRalphStateCreation(unittest.TestCase):
@@ -2061,7 +2061,7 @@ class TestRalphStateDataclass(unittest.TestCase):
         self.assertEqual(state.status, "running")
         self.assertEqual(state.consecutive_failures, 0)
         self.assertEqual(state.total_failures, 0)
-        self.assertEqual(state.inactivity_timeout, 60)
+        self.assertEqual(state.inactivity_timeout, 180)
         self.assertIsNone(state.done_pattern)
         # New fields for B4
         self.assertEqual(state.last_iteration_ended, "")
@@ -5536,8 +5536,8 @@ class TestRalphSpawnWithDefaultTimeout(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_ralph_spawn_uses_default_timeout_60(self):
-        """Test ralph spawn creates ralph state with default timeout of 60 seconds."""
+    def test_ralph_spawn_uses_default_timeout_180(self):
+        """Test ralph spawn creates ralph state with default timeout of 180 seconds."""
         args = Namespace(
             ralph_command='spawn',
             name='test-worker',
@@ -5553,7 +5553,7 @@ class TestRalphSpawnWithDefaultTimeout(unittest.TestCase):
             ready_timeout=120,
             prompt_file=str(self.prompt_file),
             max_iterations=10,
-            inactivity_timeout=60,  # default
+            inactivity_timeout=180,  # default (increased from 60 for CI/pre-commit hooks)
             done_pattern=None,
             cmd=['--', 'echo', 'test']
         )
@@ -5566,7 +5566,7 @@ class TestRalphSpawnWithDefaultTimeout(unittest.TestCase):
 
         ralph_state = swarm.load_ralph_state('test-worker')
         self.assertIsNotNone(ralph_state)
-        self.assertEqual(ralph_state.inactivity_timeout, 60, "Default timeout should be 60 seconds")
+        self.assertEqual(ralph_state.inactivity_timeout, 180, "Default timeout should be 180 seconds")
         self.assertFalse(hasattr(ralph_state, 'inactivity_mode'), "inactivity_mode should not exist")
 
 
