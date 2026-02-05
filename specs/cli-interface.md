@@ -54,10 +54,40 @@ swarm <command> [options] [arguments]
 | `ralph status` | Get ralph worker status |
 | `ralph pause` | Pause ralph loop |
 | `ralph resume` | Resume ralph loop |
+| `ralph logs` | View iteration history log |
 | `ralph init` | Create PROMPT.md template |
 | `ralph template` | Output template to stdout |
 | `ralph list` | List ralph workers |
 | `ralph run` | Run ralph loop (internal) |
+
+### Ralph Spawn Arguments
+
+Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-specific arguments.
+
+**Note**: The `--tmux` flag is accepted as a no-op for consistency with `swarm spawn`. Ralph workers always use tmux mode, so this flag has no effect but prevents confusing argument errors.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `--name` | string | Yes | - | Unique worker identifier |
+| `--prompt-file` | string | Yes | - | Path to prompt file read each iteration |
+| `--max-iterations` | int | Yes | - | Maximum number of loop iterations |
+| `--inactivity-timeout` | int | No | 180 | Screen stability timeout (seconds) |
+| `--done-pattern` | string | No | null | Regex pattern to stop loop |
+| `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
+| `--no-run` | bool | No | false | Spawn only, don't start loop |
+| `--replace` | bool | No | false | Auto-clean existing worker before spawn |
+| `--clean-state` | bool | No | false | Clear ralph state without affecting worker |
+| `--tmux` | bool | No | (no-op) | Accepted for consistency, ralph always uses tmux |
+| `--worktree` | bool | No | false | Create git worktree |
+| `-- <cmd>` | remainder | Yes | - | Command to run |
+
+### Ralph Logs Arguments
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `<name>` | positional | Yes | - | Worker name |
+| `--live` | bool | No | false | Tail the log file in real-time |
+| `--lines` | int | No | all | Show last N entries |
 
 ### Global Exit Codes
 
@@ -86,6 +116,7 @@ swarm <command> [options] [arguments]
 | `clean` | Worker cleaned | Dirty worktree | Worker not found |
 | `respawn` | Worker respawned | Respawn failed | Worker not found |
 | `init` | File updated | Error writing | - |
+| `ralph logs` | Output displayed | Log file not found | Worker not found |
 
 ### Error Message Format
 

@@ -59,7 +59,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Document `core.bare` prevention/recovery
   - Add edge case scenarios
 
-- [ ] **1.5 Update `specs/cli-interface.md`**
+- [x] **1.5 Update `specs/cli-interface.md`**
   - Document `--tmux` as no-op for ralph spawn (B6)
   - Add ralph logs command to CLI reference
 
