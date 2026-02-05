@@ -23,19 +23,41 @@ When working with AI coding agents like Claude Code, you're limited to one conve
 
 ## Quick Start
 
+### Installation
+
 ```bash
-# Install
+# Install (downloads swarm.py to ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/setup.sh | sh
 
-# Spawn an agent in an isolated worktree
+# Or install manually
+curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/swarm.py -o ~/.local/bin/swarm
+chmod +x ~/.local/bin/swarm
+```
+
+### First Usage
+
+```bash
+# 1. Spawn an agent in an isolated worktree
 swarm spawn --name agent1 --tmux --worktree -- claude --dangerously-skip-permissions
+```
 
-# Send it work
+This creates:
+- A new directory `myrepo-worktrees/agent1/` (git worktree)
+- A new branch called `agent1` based on your current HEAD
+- A tmux window where Claude is running
+
+```bash
+# 2. Send it work
 swarm send agent1 "Fix the auth bug in src/auth.py"
+```
 
-# Monitor progress
+The agent receives your prompt and starts working autonomously.
+
+```bash
+# 3. Monitor progress
 swarm attach agent1      # Live view (Ctrl-B D to detach)
 swarm logs agent1        # View output history
+swarm status agent1      # Check if still running
 ```
 
 > **⚠️ Security:** The `--dangerously-skip-permissions` flag enables autonomous operation by bypassing Claude's interactive prompts. See [Security Considerations](#security-considerations) for sandboxing options.
@@ -60,14 +82,14 @@ swarm kill feature-auth --rm-worktree  # Removes worker + worktree + branch
 
 ### Readiness Detection
 
-Swarm detects when an agent CLI is ready for input by watching for shell prompts. Use `--ready-wait` to block until ready:
+Swarm detects when an agent CLI is ready for input by watching for prompt patterns like `$`, `>`, or `#` in the tmux output. Use `--ready-wait` to block until the agent signals readiness:
 
 ```bash
 swarm spawn --name w1 --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
 swarm send w1 "Start working"  # Safe—agent is definitely ready
 ```
 
-This is essential for scripted workflows where you need to send prompts immediately after spawn.
+Without `--ready-wait`, you risk sending prompts before the agent has fully initialized, causing them to be lost. This is essential for scripted workflows where you need to send prompts immediately after spawn.
 
 ### Tmux Integration
 
@@ -507,9 +529,28 @@ swarm spawn --name agent --tmux --worktree -- \
 
 ## Requirements
 
-- Python 3.10+
-- tmux (for `--tmux` mode)
-- git (for `--worktree` mode)
+| Dependency | Required For | Verify With |
+|------------|--------------|-------------|
+| Python 3.10+ | Core functionality | `python3 --version` |
+| tmux | `--tmux` mode (recommended) | `tmux -V` |
+| git | `--worktree` mode | `git --version` |
+
+### Installing Dependencies
+
+**macOS:**
+```bash
+brew install tmux git python@3.10
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update && sudo apt install -y tmux git python3
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install -y tmux git python3
+```
 
 ## Troubleshooting
 
