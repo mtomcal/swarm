@@ -346,7 +346,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 Current coverage: 84% (513 lines missing). Target: 90%+
 
-- [ ] **6.1 Add tests for main() argument parsing**
+- [x] **6.1 Add tests for main() argument parsing**
   - The `main()` function (lines 4249-4905) has no direct test coverage
   - Add tests that invoke argument parsing for all commands
   - Test help text generation
