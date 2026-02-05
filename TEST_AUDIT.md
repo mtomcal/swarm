@@ -923,6 +923,292 @@ All tests pass.
 
 ---
 
+## 19. Large String/Buffer Accumulation Analysis (Task 7.5)
+
+Comprehensive review of patterns that could accumulate large strings or buffers in memory during test execution.
+
+### 1. stdout/stderr Capture Analysis
+
+**Total capture_output usages across test files: 175+**
+
+All uses are for short-lived subprocess calls that complete quickly:
+- `--help` flag tests (immediate return, small output)
+- Status commands (`swarm ls`, `swarm status`) - small JSON output
+- Git commands in test setup - small output
+- YAML validation - small error messages
+
+**Pattern safety:**
+```python
+# All patterns are safe - output is scoped to test method
+result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+self.assertIn("expected", result.stdout)
+# result goes out of scope when method ends
+```
+
+**Finding: No unbounded stdout/stderr accumulation.**
+
+### 2. File Reading Patterns
+
+**Read operations found:**
+
+| Pattern | Count | Analysis |
+|---------|-------|----------|
+| `Path().read_text()` | 28 | All read small generated files (PROMPT.md, CLAUDE.md, state.json) |
+| `json.load(f)` | 56 | All read small state files (< 1KB typical) |
+| `f.read()` | 1 | Reads copied YAML content (small) |
+
+**Largest files that could be read:**
+1. `iterations.log` - Could grow large in long-running ralph workers
+   - Only referenced in path construction, not actually read in tests
+2. `state.json` files - Always small (worker/workflow metadata)
+3. `PROMPT.md` files - Test-created, always small (< 1KB)
+
+**Finding: No unbounded file reading.**
+
+### 3. Log File Analysis
+
+**Log file handling patterns:**
+
+| File | Pattern | Risk |
+|------|---------|------|
+| test_cmd_logs.py:189-199 | Creates 2-line log, reads it back | Safe - bounded |
+| Integration tests | Use `swarm logs` command, doesn't read into memory | Safe |
+
+The `cmd_logs` function uses `print()` to stream output rather than accumulating in memory.
+
+**Finding: Log files are streamed, not accumulated.**
+
+### 4. JSON Parsing of State Files
+
+**State file sizes (typical):**
+
+| State Type | Typical Size | Max Expected |
+|------------|--------------|--------------|
+| Worker state (state.json) | 200 bytes/worker | ~50KB for 100 workers |
+| Ralph state | 500 bytes | 1KB |
+| Heartbeat state | 300 bytes | 500 bytes |
+| Workflow state | 1KB | 5KB |
+
+**Pattern analysis:**
+```python
+# All JSON loading is for small, bounded state files
+with open(state_file, 'r') as f:
+    state = json.load(f)  # Small state dict
+```
+
+**Finding: JSON parsing handles small, bounded files.**
+
+### 5. Output Concatenation Patterns
+
+**Single instance found:**
+```python
+# tests/test_integration_workflow.py:1049
+output = result.stdout + result.stderr
+```
+
+This combines two small strings (validation error output) and is immediately used for an assertion, not accumulated.
+
+**Finding: No problematic string concatenation patterns.**
+
+### 6. Mock Side Effects
+
+**Pattern check for unbounded side_effect lists:**
+
+Mock side_effects are always small, bounded lists:
+```python
+mock_time.side_effect = [100, 200]  # 2 items
+mock_load.side_effect = [state1, state2, state3]  # 3 items
+```
+
+**Finding: No unbounded mock data.**
+
+### 7. Loop Accumulation Patterns
+
+**Search for `for..append` and `while..append` patterns:**
+
+All found instances are bounded:
+- Creating fixed-size test data
+- Building small worker lists
+- Accumulating within test method scope (garbage collected after test)
+
+**Finding: No unbounded loop accumulation.**
+
+### Summary
+
+**No large string/buffer accumulation risks identified.**
+
+The test suite handles strings and buffers safely:
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| stdout/stderr capture | ✓ Safe | Short-lived, method-scoped |
+| File reading | ✓ Safe | All files are small (< 5KB) |
+| Log file handling | ✓ Safe | Streamed, not accumulated |
+| JSON parsing | ✓ Safe | State files are bounded |
+| String concatenation | ✓ Safe | Single instance, small strings |
+| Mock side_effects | ✓ Safe | Bounded lists |
+| Loop accumulation | ✓ Safe | All loops are bounded |
+
+### Theoretical Risks (Not Currently Issues)
+
+1. **iterations.log in production** - Could grow large, but tests don't read it
+2. **Worker state with many workers** - Bounded by practical limits (~100 workers)
+3. **Long-running tmux capture-pane** - Tests use timeouts, preventing infinite capture
+
+No action required for this task.
+
+---
+
+## 20. Memory Safeguards Implementation (Task 7.6)
+
+Added comprehensive memory monitoring infrastructure to prevent memory exhaustion during test runs.
+
+### New Files Created
+
+| File | Purpose |
+|------|---------|
+| `memory_safe_runner.py` | Memory-safe test runner with safeguards |
+| `test_memory_safe_runner.py` | Tests for memory monitoring utilities (38 tests) |
+
+### Features Implemented
+
+1. **Memory Usage Monitoring**
+   - `get_memory_usage_mb()` - Get current memory usage via resource module
+   - `MemorySnapshot` - Dataclass for memory state at a point in time
+   - `MemoryStats` - Statistics tracking (start, peak, end, growth, warnings)
+
+2. **Memory Limit Warnings**
+   - `MemoryWarning` - UserWarning subclass for threshold exceeded
+   - `MemoryLimitExceeded` - Exception for strict mode failures
+   - Configurable warning threshold (default: 80% of limit)
+   - Configurable memory limit (default: 500 MB)
+
+3. **Garbage Collection Between Test Classes**
+   - `GCBetweenClassesSuite` - Suite wrapper that forces GC between classes
+   - `force_gc()` - Multi-pass GC to handle circular references
+   - Tracks objects collected and GC frequency
+
+4. **Memory-Monitoring Test Result**
+   - `MemoryMonitoringResult` - Test result with memory tracking
+   - Records snapshots before/after each test
+   - Issues warnings when threshold exceeded
+   - Optional strict mode to fail tests exceeding limit
+
+5. **Memory-Safe Test Runner**
+   - `MemorySafeTestRunner` - Extends TextTestRunner
+   - Automatic GC between classes (configurable)
+   - Prints memory usage summary after test run
+   - Supports strict mode for CI enforcement
+
+6. **Test Class Mixin**
+   - `MemoryMonitorMixin` - Mixin for individual test memory tracking
+   - `start_memory_tracking()` / `get_memory_growth()` methods
+   - `assertMemoryGrowthLessThan()` assertion helper
+   - `take_memory_snapshot()` for mid-test tracking
+
+7. **Context Manager**
+   - `memory_limit_context()` - Context manager for memory monitoring
+   - Yields MemoryStats object for access during execution
+   - Optional strict mode
+
+### Usage Examples
+
+**Run tests with memory monitoring:**
+```bash
+python3 memory_safe_runner.py [--memory-limit MB] [--gc-between-classes] [test_pattern ...]
+
+# Run all tests with 500 MB limit
+python3 memory_safe_runner.py
+
+# Run specific test with 200 MB limit
+python3 memory_safe_runner.py --memory-limit 200 test_cmd_workflow
+
+# Run in strict mode (fail if limit exceeded)
+python3 memory_safe_runner.py --strict --memory-limit 300
+```
+
+**Use in code:**
+```python
+from memory_safe_runner import MemorySafeTestRunner, GCBetweenClassesSuite
+
+# Run with memory-safe runner
+runner = MemorySafeTestRunner(memory_limit_mb=500, gc_between_classes=True)
+suite = unittest.TestLoader().discover('.')
+result = runner.run(suite)
+
+# Use GC between classes manually
+suite = GCBetweenClassesSuite(tests, verbose=True)
+unittest.TextTestRunner().run(suite)
+```
+
+**Track memory in individual tests:**
+```python
+from memory_safe_runner import MemoryMonitorMixin
+
+class MyTest(MemoryMonitorMixin, unittest.TestCase):
+    def test_memory_usage(self):
+        self.start_memory_tracking()
+        # ... do work ...
+        self.assertMemoryGrowthLessThan(50, "Growth exceeded 50 MB")
+```
+
+**Use context manager:**
+```python
+from memory_safe_runner import memory_limit_context
+
+with memory_limit_context(100, strict=True) as stats:
+    # Do memory-intensive work
+    pass
+print(f"Peak: {stats.peak_memory_mb} MB")
+```
+
+### Memory Summary Output
+
+The runner prints a summary after each run:
+```
+======================================================================
+MEMORY USAGE SUMMARY
+======================================================================
+  Start memory:    16.4 MB
+  End memory:      45.2 MB
+  Peak memory:     50.1 MB
+  Memory growth:   28.8 MB
+  Memory limit:    500 MB
+  Warnings issued: 0
+  GC collections:  42
+  Objects freed:   15234
+
+  STATUS: OK - Memory usage within limits
+======================================================================
+```
+
+### Integration with Existing Tests
+
+The memory safeguards are optional and don't modify existing test behavior. Tests can be run:
+1. With standard `python3 -m unittest` (no memory monitoring)
+2. With `python3 memory_safe_runner.py` (full monitoring)
+3. With `make test` (standard, unchanged)
+
+### Recommendations for CI
+
+1. **Add memory-monitored test target to Makefile:**
+   ```makefile
+   test-memory:
+       python3 memory_safe_runner.py --memory-limit 500 --gc-between-classes
+   ```
+
+2. **Use strict mode in CI to catch memory regressions:**
+   ```bash
+   python3 memory_safe_runner.py --strict --memory-limit 600
+   ```
+
+3. **Run cleanup before tests:**
+   ```bash
+   python3 -c "from tests.test_tmux_isolation import cleanup_orphaned_test_sessions; print(cleanup_orphaned_test_sessions())"
+   ```
+
+---
+
 ## Test Coverage Notes
 
 Current coverage is 94% (up from 84%). The patterns identified in this audit are primarily about test quality rather than coverage gaps.

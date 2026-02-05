@@ -453,17 +453,30 @@ The test suite has caused memory exhaustion events that crash the system. This p
   - **DONE**: Added TestTmuxCleanupUtilities and TestActiveSocketTracking test classes
   - **DONE**: Documented findings in TEST_AUDIT.md Section 18
 
-- [ ] **7.5 Check for large string/buffer accumulation**
+- [x] **7.5 Check for large string/buffer accumulation**
   - Review tests that capture stdout/stderr (could accumulate large outputs)
   - Check for tests reading large files into memory
   - Look for log file contents being loaded entirely into memory
   - Review JSON parsing of potentially large state files
+  - **DONE**: Comprehensive analysis found no accumulation risks
+  - **FINDING**: All stdout/stderr captures are short-lived and method-scoped
+  - **FINDING**: All file reads are for small, bounded files (< 5KB)
+  - **FINDING**: Log files are streamed via print(), not accumulated
+  - **FINDING**: JSON parsing handles small state files only
+  - Results documented in TEST_AUDIT.md Section 19
 
-- [ ] **7.6 Add memory safeguards to test infrastructure**
+- [x] **7.6 Add memory safeguards to test infrastructure**
   - Add memory limit warnings to test runner
   - Implement test isolation to prevent cross-test memory accumulation
   - Add periodic garbage collection between test classes
   - Consider running memory-heavy tests in separate processes
+  - **DONE**: Created `memory_safe_runner.py` with comprehensive memory monitoring
+  - **DONE**: `MemorySafeTestRunner` - runner with memory limits, warnings, and GC between classes
+  - **DONE**: `GCBetweenClassesSuite` - suite wrapper that forces GC between test classes
+  - **DONE**: `MemoryMonitorMixin` - mixin for individual test memory tracking
+  - **DONE**: `memory_limit_context()` - context manager for memory monitoring
+  - **DONE**: Created `test_memory_safe_runner.py` with 38 unit tests
+  - **DONE**: Documented in TEST_AUDIT.md Section 20
 
 - [ ] **7.7 Fix identified memory issues**
   - Apply fixes for all identified memory leaks
