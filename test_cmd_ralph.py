@@ -9548,5 +9548,191 @@ class TestRalphSpawnTransactionalRollback(unittest.TestCase):
             )
 
 
+class TestCmdRalphLogs(unittest.TestCase):
+    """Test cmd_ralph_logs function (F2)."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        # Create temp directory for RALPH_DIR
+        self.temp_dir = tempfile.mkdtemp()
+        self.old_ralph_dir = swarm.RALPH_DIR
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Create temp directory for STATE_FILE
+        self.old_state_file = swarm.STATE_FILE
+        self.old_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Restore original directories and clean up."""
+        swarm.RALPH_DIR = self.old_ralph_dir
+        swarm.STATE_FILE = self.old_state_file
+        swarm.STATE_LOCK_FILE = self.old_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_logs_no_ralph_state_error(self):
+        """Test ralph logs for worker with no ralph state."""
+        args = Namespace(name='nonexistent', live=False, lines=None)
+
+        with self.assertRaises(SystemExit) as cm:
+            with patch('sys.stderr'):
+                swarm.cmd_ralph_logs(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_logs_no_log_file_error(self):
+        """Test ralph logs when log file doesn't exist."""
+        # Create ralph state but no log file
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='test-worker', live=False, lines=None)
+
+        with self.assertRaises(SystemExit) as cm:
+            with patch('sys.stderr'):
+                swarm.cmd_ralph_logs(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_logs_shows_all_entries(self):
+        """Test ralph logs shows all entries by default."""
+        # Create ralph state and log file
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create log file with entries
+        log_path = swarm.get_ralph_iterations_log_path('test-worker')
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_content = """2024-01-15T10:30:00 [START] iteration 1/10
+2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
+2024-01-15T10:35:43 [START] iteration 2/10
+2024-01-15T10:40:15 [END] iteration 2 exit=0 duration=4m32s
+2024-01-15T10:40:16 [START] iteration 3/10
+"""
+        log_path.write_text(log_content)
+
+        args = Namespace(name='test-worker', live=False, lines=None)
+
+        import io
+        with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+            swarm.cmd_ralph_logs(args)
+            output = mock_stdout.getvalue()
+
+        # Should show all entries
+        self.assertIn('[START] iteration 1/10', output)
+        self.assertIn('[END] iteration 1 exit=0', output)
+        self.assertIn('[START] iteration 2/10', output)
+        self.assertIn('[END] iteration 2 exit=0', output)
+        self.assertIn('[START] iteration 3/10', output)
+
+    def test_logs_lines_option(self):
+        """Test ralph logs --lines N shows last N entries."""
+        # Create ralph state and log file
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create log file with entries
+        log_path = swarm.get_ralph_iterations_log_path('test-worker')
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_content = """2024-01-15T10:30:00 [START] iteration 1/10
+2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
+2024-01-15T10:35:43 [START] iteration 2/10
+2024-01-15T10:40:15 [END] iteration 2 exit=0 duration=4m32s
+2024-01-15T10:40:16 [START] iteration 3/10
+"""
+        log_path.write_text(log_content)
+
+        args = Namespace(name='test-worker', live=False, lines=2)
+
+        import io
+        with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+            swarm.cmd_ralph_logs(args)
+            output = mock_stdout.getvalue()
+
+        # Should only show last 2 lines
+        self.assertNotIn('[START] iteration 1/10', output)
+        self.assertNotIn('[END] iteration 1 exit=0', output)
+        self.assertNotIn('[START] iteration 2/10', output)
+        self.assertIn('[END] iteration 2 exit=0', output)
+        self.assertIn('[START] iteration 3/10', output)
+
+    def test_logs_empty_file(self):
+        """Test ralph logs handles empty log file."""
+        # Create ralph state and empty log file
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create empty log file
+        log_path = swarm.get_ralph_iterations_log_path('test-worker')
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text('')
+
+        args = Namespace(name='test-worker', live=False, lines=None)
+
+        import io
+        with patch('sys.stdout', new=io.StringIO()) as mock_stdout:
+            swarm.cmd_ralph_logs(args)
+            output = mock_stdout.getvalue()
+
+        # Should output nothing for empty file
+        self.assertEqual(output, '')
+
+    def test_logs_subparser_exists(self):
+        """Test that 'ralph logs' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'logs', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--live', result.stdout)
+        self.assertIn('--lines', result.stdout)
+
+    def test_logs_help_epilog_exists(self):
+        """Test RALPH_LOGS_HELP_EPILOG constant exists and has content."""
+        self.assertIn('iteration history', swarm.RALPH_LOGS_HELP_EPILOG)
+        self.assertIn('--live', swarm.RALPH_LOGS_HELP_EPILOG)
+        self.assertIn('--lines', swarm.RALPH_LOGS_HELP_EPILOG)
+
+
+class TestCmdRalphLogsDispatch(unittest.TestCase):
+    """Test cmd_ralph dispatches to logs."""
+
+    def test_dispatch_logs(self):
+        """Test cmd_ralph dispatches to logs."""
+        args = Namespace(ralph_command='logs', name='test-worker', live=False, lines=None)
+
+        with patch('swarm.cmd_ralph_logs') as mock_logs:
+            swarm.cmd_ralph(args)
+
+        mock_logs.assert_called_once_with(args)
+
+
 if __name__ == "__main__":
     unittest.main()

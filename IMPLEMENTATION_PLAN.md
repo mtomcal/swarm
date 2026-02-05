@@ -128,7 +128,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Spawn, then spawn again with `--replace`, verify clean replacement
   - File: `swarm.py` (cmd_ralph_spawn)
 
-- [ ] **3.2 Feature: `swarm ralph logs` command (F2)**
+- [x] **3.2 Feature: `swarm ralph logs` command (F2)**
   - Add `ralph logs` subcommand
   - Show iteration log from `~/.swarm/ralph/<name>/iterations.log`
   - Add `--live` flag for tail -f behavior

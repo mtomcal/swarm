@@ -1122,6 +1122,23 @@ Examples:
   swarm ralph list --status running     # Only running loops
 """
 
+RALPH_LOGS_HELP_EPILOG = """\
+Shows the iteration history log for a ralph worker.
+
+The log shows timestamped events for each iteration: start, end, failures,
+timeouts, and loop completion.
+
+Examples:
+  swarm ralph logs agent                # Show all entries
+  swarm ralph logs agent --lines 10     # Show last 10 entries
+  swarm ralph logs agent --live         # Tail log in real-time
+
+Log format:
+  2024-01-15T10:30:00 [START] iteration 1/100
+  2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
+  2024-01-15T12:00:00 [DONE] loop complete after 10 iterations reason=done_pattern
+"""
+
 
 # Heartbeat help text constants
 HEARTBEAT_HELP_DESCRIPTION = """\
@@ -4755,6 +4772,19 @@ def main() -> None:
     ralph_list_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
                               default="all", help="Filter by ralph status (default: all)")
 
+    # ralph logs - view iteration history
+    ralph_logs_p = ralph_subparsers.add_parser(
+        "logs",
+        help="Show iteration history log for a ralph worker",
+        epilog=RALPH_LOGS_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ralph_logs_p.add_argument("name", help="Worker name")
+    ralph_logs_p.add_argument("--live", action="store_true",
+                              help="Tail the log file in real-time (like tail -f)")
+    ralph_logs_p.add_argument("--lines", type=int, default=None,
+                              help="Show last N entries (default: all)")
+
     # ralph spawn - spawn a new ralph worker
     ralph_spawn_p = ralph_subparsers.add_parser(
         "spawn",
@@ -6073,6 +6103,7 @@ def cmd_ralph(args) -> None:
     - resume: Resume ralph loop for a worker
     - run: Run the ralph loop (main outer loop execution)
     - list: List all ralph workers
+    - logs: Show iteration history log for a worker
     """
     if args.ralph_command == "spawn":
         cmd_ralph_spawn(args)
@@ -6090,6 +6121,8 @@ def cmd_ralph(args) -> None:
         cmd_ralph_run(args)
     elif args.ralph_command == "list":
         cmd_ralph_list(args)
+    elif args.ralph_command == "logs":
+        cmd_ralph_logs(args)
 
 
 def _rollback_ralph_spawn(
@@ -6733,6 +6766,67 @@ def cmd_ralph_list(args) -> None:
             for header in headers:
                 row_parts.append(row[header].ljust(col_widths[header]))
             print("  ".join(row_parts))
+
+
+def cmd_ralph_logs(args) -> None:
+    """Show iteration history log for a ralph worker.
+
+    Displays the ralph iteration log from ~/.swarm/ralph/<name>/iterations.log.
+    Supports showing all entries, last N entries, or tailing in real-time.
+
+    Args:
+        args: Namespace with name, live, and lines attributes
+    """
+    # Check ralph state exists (don't need full state, just verify worker exists)
+    ralph_state = load_ralph_state(args.name)
+
+    if not ralph_state:
+        print(f"swarm: error: no ralph state found for worker '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Get log file path
+    log_path = get_ralph_iterations_log_path(args.name)
+
+    if not log_path.exists():
+        print(f"swarm: error: no iteration log found for worker '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+
+    if args.live:
+        # Tail the log file in real-time (like tail -f)
+        try:
+            # First print existing content
+            with open(log_path, 'r') as f:
+                content = f.read()
+                if content:
+                    print(content, end='')
+
+            # Then tail for new content
+            with open(log_path, 'r') as f:
+                # Seek to end of file
+                f.seek(0, 2)
+                while True:
+                    line = f.readline()
+                    if line:
+                        print(line, end='', flush=True)
+                    else:
+                        time.sleep(0.5)
+        except KeyboardInterrupt:
+            # User pressed Ctrl+C, exit gracefully
+            pass
+    elif args.lines is not None:
+        # Show last N entries
+        with open(log_path, 'r') as f:
+            lines = f.readlines()
+            # Get last N lines
+            last_lines = lines[-args.lines:] if len(lines) >= args.lines else lines
+            for line in last_lines:
+                print(line, end='')
+    else:
+        # Show all entries
+        with open(log_path, 'r') as f:
+            content = f.read()
+            if content:
+                print(content, end='')
 
 
 def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple[bool, str]:
