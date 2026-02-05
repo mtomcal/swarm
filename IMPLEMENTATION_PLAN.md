@@ -67,7 +67,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Add `exit_reason` field to RalphState (B4)
   - Document iteration timing for ETA (F3)
 
-- [ ] **1.7 Update `specs/logs.md`**
+- [x] **1.7 Update `specs/logs.md`**
   - Add cross-reference to `swarm ralph logs` (F2)
 
 ### Phase 2: Bug Fixes

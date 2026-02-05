@@ -138,6 +138,31 @@ Log files are stored at `~/.swarm/logs/<name>.stdout.log`. If missing:
 reset  # Reset terminal to clean state
 ```
 
+## Related Commands
+
+### swarm ralph logs (for Ralph Workers)
+
+For workers running in Ralph mode, there is a separate command to view **iteration history**:
+
+```bash
+swarm ralph logs <name>           # View iteration history
+swarm ralph logs <name> --live    # Tail iteration log in real-time
+swarm ralph logs <name> --lines 5 # Show last 5 entries
+```
+
+**Key differences**:
+
+| Command | What it shows | Data source |
+|---------|---------------|-------------|
+| `swarm logs <name>` | Worker's tmux pane output (live session) | tmux `capture-pane` |
+| `swarm ralph logs <name>` | Iteration history (timestamps, status, reasons) | `~/.swarm/ralph/<name>/iterations.log` |
+
+**When to use each**:
+- Use `swarm logs` to see what the worker is currently doing (real-time output)
+- Use `swarm ralph logs` to see iteration history (when iterations started, completed, why they ended)
+
+See `specs/ralph-loop.md` for full documentation of `swarm ralph logs`.
+
 ## Implementation Notes
 
 - Tmux capture uses `capture-pane` with `-p` flag for stdout output
