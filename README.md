@@ -1,8 +1,25 @@
-# swarm
+# Swarm
 
-Process manager for AI agent CLIs. Spawn, track, and control multiple agents via tmux with git worktree isolation.
+**Orchestrate AI coding agents at scale.**
 
-**Key features:** Process lifecycle management • Worktree isolation per worker • Tmux integration • Readiness detection
+Swarm is a process manager for AI agent CLIs that lets you run multiple autonomous agents in parallel, each in its own isolated git worktree. Think of it as `tmux` + `git worktree` + agent lifecycle management, designed for engineers who want to scale AI-assisted development beyond a single chat session.
+
+## Why Swarm?
+
+When working with AI coding agents like Claude Code, you're limited to one conversation at a time. Swarm removes that bottleneck:
+
+- **Parallel execution** — Run 3, 5, or 10 agents simultaneously working on different tasks
+- **Git isolation** — Each agent works in its own worktree/branch, eliminating merge conflicts
+- **Persistent sessions** — Agents run in tmux, so you can detach and reconnect
+- **Automatic recovery** — Ralph mode restarts agents with fresh context when they stall
+- **Zero coordination overhead** — Agents don't know about each other; just fan out work and collect results
+
+### Real-World Use Cases
+
+1. **Batch processing issues** — Spawn one agent per bug/feature from your issue tracker
+2. **Parallel code review** — Multiple agents review the same PR for security, performance, style
+3. **Long-running tasks** — Let agents work overnight with Ralph's autonomous looping
+4. **CI/CD integration** — Trigger agent workflows from pipelines
 
 ## Quick Start
 
@@ -11,65 +28,106 @@ Process manager for AI agent CLIs. Spawn, track, and control multiple agents via
 curl -fsSL https://raw.githubusercontent.com/mtomcal/swarm/main/setup.sh | sh
 
 # Spawn an agent in an isolated worktree
-swarm spawn --name agent1 --tmux --worktree -- claude
+swarm spawn --name agent1 --tmux --worktree -- claude --dangerously-skip-permissions
 
-# Send work and monitor
-swarm send agent1 "Fix the auth bug"
-swarm attach agent1
+# Send it work
+swarm send agent1 "Fix the auth bug in src/auth.py"
+
+# Monitor progress
+swarm attach agent1      # Live view (Ctrl-B D to detach)
+swarm logs agent1        # View output history
 ```
 
-## Power User Workflows
+> **⚠️ Security:** The `--dangerously-skip-permissions` flag enables autonomous operation by bypassing Claude's interactive prompts. See [Security Considerations](#security-considerations) for sandboxing options.
 
-### Multi-Agent Parallel Development
-
-Fan out work across multiple isolated agents:
-
-```bash
-for task in $(bd ready --format=ids | head -3); do
-    swarm spawn --name "w-$task" --tmux --worktree --ready-wait -- claude
-    swarm send "w-$task" "/beads:implement-task $task"
-done
-swarm wait --all
-swarm clean --all --rm-worktree
-```
+## Core Concepts
 
 ### Worktree Isolation
 
-Each `--worktree` worker gets its own git branch and directory, preventing merge conflicts:
+Each `--worktree` worker gets its own git branch and working directory. This is the key to running agents in parallel without conflicts:
 
 ```bash
-swarm spawn --name feature-auth --tmux --worktree -- claude
-# Creates: <repo>-worktrees/feature-auth on branch 'feature-auth'
+swarm spawn --name feature-auth --tmux --worktree -- claude --dangerously-skip-permissions
+# Creates: ~/code/myrepo-worktrees/feature-auth/
+# On branch: feature-auth (branched from current HEAD)
+```
+
+Workers can commit, push, and even create PRs independently. When done, clean up with:
+
+```bash
+swarm kill feature-auth --rm-worktree  # Removes worker + worktree + branch
 ```
 
 ### Readiness Detection
 
-Use `--ready-wait` to block until the agent is ready for input:
+Swarm detects when an agent CLI is ready for input by watching for shell prompts. Use `--ready-wait` to block until ready:
 
 ```bash
-swarm spawn --name w1 --tmux --ready-wait -- claude --dangerously-skip-permissions
-swarm send w1 "Start working immediately"  # Safe—agent is ready
+swarm spawn --name w1 --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
+swarm send w1 "Start working"  # Safe—agent is definitely ready
 ```
 
-### Broadcasting
+This is essential for scripted workflows where you need to send prompts immediately after spawn.
 
-Send commands to all running workers:
+### Tmux Integration
+
+All `--tmux` workers run in named tmux windows. You can:
 
 ```bash
-swarm send --all "/status"
-swarm interrupt --all  # Ctrl-C all workers
+swarm attach agent1          # Interactive view (Ctrl-B D to detach)
+swarm logs agent1            # Dump scrollback buffer
+swarm logs -f agent1         # Follow output in real-time
 ```
 
-### Worker Tags
+Workers persist across SSH disconnects. Reattach anytime with `swarm attach`.
 
-Organize workers with tags for filtering:
+## Workflows
+
+### Parallel Task Processing
+
+Fan out work across multiple agents, one per task:
 
 ```bash
-swarm spawn --name w1 --tag team-a --tag urgent --tmux -- claude
-swarm ls --tag team-a  # Filter workers by tag
+#!/bin/bash
+# Process 3 tasks in parallel
+TASKS=("fix-auth-bug" "add-logging" "update-docs")
+
+for task in "${TASKS[@]}"; do
+    swarm spawn --name "$task" --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
+    swarm send "$task" "Complete the task described in tasks/$task.md"
+done
+
+# Wait for all to finish
+swarm wait --all
+
+# Review results in each worktree, then clean up
+for task in "${TASKS[@]}"; do
+    echo "=== $task ===" && git -C "../myrepo-worktrees/$task" log --oneline -3
+done
+
+swarm clean --all --rm-worktree
+```
+
+### Broadcasting to All Workers
+
+```bash
+swarm send --all "/status"       # Check status of all agents
+swarm interrupt --all            # Send Ctrl-C to all workers
+```
+
+### Organizing with Tags
+
+```bash
+swarm spawn --name w1 --tag team-a --tag urgent --tmux -- claude --dangerously-skip-permissions
+swarm spawn --name w2 --tag team-a --tmux -- claude --dangerously-skip-permissions
+swarm spawn --name w3 --tag team-b --tmux -- claude --dangerously-skip-permissions
+
+swarm ls --tag team-a            # List only team-a workers
 ```
 
 ## Command Reference
+
+### Basic Commands
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
@@ -85,172 +143,412 @@ swarm ls --tag team-a  # Filter workers by tag
 | `interrupt` | Send Ctrl-C | `--all` |
 | `eof` | Send Ctrl-D | |
 | `respawn` | Restart dead worker | `--clean-first` |
-| `ralph` | Autonomous agent looping | `init` `status` `pause` `resume` `list` |
 
-## Ralph Loop (Autonomous Agents)
+### Subcommand Groups
 
-Swarm supports autonomous agent looping via the `--ralph` flag, enabling long-running workflows that restart with fresh context windows. Based on the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralph-wiggum).
+| Group | Description | Subcommands |
+|-------|-------------|-------------|
+| `ralph` | Autonomous looping | `spawn` `run` `init` `status` `pause` `resume` `list` |
+| `heartbeat` | Rate limit recovery | `start` `stop` `list` `status` `pause` `resume` |
+| `workflow` | Multi-stage pipelines | `run` `status` `list` `cancel` `resume` `logs` `validate` |
 
-### Quick Start
+## Ralph Mode (Autonomous Looping)
+
+For long-running tasks, Ralph mode automatically restarts agents when they stall or hit context limits. Each restart gets a fresh context window while preserving work through git commits.
+
+Based on the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralph-wiggum).
+
+### Basic Usage
 
 ```bash
-# Generate a starter prompt file
-swarm ralph init
+# Create a prompt file that will be re-read each iteration
+cat > PROMPT.md << 'EOF'
+You are working on a large refactoring task.
 
-# Start autonomous loop (10 iterations max)
-swarm spawn --name agent --ralph --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+1. Read PROGRESS.md to see what's been done
+2. Continue the next item on the checklist
+3. Commit your changes with a descriptive message
+4. Update PROGRESS.md
+5. Say "/done" if everything is complete
 
-# Monitor progress
-swarm ralph status agent
-swarm attach agent  # Live view (Ctrl-B D to detach)
+If you get stuck, say "/stuck" with details.
+EOF
 
-# Pause/resume the loop
-swarm ralph pause agent
-swarm ralph resume agent
+# Start the loop (max 20 iterations)
+swarm ralph spawn --name refactor --prompt-file ./PROMPT.md --max-iterations 20 -- claude --dangerously-skip-permissions
+
+# Monitor
+swarm ralph status refactor    # Check iteration count, status
+swarm attach refactor          # Watch live (Ctrl-B D to detach)
+tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
 ```
 
 ### How It Works
 
-1. **Each iteration**: Reads `PROMPT.md`, spawns agent, waits for completion or inactivity
-2. **Automatic restart**: When agent exits or becomes inactive, loop restarts with fresh context
-3. **Failure handling**: Exponential backoff on failures (1s → 2s → 4s → 8s), stops after 5 consecutive failures
-4. **Done detection**: Optional `--done-pattern` regex stops the loop when matched
+1. Each iteration reads your prompt file and sends it to a fresh agent
+2. The agent works until it exits or goes inactive (no output for 60s by default)
+3. Loop restarts with fresh context, re-reading the prompt file
+4. Stops when: max iterations reached, `--done-pattern` matched, or 5 consecutive failures
 
 ### Key Options
 
-| Flag | Description |
-|------|-------------|
-| `--ralph` | Enable autonomous loop mode |
-| `--prompt-file` | Path to prompt file (re-read each iteration) |
-| `--max-iterations` | Maximum loop iterations |
-| `--inactivity-timeout` | Seconds of inactivity before restart (default: 300) |
-| `--done-pattern` | Regex to stop loop when matched in output |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prompt-file` | required | Prompt sent each iteration |
+| `--max-iterations` | unlimited | Stop after N iterations |
+| `--inactivity-timeout` | 60s | Restart after N seconds of no output |
+| `--done-pattern` | none | Regex to stop loop when matched |
 
-### Ralph Subcommands
-
-```bash
-swarm ralph init              # Create PROMPT.md template
-swarm ralph template          # Output template to stdout
-swarm ralph status <name>     # Show loop status and iteration
-swarm ralph pause <name>      # Pause the loop
-swarm ralph resume <name>     # Resume paused loop
-swarm ralph list              # List all ralph workers
-```
-
-## Integration Patterns
-
-### With Beads (Issue Tracking)
-
-Swarm integrates seamlessly with [beads](https://github.com/steveyegge/beads) for issue-driven development workflows.
-
-#### Issue-Per-Worker Pattern
-
-Each beads issue gets its own swarm worker with isolated worktree:
-- Worker name matches issue ID for easy tracking
-- Branch name matches issue ID
-- Automatic worktree cleanup when work completes
+### Controlling the Loop
 
 ```bash
-# Start worker for specific issue
-swarm spawn --name "bd-swarm-mlm.3" --tmux --worktree --ready-wait -- claude
-swarm send "bd-swarm-mlm.3" "/beads:full-cycle swarm-mlm.3"
+swarm ralph pause refactor     # Pause after current iteration
+swarm ralph resume refactor    # Continue paused loop
+swarm ralph list               # List all ralph workers with status
+swarm kill refactor            # Stop immediately
 ```
 
-#### Automated Task Assignment
+## Heartbeat (Rate Limit Recovery)
 
-Script that pulls ready issues from beads and spawns workers automatically:
+When agents hit API rate limits, they pause and wait. Rate limits often renew on fixed intervals (e.g., every 4 hours). Heartbeat sends periodic nudges to workers, prompting them to retry when limits renew.
+
+### Basic Usage
+
+```bash
+# Start heartbeat for running worker (nudge every 4 hours, stop after 24h)
+swarm heartbeat start agent --interval 4h --expire 24h
+
+# Or attach heartbeat at spawn time
+swarm spawn --name agent --tmux --worktree --heartbeat 4h --heartbeat-expire 24h -- claude --dangerously-skip-permissions
+
+# Monitor heartbeats
+swarm heartbeat list                     # List all heartbeats
+swarm heartbeat status agent             # Detailed status for one worker
+```
+
+### How It Works
+
+- If the agent is stuck on a rate limit, the nudge prompts it to retry
+- If the agent is working normally, it ignores the nudge
+- If the agent has exited, the nudge has no effect
+
+The default message is "continue", or customize with `--message "please continue"`.
+
+### Key Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--interval` | required | Time between nudges (e.g., "4h", "30m") |
+| `--expire` | never | Stop heartbeat after duration |
+| `--message` | "continue" | Message to send on each beat |
+
+### Controlling Heartbeats
+
+```bash
+swarm heartbeat pause agent    # Pause temporarily
+swarm heartbeat resume agent   # Resume
+swarm heartbeat stop agent     # Stop permanently
+```
+
+## Workflow (Multi-Stage Pipelines)
+
+Workflow orchestrates sequential agent stages defined in YAML. Perfect for complex tasks like "plan → build → validate" that need to run unattended overnight.
+
+### Minimal Example
+
+```yaml
+# simple-task.yaml
+name: simple-task
+stages:
+  - name: work
+    type: worker
+    prompt: |
+      Complete the task in TASK.md.
+      Say /done when finished.
+    done-pattern: "/done"
+    timeout: 1h
+```
+
+```bash
+swarm workflow run simple-task.yaml
+swarm workflow status simple-task
+```
+
+### Full Example with Multiple Stages
+
+```yaml
+# build-feature.yaml
+name: feature-build
+description: Plan, build, and validate a feature
+heartbeat: 4h              # Nudge agents every 4h for rate limits
+heartbeat-expire: 24h
+worktree: true             # Each stage in isolated worktree
+
+stages:
+  - name: plan
+    type: worker           # Single-run agent
+    prompt: |
+      Read TASK.md. Create implementation plan in PLAN.md.
+      Say /done when the plan is complete.
+    done-pattern: "/done"
+    timeout: 1h
+
+  - name: build
+    type: ralph            # Looping agent (for longer work)
+    prompt-file: ./prompts/build.md
+    max-iterations: 50
+    done-pattern: "ALL TASKS COMPLETE"
+    on-failure: retry
+    max-retries: 2
+
+  - name: validate
+    type: ralph
+    prompt: |
+      Run tests: python -m pytest
+      Fix any failures. Say /done when all tests pass.
+    max-iterations: 20
+    done-pattern: "/done"
+```
+
+### Running Workflows
+
+```bash
+# Run immediately
+swarm workflow run build-feature.yaml
+
+# Schedule for 2am tonight
+swarm workflow run build-feature.yaml --at "02:00"
+
+# Run in 4 hours
+swarm workflow run build-feature.yaml --in 4h
+
+# Monitor progress
+swarm workflow status feature-build
+swarm workflow logs feature-build
+
+# Control
+swarm workflow cancel feature-build   # Stop the workflow
+swarm workflow resume feature-build   # Resume failed workflow
+```
+
+### Stage Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `worker` | Single-run agent | Planning, review, one-shot tasks |
+| `ralph` | Looping agent | Implementation, multi-step work |
+
+### Failure Handling
+
+```yaml
+on-failure: stop     # Stop workflow (default)
+on-failure: retry    # Retry up to max-retries times
+on-failure: skip     # Skip stage, continue to next
+```
+
+### Director Pattern (Agent-in-the-Loop)
+
+For workflows that need monitoring, spawn a separate "director" agent instead of building orchestration into the workflow:
+
+```bash
+# Start workflow in background
+swarm workflow run build.yaml &
+
+# Spawn director to monitor and intervene
+swarm spawn --name director --tmux -- claude --dangerously-skip-permissions
+swarm send director "Monitor workflow 'feature-build'. Check status every 10 min.
+If a stage is stuck, intervene with 'swarm send feature-build-<stage> guidance'."
+```
+
+The director uses existing commands (`workflow status`, `send`, `attach`) to observe and control the workflow. This keeps the workflow system simple while enabling sophisticated orchestration through agent prompts.
+
+## Integration Examples
+
+### Issue Tracker Integration
+
+Connect swarm to your issue tracker for automated task processing:
 
 ```bash
 #!/bin/bash
-# Process up to 3 ready issues in parallel
-for id in $(bd ready --json | jq -r '.[].id' | head -3); do
-    echo "Starting worker for issue $id"
-    swarm spawn --name "bd-$id" --tmux --worktree --ready-wait -- claude
-    swarm send "bd-$id" "/beads:full-cycle $id"
+# Example: Process GitHub issues labeled "ai-task"
+for issue in $(gh issue list --label ai-task --json number -q '.[].number' | head -3); do
+    swarm spawn --name "issue-$issue" --tmux --worktree --ready-wait -- claude --dangerously-skip-permissions
+    swarm send "issue-$issue" "Fix GitHub issue #$issue. Read it with: gh issue view $issue"
 done
 
-# Wait for all to complete
 swarm wait --all
+swarm clean --all --rm-worktree
+```
 
-# Clean up completed workers and their worktrees
+### Parallel Code Review
+
+Multiple agents review different aspects of the same code:
+
+```bash
+#!/bin/bash
+PR_NUM=123
+
+for aspect in security performance readability; do
+    swarm spawn --name "review-$aspect" --tmux --ready-wait -- claude --dangerously-skip-permissions
+    swarm send "review-$aspect" "Review PR #$PR_NUM focusing on $aspect. Run: gh pr diff $PR_NUM"
+done
+
+# Wait and collect results
+swarm wait --all
+for aspect in security performance readability; do
+    echo "=== $aspect review ===" >> review-summary.md
+    swarm logs "review-$aspect" >> review-summary.md
+done
+
 swarm clean --all
 ```
 
-#### Session Completion Integration
-
-Swarm workers should complete the full beads workflow before exit:
-
-```bash
-# Inside worker session - complete the cycle
-/beads:full-cycle swarm-mlm.3
-
-# Then land the plane (commit, push, close issue)
-/commit "Document swarm + beads integration patterns"
-/push
-bd close swarm-mlm.3
-```
-
-#### Parallel Review Pattern
-
-Multiple workers can review the same work simultaneously:
-
-```bash
-# Start parallel reviewers for a PR/issue
-ISSUE="swarm-mlm.3"
-for aspect in security performance style; do
-    swarm spawn --name "review-$aspect" --tmux --ready-wait -- claude
-    swarm send "review-$aspect" "Review $ISSUE focusing on $aspect aspects. Run: bd show $ISSUE"
-done
-
-# Collect results
-for aspect in security performance style; do
-    swarm logs "review-$aspect" > "review-$aspect.log"
-done
-```
-
-### With Git Worktrees
-
-Swarm creates worktrees in `<repo>-worktrees/<worker-name>`:
-
-```bash
-swarm spawn --name feature-x --tmux --worktree -- claude
-# Worktree: ~/code/myrepo-worktrees/feature-x
-# Branch: feature-x (created from current branch)
-```
-
-### Scripted Orchestration
+### Respawn Failed Workers
 
 ```bash
 #!/bin/bash
-# Respawn any failed workers
+# Check all workers and restart any that died
 for name in $(swarm ls --format names); do
-    swarm status "$name" || swarm respawn "$name" --clean-first
+    if ! swarm status "$name" 2>/dev/null; then
+        echo "Respawning failed worker: $name"
+        swarm respawn "$name" --clean-first
+    fi
 done
 ```
 
 ## State & Logs
 
+All state is stored in `~/.swarm/`:
+
 ```
 ~/.swarm/
-├── state.json                      # Worker registry
+├── state.json                        # Worker registry
 ├── logs/
-│   ├── worker1.stdout.log          # Background process output
-│   └── worker1.stderr.log
-└── ralph/
-    └── <worker-name>/
-        ├── state.json              # Ralph loop state (iteration, status)
-        └── iterations.log          # Iteration history with timestamps
+│   └── <worker>.{stdout,stderr}.log  # Background process output
+├── ralph/
+│   └── <worker>/
+│       ├── state.json                # Loop state (iteration, status)
+│       └── iterations.log            # Timestamped iteration history
+├── heartbeats/
+│   └── <worker>.json                 # Heartbeat state (interval, beats sent)
+└── workflows/
+    └── <workflow>/
+        ├── state.json                # Workflow state (stages, progress)
+        └── logs/                     # Per-stage logs
 ```
 
-Tmux workers use scrollback buffer—access via `swarm logs <name>`.
+Useful debugging commands:
 
-For ralph loops, monitor iteration progress with `tail -f ~/.swarm/ralph/<name>/iterations.log`.
+```bash
+cat ~/.swarm/state.json | jq .                     # View all workers
+swarm logs worker1                                  # Tmux scrollback
+tail -f ~/.swarm/ralph/agent/iterations.log         # Watch Ralph progress
+swarm heartbeat list                                # Check heartbeat status
+swarm workflow status my-workflow                   # Check workflow progress
+```
+
+## Security Considerations
+
+Running autonomous AI agents requires careful thought about permissions and isolation.
+
+### The Permission Tradeoff
+
+Claude Code normally prompts for confirmation before running commands, editing files, or making network requests. The `--dangerously-skip-permissions` flag bypasses these prompts—**required for autonomous operation**, but it means agents can:
+
+- Execute arbitrary shell commands
+- Read, write, and delete any accessible files
+- Make network requests
+- Install packages
+
+### Mitigation Strategies
+
+**1. Worktree Isolation (Built-in)**
+
+Always use `--worktree`. Each agent works in its own directory and branch, limiting blast radius.
+
+**2. Claude's Native Sandbox (Recommended)**
+
+Claude Code has built-in OS-level sandboxing:
+
+```bash
+# Configure sandbox once (interactive)
+claude
+> /sandbox
+
+# Workers inherit sandbox settings
+swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
+```
+
+Uses Seatbelt (macOS) or bubblewrap (Linux) for filesystem/network isolation.
+
+**3. Docker Isolation**
+
+```bash
+# Docker Desktop Sandboxes (4.50+)
+docker sandbox run --image claude-code-sandbox -- \
+  swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
+```
+
+**4. Restricted Tools**
+
+Disable bash entirely:
+
+```bash
+swarm spawn --name agent --tmux --worktree -- \
+  claude --dangerously-skip-permissions --allowedTools "Edit Read Grep Glob"
+```
+
+### Best Practices
+
+1. **Use disposable environments** — VMs, containers, or cloud instances you can destroy
+2. **Set iteration limits** — `--max-iterations` in Ralph prevents runaway loops
+3. **Monitor activity** — `swarm attach` or `swarm logs -f` to watch agents
+4. **Review before merge** — Treat all agent commits as untrusted code
 
 ## Requirements
 
 - Python 3.10+
 - tmux (for `--tmux` mode)
 - git (for `--worktree` mode)
+
+## Troubleshooting
+
+**Worker exits immediately after spawn**
+- Check `swarm logs <name>` for error output
+- Verify the command works when run directly
+- Ensure tmux is installed: `tmux -V`
+
+**Agent not receiving prompts**
+- Use `--ready-wait` to ensure agent is ready before sending
+- Check if agent is in a different state: `swarm attach <name>`
+
+**Worktree cleanup fails**
+- Dirty worktrees (uncommitted changes) block removal by default
+- Use `--force-dirty` to override, or commit/discard changes first
+- Manual cleanup: `git worktree remove <path>`
+
+**Ralph loop stops unexpectedly**
+- Check `~/.swarm/ralph/<name>/state.json` for failure count
+- View iteration history: `cat ~/.swarm/ralph/<name>/iterations.log`
+- 5 consecutive failures trigger automatic stop
+
+**Workflow stage stuck**
+- Check status: `swarm workflow status <name>`
+- Attach to stage: `swarm attach <workflow>-<stage>`
+- Intervene: `swarm send <workflow>-<stage> "guidance message"`
+
+**Heartbeat not sending**
+- Check status: `swarm heartbeat status <worker>`
+- Verify worker is tmux-based (heartbeat requires tmux)
+- Stop and restart: `swarm heartbeat stop <w> && swarm heartbeat start <w> --interval 4h`
+
+## Contributing
+
+See the `specs/` directory for behavioral specifications that document expected behavior. When adding features:
+
+1. Write a spec in `specs/<feature>.md` following the template in `specs/README.md`
+2. Add tests in `test_cmd_<feature>.py`
+3. Implement in `swarm.py`
 
 ## License
 
