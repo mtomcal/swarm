@@ -34,6 +34,41 @@ The `spawn` command creates new workers that execute commands either as backgrou
 |-----------|----------|
 | Empty command after parsing | Exit 1 with "swarm: error: no command provided (use -- command...)" |
 
+### Transactional Spawn
+
+**Description**: Ensure spawn operations are atomic - either fully complete or leave no orphaned state.
+
+**Problem**: Spawn involves multiple steps (worktree creation, tmux window creation, state update) that can fail at any point. Without transaction handling, failures leave orphaned resources (worktrees, tmux windows, state entries) that block subsequent spawns.
+
+**Behavior**:
+1. Spawn operations proceed in order: validate → worktree → tmux/process → state
+2. If any step fails after previous steps completed, perform rollback
+3. Rollback removes resources in reverse order of creation
+4. After successful rollback, report the original error
+
+**Rollback Actions**:
+| Failed Step | Rollback Action |
+|-------------|-----------------|
+| Worktree creation | (none - nothing created yet) |
+| Tmux window creation | Remove worktree if created |
+| Process spawn | Remove worktree if created |
+| State update | Kill process/window, remove worktree |
+
+**Error Conditions with Rollback**:
+| Condition | Behavior |
+|-----------|----------|
+| Worktree creation fails | Exit 1 with original error, no cleanup needed |
+| Tmux window fails after worktree | Remove worktree, exit 1 with original error |
+| Process spawn fails after worktree | Remove worktree, exit 1 with original error |
+| State update fails | Kill worker, remove worktree, exit 1 with original error |
+
+**Rollback Output**:
+When rollback occurs, swarm prints a warning before the error:
+```
+swarm: warning: spawn failed, cleaning up partial state
+swarm: error: <original error message>
+```
+
 ### Name Uniqueness Validation
 
 **Description**: Ensure worker name is unique in the registry.
@@ -289,6 +324,38 @@ spawned <name> (pid: <pid>)
   - Exit code 1
   - Error: "swarm: error: not in a git repository (required for --worktree)"
 
+### Scenario: Rollback on tmux failure after worktree creation
+- **Given**: In git repository, tmux unavailable or fails
+- **When**: `swarm spawn --name worker --tmux --worktree -- echo hi`
+- **Then**:
+  - Worktree created at `/repo-worktrees/worker`
+  - Tmux window creation fails
+  - Rollback: worktree removed via `git worktree remove`
+  - Warning: "swarm: warning: spawn failed, cleaning up partial state"
+  - Exit code 1
+  - Error: "swarm: error: failed to create tmux window: <original error>"
+  - No worker entry in state
+
+### Scenario: Rollback on state update failure
+- **Given**: In git repository, state file locked or corrupted
+- **When**: `swarm spawn --name worker --tmux --worktree -- echo hi`
+- **Then**:
+  - Worktree created
+  - Tmux window created
+  - State update fails
+  - Rollback: tmux window killed, worktree removed
+  - Warning: "swarm: warning: spawn failed, cleaning up partial state"
+  - Exit code 1
+  - Error: "swarm: error: failed to save state: <original error>"
+
+### Scenario: Clean state after failed spawn attempt
+- **Given**: Previous spawn failed mid-operation leaving no orphaned state (due to rollback)
+- **When**: `swarm spawn --name worker --tmux --worktree -- echo hi`
+- **Then**:
+  - Spawn succeeds normally
+  - No "worker already exists" error
+  - Worker created fresh
+
 ### Scenario: Command with leading --
 - **Given**: Command arguments include "--"
 - **When**: `swarm spawn --name dash -- -- echo hello`
@@ -309,12 +376,17 @@ spawned <name> (pid: <pid>)
 - Tmux mode stores null for pid field
 - `--cwd` is ignored when `--worktree` is specified
 - `--ready-wait` has no effect in process mode (only tmux)
+- Rollback removes resources in reverse order of creation to avoid dangling references
+- Rollback is best-effort: if worktree removal fails during rollback, a warning is printed but the original error is still reported
+- Transactional behavior applies to all spawn modes (tmux and process)
+- If process spawn fails, only worktree rollback is needed (no tmux window to clean)
 
 ## Recovery Procedures
 
 ### Spawn fails mid-operation
 
-If spawn fails after partial setup:
+Spawn uses transactional semantics with automatic rollback, so most failures clean up automatically. However, if rollback itself fails (e.g., due to permissions), manual cleanup may be needed:
+
 ```bash
 # Check what was created
 swarm ls --status all
@@ -322,8 +394,34 @@ swarm ls --status all
 # If worker exists but process/window doesn't
 swarm clean <name>
 
-# If worktree created but worker spawn failed
+# If worktree created but worker spawn failed (rollback failed)
 git worktree remove /path/to/worktree
+# Or force if needed
+git worktree remove --force /path/to/worktree
+
+# If state entry exists but no actual worker
+swarm clean <name>
+```
+
+### Rollback failure leaves orphaned resources
+
+If spawn fails and rollback also fails, you may see:
+```
+swarm: warning: spawn failed, cleaning up partial state
+swarm: warning: rollback failed: could not remove worktree
+swarm: error: <original error>
+```
+
+In this case:
+```bash
+# List orphaned worktrees
+git worktree list
+
+# Manually remove
+git worktree remove --force /path/to/worktree
+
+# Clean any state entry
+swarm clean <name>
 ```
 
 ### Tmux session accumulates dead windows
@@ -354,3 +452,7 @@ kill <pid>
 - **Log file handling**: Log files are opened before spawn, file handles passed to subprocess
 - **Environment merge**: Worker env is merged with parent process env (worker env takes precedence)
 - **Timestamp precision**: `started` uses full ISO 8601 with microseconds
+- **Transactional spawn**: Spawn uses try/except with explicit rollback to ensure no orphaned state on failure
+- **Rollback order**: Resources are cleaned in reverse creation order (state → process/window → worktree)
+- **Rollback errors**: Rollback failures are logged as warnings but don't override the original error
+- **No partial workers**: Worker is only added to state after all resources are successfully created

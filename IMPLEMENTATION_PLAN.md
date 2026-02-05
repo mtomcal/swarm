@@ -50,7 +50,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Add ralph state cleanup behavior for `--rm-worktree` (B1)
   - Add scenario: "Kill ralph worker with worktree removal"
 
-- [ ] **1.3 Update `specs/spawn.md`**
+- [x] **1.3 Update `specs/spawn.md`**
   - Add transactional spawn requirements (B2)
   - Document rollback behavior on failure
 
