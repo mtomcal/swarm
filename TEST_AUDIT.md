@@ -527,6 +527,120 @@ The previously reported memory exhaustion events were likely caused by:
 
 ---
 
+## 16. Memory Leak Pattern Analysis (Task 7.2)
+
+Comprehensive search for memory leak patterns in the test suite. This analysis follows up on the memory profiling from task 7.1, which found memory usage is healthy (~45 MB peak).
+
+### 1. Large Data Structures Without Cleanup
+
+**Finding: None identified.**
+
+Searched for patterns like `append`, `.extend()`, and `+=[]` accumulations. All found instances are:
+- Within test methods (scoped to individual tests)
+- In lists that are part of mock state objects
+- Within `TmuxIsolatedTestCase.tearDown()` cleanup logic
+
+Example safe pattern:
+```python
+state.workers.append(worker)  # Within test method, cleaned up when test ends
+```
+
+### 2. Subprocess/Popen Objects Not Terminated
+
+**Finding: All Popen objects are properly managed.**
+
+Pattern analysis:
+| File | Count | Status |
+|------|-------|--------|
+| test_cmd_workflow.py | 15 | ✓ All use `try/except TimeoutExpired` with `proc.kill()` and `proc.communicate(timeout=5)` |
+| test_core_functions.py | 2 | ✓ Use `try/finally` with `proc.terminate()` and `proc.wait(timeout=30)` |
+| tests/test_integration_workflow.py | 7 | ✓ All use timeout pattern |
+
+The risky pattern (communicate without timeout after kill) was fixed in task 6.6.
+
+### 3. Tmux Sessions Left Running
+
+**Finding: Proper cleanup in place.**
+
+- `TmuxIsolatedTestCase` (base class for integration tests):
+  - Creates unique socket per test: `swarm-test-{uuid}`
+  - `tearDown()` calls `tmux -L <socket> kill-server`
+  - Each test gets complete isolation from other tests and user sessions
+
+- Integration tests cleanup patterns:
+  - `test_integration_ralph.py`: Kills workers via `swarm kill`, then calls `swarm clean --all`, removes ralph state directories
+  - `test_integration_workflow.py`: Uses `TmuxIsolatedTestCase.tearDown()` for cleanup
+
+**Residual risk**: If test crashes before tearDown, orphaned tmux sessions may remain. This is noted in section 11 and task 7.4 will address it.
+
+### 4. File Handles Not Closed
+
+**Finding: All file operations use context managers.**
+
+Search for `= open(` found zero matches. All file operations use the `with open(...)` pattern:
+```python
+with open(self.state_file, 'w') as f:
+    json.dump(state_dict, f)
+```
+
+Files checked: All 31 test files in root and tests/ directory.
+
+### 5. Mock Objects Retaining References
+
+**Finding: Mock usage is safe and bounded.**
+
+Analysis of mock patterns:
+- **side_effect lists**: Maximum 3-4 items (e.g., `[100, 200]` for time mocking)
+- **return_value assignments**: Simple values or small dataclass instances
+- **patch decorators**: Properly scoped to test methods/classes
+
+Example safe patterns:
+```python
+mock_time.side_effect = [100, 200]  # 2 items, trivial memory
+mock_load.side_effect = [state1, state2, state3]  # 3 WorkflowState objects
+```
+
+No patterns found where mocks accumulate unbounded data.
+
+### 6. Global Data Structure Accumulation
+
+**Finding: None.**
+
+Search for module-level empty list/dict initialization (`^[a-zA-Z_]+ = []` or `{}`) found zero matches. All data structures are scoped to test methods or classes.
+
+### 7. Large Loops Creating Objects
+
+**Finding: None.**
+
+Search for `for.*range\([0-9]{4,}` (loops with 1000+ iterations) found zero matches. Largest loops found:
+- `range(100)` in `test_pattern_edge_cases.py` for creating test output strings
+- `range(50)` for multi-line test scenarios
+
+### 8. setUp Without tearDown (Investigation)
+
+**Finding: Safe - no resources requiring cleanup.**
+
+Classes with setUp but no tearDown:
+| File | Classes | setUp Action | Cleanup Needed? |
+|------|---------|--------------|-----------------|
+| test_cmd_main.py | 18 classes | `self.parser = create_parser()` | No - simple object |
+| test_pattern_edge_cases.py | 1 class | `self.ready_patterns = [...]` | No - simple list |
+
+These setUp methods only create simple in-memory objects (argument parser, regex list) that are garbage collected when the test completes. No external resources, file handles, or processes are created.
+
+### Conclusion
+
+**No memory leak patterns were identified in the test suite.**
+
+The analysis confirms the findings from task 7.1 (memory profiling): the test suite has healthy memory usage with no systematic memory leaks. The ~45 MB peak memory usage is due to:
+1. Python interpreter and swarm module baseline (~16 MB)
+2. Test framework and mock infrastructure (~16 MB)
+3. Test data objects created during execution (~13 MB, properly cleaned up)
+
+All potentially risky patterns (subprocess management, file handles, tmux sessions) have proper cleanup mechanisms in place.
+
+---
+
 ## Test Coverage Notes
 
 Current coverage is 94% (up from 84%). The patterns identified in this audit are primarily about test quality rather than coverage gaps.
