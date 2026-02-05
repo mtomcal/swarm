@@ -144,7 +144,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Run multi-iteration ralph, verify ETA displayed
   - File: `swarm.py` (RalphState, cmd_ralph_status)
 
-- [ ] **3.4 Feature: `--clean-state` flag for ralph spawn (F5)**
+- [x] **3.4 Feature: `--clean-state` flag for ralph spawn (F5)**
   - Add `--clean-state` argument to ralph spawn
   - Delete existing ralph state directory before spawn (not worker/worktree)
   - Useful when respawning with different config

@@ -837,6 +837,18 @@ class TestRalphSpawnArguments(unittest.TestCase):
         # Should indicate it auto-cleans existing worker
         self.assertIn('existing', result.stdout.lower())
 
+    def test_clean_state_flag_exists_in_ralph_spawn(self):
+        """Test that --clean-state flag is accepted by ralph spawn (F5)."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--clean-state', result.stdout)
+        # Should indicate it clears ralph state
+        self.assertIn('ralph state', result.stdout.lower())
+
 
 class TestRalphSpawnValidation(unittest.TestCase):
     """Test ralph spawn validation logic."""
@@ -1108,6 +1120,111 @@ class TestRalphSpawnValidation(unittest.TestCase):
             if ralph_state_dir.exists():
                 import shutil
                 shutil.rmtree(ralph_state_dir)
+
+    def test_ralph_spawn_clean_state_removes_ralph_state(self):
+        """Test ralph spawn with --clean-state removes existing ralph state (F5)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='test-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=False,
+            clean_state=True,  # The --clean-state flag
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Create an empty state (no existing worker)
+        mock_state = swarm.State()
+        mock_state.workers = []
+
+        # Create a temporary ralph state directory
+        ralph_state_dir = swarm.RALPH_DIR / 'test-worker'
+        ralph_state_dir.mkdir(parents=True, exist_ok=True)
+        (ralph_state_dir / 'state.json').write_text('{"old": "state"}')
+
+        try:
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch('subprocess.run') as mock_run:
+                    mock_run.return_value.returncode = 0
+                    with patch.object(swarm, 'create_tmux_window'):
+                        with patch.object(swarm, 'save_ralph_state'):
+                            with patch.object(swarm, 'log_ralph_iteration'):
+                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                    with patch('builtins.print') as mock_print:
+                                        swarm.cmd_ralph_spawn(args)
+
+            # Verify ralph state directory was removed
+            self.assertFalse(ralph_state_dir.exists())
+
+            # Verify the message was printed
+            print_calls = [str(call) for call in mock_print.call_args_list]
+            self.assertTrue(any('cleared ralph state' in call for call in print_calls))
+        finally:
+            # Cleanup in case test failed
+            if ralph_state_dir.exists():
+                import shutil
+                shutil.rmtree(ralph_state_dir)
+
+    def test_ralph_spawn_clean_state_no_op_when_no_state(self):
+        """Test ralph spawn with --clean-state is a no-op when no ralph state exists (F5)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='test-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=False,
+            clean_state=True,  # The --clean-state flag
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Create an empty state (no existing worker)
+        mock_state = swarm.State()
+        mock_state.workers = []
+
+        # Ensure no ralph state directory exists
+        ralph_state_dir = swarm.RALPH_DIR / 'test-worker'
+        if ralph_state_dir.exists():
+            import shutil
+            shutil.rmtree(ralph_state_dir)
+
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value.returncode = 0
+                with patch.object(swarm, 'create_tmux_window'):
+                    with patch.object(swarm, 'save_ralph_state'):
+                        with patch.object(swarm, 'log_ralph_iteration'):
+                            with patch.object(swarm, 'send_prompt_to_worker'):
+                                with patch('builtins.print') as mock_print:
+                                    # Should not raise any errors
+                                    swarm.cmd_ralph_spawn(args)
+
+        # Verify no "cleared ralph state" message was printed (nothing to clear)
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertFalse(any('cleared ralph state' in call for call in print_calls))
 
     def test_ralph_spawn_prompt_file_not_found(self):
         """Test ralph spawn with non-existent prompt file fails."""

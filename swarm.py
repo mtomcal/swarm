@@ -4808,6 +4808,8 @@ def main() -> None:
                                help="Spawn worker but don't start monitoring loop (default: auto-start)")
     ralph_spawn_p.add_argument("--replace", action="store_true",
                                help="Auto-clean existing worker/worktree/state before spawning")
+    ralph_spawn_p.add_argument("--clean-state", action="store_true",
+                               help="Clear ralph state without affecting worker/worktree")
     ralph_spawn_p.add_argument("--session", default=None,
                                help="Tmux session name (default: hash-based isolation)")
     ralph_spawn_p.add_argument("--tmux-socket", default=None,
@@ -6268,6 +6270,17 @@ def cmd_ralph_spawn(args) -> None:
         else:
             print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
             sys.exit(1)
+
+    # Handle --clean-state flag: clear ralph state without affecting worker/worktree
+    if getattr(args, 'clean_state', False):
+        ralph_state_dir = RALPH_DIR / args.name
+        if ralph_state_dir.exists():
+            import shutil
+            try:
+                shutil.rmtree(ralph_state_dir)
+                print(f"cleared ralph state for {args.name}")
+            except OSError as e:
+                print(f"swarm: warning: cannot remove ralph state for '{args.name}': {e}", file=sys.stderr)
 
     # Parse environment variables from KEY=VAL format (validation only, no resources created)
     env_dict = {}
