@@ -145,7 +145,7 @@ class TestProcessAlive(unittest.TestCase):
             self.assertTrue(result, "Should return True for running process")
         finally:
             proc.terminate()
-            proc.wait()
+            proc.wait(timeout=30)
 
     def test_process_alive_returns_false_for_nonexistent_process(self):
         """Test process_alive returns False for a nonexistent PID."""
@@ -158,7 +158,7 @@ class TestProcessAlive(unittest.TestCase):
         """Test process_alive returns False after process terminates."""
         # Start and immediately terminate a process
         proc = subprocess.Popen(["true"])
-        proc.wait()
+        proc.wait(timeout=30)
 
         result = swarm.process_alive(proc.pid)
         self.assertFalse(result, "Should return False for terminated process")

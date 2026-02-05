@@ -258,7 +258,7 @@ stages:
 
         # Kill the process (it's blocking on monitor loop)
         proc.kill()
-        proc.communicate()
+        proc.communicate(timeout=5)
 
         # Verify workflow state was created
         self.assertTrue(
@@ -308,7 +308,7 @@ stages:
             waited += 0.2
 
         proc.kill()
-        proc.communicate()
+        proc.communicate(timeout=5)
 
         # Verify workflow state was created
         self.assertTrue(
@@ -458,7 +458,7 @@ stages:
         except subprocess.TimeoutExpired:
             # Expected - process is blocking on monitor loop
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify workflow state was created
         state_file = Path.home() / ".swarm" / "workflows" / workflow_name / "state.json"
@@ -631,7 +631,7 @@ stages:
             stdout, stderr = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-            stdout, stderr = proc.communicate()
+            stdout, stderr = proc.communicate(timeout=5)
 
         # Verify workflow state file was created
         state_file = Path.home() / ".swarm" / "workflows" / workflow_name / "state.json"
@@ -1099,7 +1099,7 @@ stages:
             proc.communicate(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Try to run again without --force (should fail)
         result = subprocess.run(
@@ -1151,7 +1151,7 @@ stages:
             waited += 0.2
 
         proc.kill()
-        proc.communicate()
+        proc.communicate(timeout=5)
 
         # Get the original scheduled_for time
         with open(state_file) as f:
@@ -1169,7 +1169,7 @@ stages:
         # Wait for state to be updated
         time.sleep(1)
         proc2.kill()
-        proc2.communicate()
+        proc2.communicate(timeout=5)
 
         # Verify state was updated (scheduled_for should be different)
         with open(state_file) as f:

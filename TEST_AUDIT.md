@@ -1,7 +1,7 @@
 # Test Quality Audit
 
 **Created**: 2026-02-05
-**Auditor**: Claude (task 6.4)
+**Auditor**: Claude (tasks 6.4 and 6.6)
 
 This document identifies low-quality patterns found in the swarm test suite during code review.
 
@@ -16,6 +16,8 @@ This document identifies low-quality patterns found in the swarm test suite duri
 | Weak assertions (assert_called only) | 16 | Low | Low |
 | Subprocess calls without timeout | Many | Medium | Medium |
 | Global state modification | Proper | OK | N/A |
+| Popen without timeout | 25+ | High | High |
+| Threads without proper join timeout | Few | Low | Low |
 
 ---
 
@@ -239,23 +241,188 @@ Or add `@timeout_decorator.timeout(60)` to individual tests.
 
 ---
 
+---
+
+## 10. Subprocess.Popen Without Timeout (Task 6.6)
+
+Tests using `subprocess.Popen` can hang indefinitely if the spawned process doesn't exit. While many tests use `proc.communicate(timeout=X)`, some use `proc.communicate()` without timeout as a fallback.
+
+### High-Risk Occurrences
+
+| File | Lines | Pattern |
+|------|-------|---------|
+| `test_cmd_workflow.py` | 2745-3254 | 15 Popen calls with timeout in try/except but no timeout in except |
+| `tests/test_integration_workflow.py` | 244-1162 | 7 Popen calls, some without timeout |
+| `test_core_functions.py` | 142, 160 | `subprocess.Popen(["sleep", "10"])` and `subprocess.Popen(["true"])` |
+
+### Pattern of Concern
+
+```python
+# This pattern is risky - if TimeoutExpired occurs, the except handler
+# calls communicate() without timeout, potentially hanging forever
+try:
+    proc.communicate(timeout=2)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.communicate()  # No timeout - could hang!
+```
+
+### Recommended Fix
+
+Always use timeout in communicate(), even after kill():
+```python
+try:
+    proc.communicate(timeout=2)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.communicate(timeout=5)  # Still use timeout!
+```
+
+---
+
+## 11. Integration Tests Accessing Real ~/.swarm (Task 6.6)
+
+Integration tests directly access `Path.home() / ".swarm"` which can interfere with a developer's real swarm state.
+
+### Affected Files
+
+| File | Occurrences | Directories Accessed |
+|------|-------------|---------------------|
+| `tests/test_integration_ralph.py` | 9 | `~/.swarm/ralph/` |
+| `tests/test_integration_workflow.py` | 13 | `~/.swarm/workflows/` |
+
+### Mitigation Already in Place
+
+The integration tests use unique worker names based on tmux socket:
+```python
+worker_name = f"ralph-basic-{self.tmux_socket[-8:]}"
+```
+
+And cleanup attempts to only remove test-created directories:
+```python
+if worker_dir.name.startswith(self.tmux_socket.replace('swarm-test-', '')):
+    shutil.rmtree(worker_dir, ignore_errors=True)
+```
+
+### Remaining Risk
+
+If a test crashes before tearDown, orphaned state may remain in `~/.swarm/`.
+
+### Full Fix
+
+Use `SWARM_DIR` environment variable in integration tests to completely isolate from real state:
+```python
+def setUp(self):
+    self.test_swarm_dir = tempfile.mkdtemp()
+    os.environ['SWARM_DIR'] = self.test_swarm_dir
+
+def tearDown(self):
+    del os.environ['SWARM_DIR']
+    shutil.rmtree(self.test_swarm_dir)
+```
+
+---
+
+## 12. Tests with Threads Not Properly Joined (Task 6.6)
+
+Some tests spawn threads without ensuring they complete or using timeouts.
+
+### Occurrences
+
+| File | Lines | Analysis |
+|------|-------|----------|
+| `test_state_file_locking.py` | 64-65 | Threads properly joined |
+| `test_state_file_locking.py` | 123 | Thread properly joined |
+| `test_state_file_locking.py` | 174, 189 | `t2.join(timeout=1.0)` - correctly uses timeout |
+
+### Status
+
+Thread handling is generally good - timeout is used on joins, and tests check `is_alive()` to detect hanging threads.
+
+**Status**: No action needed.
+
+---
+
+## 13. Git Subprocess Calls in test_worktree_protection.py (Task 6.6)
+
+This file contains 40+ `subprocess.run(["git", ...])` calls without timeout parameters.
+
+### Risk Analysis
+
+Git commands are generally fast and unlikely to hang, but on slow filesystems or with large repos, they could take longer than expected.
+
+### Occurrences (Sample)
+
+```
+test_worktree_protection.py:25: subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+test_worktree_protection.py:26: subprocess.run(["git", "config", ...], cwd=tmpdir, capture_output=True)
+test_worktree_protection.py:32: subprocess.run(["git", "add", ...], cwd=tmpdir, capture_output=True)
+test_worktree_protection.py:33: subprocess.run(["git", "commit", ...], cwd=tmpdir, capture_output=True)
+... (40+ more)
+```
+
+### Recommended Fix
+
+Add timeout to all git subprocess calls:
+```python
+subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+```
+
+---
+
+## 14. Tests with tempfile.mkdtemp Without Cleanup (Task 6.6)
+
+Most tests using `tempfile.mkdtemp()` properly clean up in `tearDown()`, but there's one pattern that could leave temp files behind:
+
+### Safe Pattern (Used Consistently)
+
+```python
+def setUp(self):
+    self.temp_dir = tempfile.mkdtemp()
+
+def tearDown(self):
+    shutil.rmtree(self.temp_dir, ignore_errors=True)
+```
+
+### Contextmanager Alternative (Also Safe)
+
+```python
+with tempfile.TemporaryDirectory() as tmpdir:
+    # Test code here
+# Auto-cleaned when exiting context
+```
+
+### Status
+
+All test files reviewed use proper cleanup. **No action needed.**
+
+---
+
 ## Summary of Action Items
 
 ### High Priority
 1. [x] Implement SWARM_DIR environment variable support to isolate integration tests
    - **DONE**: Added `os.environ.get("SWARM_DIR", ...)` support in swarm.py line 27
-2. [ ] Add timeouts to subprocess calls in integration tests
+2. [x] Add timeouts to subprocess.Popen communicate() calls in test_cmd_workflow.py
+   - **DONE (task 6.6)**: Added timeout=5 to all except-block communicate() calls
+3. [x] Add timeouts to subprocess.Popen communicate() calls in tests/test_integration_workflow.py
+   - **DONE (task 6.6)**: Added timeout=5 to all except-block communicate() calls
 
 ### Medium Priority
-3. [ ] Replace fixed `time.sleep()` with polling in integration tests
-4. [ ] Add test timeout decorators to prevent hanging tests
+4. [ ] Replace fixed `time.sleep()` with polling in integration tests
+5. [ ] Add test timeout decorators to prevent hanging tests
+6. [x] Add timeouts to git subprocess.run calls in test_worktree_protection.py
+   - **DONE (task 6.6)**: Added timeout=30 to all 40 git subprocess calls
+7. [x] Add timeout to process wait() in test_core_functions.py
+   - **DONE (task 6.6)**: Added timeout=30 to proc.wait() calls
 
 ### Low Priority
-5. [x] Strengthen weak `assert_called()` assertions to include argument verification
+8. [x] Strengthen weak `assert_called()` assertions to include argument verification
    - **DONE**: Fixed 16 weak assertions in test_cmd_workflow.py, test_cmd_ralph.py, and test_cmd_respawn.py
    - Changed `assert_called()` to `assert_called_once()` where appropriate
    - Added `call_count >= 1` checks with argument verification for multi-call scenarios
-6. [ ] Consider reducing mock depth in heavily-mocked tests
+9. [ ] Consider reducing mock depth in heavily-mocked tests
+10. [ ] Update integration tests to use SWARM_DIR env var for full isolation
 
 ---
 

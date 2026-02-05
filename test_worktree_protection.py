@@ -22,15 +22,15 @@ class TestWorktreeIsDirty(unittest.TestCase):
         """Test detection of unstaged changes."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Modify the file (unstaged change)
             test_file.write_text("modified content")
@@ -42,20 +42,20 @@ class TestWorktreeIsDirty(unittest.TestCase):
         """Test detection of staged changes."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Stage a new file
             new_file = Path(tmpdir) / "new.txt"
             new_file.write_text("new content")
-            subprocess.run(["git", "add", "new.txt"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "new.txt"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Should detect as dirty
             self.assertTrue(swarm.worktree_is_dirty(Path(tmpdir)))
@@ -64,15 +64,15 @@ class TestWorktreeIsDirty(unittest.TestCase):
         """Test detection of untracked files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create untracked file
             untracked = Path(tmpdir) / "untracked.txt"
@@ -85,15 +85,15 @@ class TestWorktreeIsDirty(unittest.TestCase):
         """Test clean worktree is detected as not dirty."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Should NOT detect as dirty
             self.assertFalse(swarm.worktree_is_dirty(Path(tmpdir)))
@@ -110,15 +110,15 @@ class TestRemoveWorktreeProtection(unittest.TestCase):
         """Test that dirty worktree is not removed without force."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Make it dirty
             test_file.write_text("modified content")
@@ -137,15 +137,15 @@ class TestRemoveWorktreeProtection(unittest.TestCase):
         """Test that dirty worktree is removed with force (mocked git remove)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Make it dirty
             test_file.write_text("modified content")
@@ -172,15 +172,15 @@ class TestRemoveWorktreeProtection(unittest.TestCase):
         """Test that clean worktree is removed without force (mocked git remove)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize a git repo
-            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Create and commit a file
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("initial content")
-            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "add", "test.txt"], cwd=tmpdir, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True, timeout=30)
 
             # Mock only the final git worktree remove call (not the status check)
             original_run = subprocess.run

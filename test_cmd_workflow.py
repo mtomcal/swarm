@@ -2753,7 +2753,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
         # Verify workflow state was created (output may not be captured due to buffering)
         state = swarm.load_workflow_state("test-workflow")
         self.assertIsNotNone(state)
@@ -2781,7 +2781,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state was created
         state = swarm.load_workflow_state("state-test-workflow")
@@ -2814,7 +2814,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state uses custom name (output may not be captured due to buffering)
         state = swarm.load_workflow_state("custom-name")
@@ -2843,7 +2843,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Second run should fail immediately (no monitor loop started)
         result = subprocess.run(
@@ -2879,7 +2879,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify first workflow was created
         state = swarm.load_workflow_state("force-workflow")
@@ -2898,7 +2898,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify workflow was recreated (new created_at)
         state = swarm.load_workflow_state("force-workflow")
@@ -2955,7 +2955,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("scheduled-workflow")
@@ -2986,7 +2986,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("delayed-workflow")
@@ -3073,7 +3073,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("yaml-scheduled-workflow")
@@ -3102,7 +3102,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("yaml-delayed-workflow")
@@ -3131,7 +3131,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
         # Verify scheduled_for uses CLI time, not YAML time (output may not be captured)
         state = swarm.load_workflow_state("override-schedule-workflow")
         self.assertIsNotNone(state)
@@ -3166,7 +3166,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify state has all stages initialized (output may not be captured due to buffering)
         state = swarm.load_workflow_state("multi-stage-workflow")
@@ -3200,7 +3200,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         state = swarm.load_workflow_state("worker-name-test")
         # Worker name is not set until stage actually starts
@@ -3227,7 +3227,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify YAML was copied
         yaml_copy_path = swarm.get_workflow_yaml_copy_path("copy-test-workflow")
@@ -3254,7 +3254,7 @@ stages:
             proc.communicate(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            proc.communicate(timeout=5)
 
         # Verify logs directory was created
         logs_dir = swarm.get_workflow_logs_dir("logs-test-workflow")

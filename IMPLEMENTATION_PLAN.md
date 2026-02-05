@@ -377,13 +377,18 @@ Current coverage: 84% (513 lines missing). Target: 90%+
   - Strengthened 16 weak `assert_called()` assertions to use `assert_called_once()` or proper call count checks with argument verification
   - All affected tests in test_cmd_workflow.py, test_cmd_ralph.py, and test_cmd_respawn.py now pass
 
-- [ ] **6.6 Search for risky test patterns**
+- [x] **6.6 Search for risky test patterns**
   - Tests that modify global state without cleanup
   - Tests that leave temp files/directories behind
   - Tests that depend on execution order
   - Tests that could interfere with real swarm state (~/.swarm/)
   - Tests with subprocess calls that could hang indefinitely
   - Add `timeout` decorators to any test that could hang
+  - **DONE**: Added timeout=5 to 15 proc.communicate() calls in test_cmd_workflow.py
+  - **DONE**: Added timeout=5 to 7 proc.communicate() calls in tests/test_integration_workflow.py
+  - **DONE**: Added timeout=30 to 14 git subprocess.run() calls in test_worktree_protection.py
+  - **DONE**: Added timeout=30 to 2 proc.wait() calls in test_core_functions.py
+  - **DONE**: Updated TEST_AUDIT.md with findings for sections 10-14
 
 - [ ] **6.7 Verify coverage reaches 90%+**
   ```bash
