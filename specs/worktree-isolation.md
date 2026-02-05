@@ -37,18 +37,29 @@ Swarm provides git worktree integration via `--worktree` flag, enabling each wor
 - `branch` (str, required): Branch name for the worktree
 
 **Behavior**:
-1. Create parent directory if needed
-2. Try `git worktree add -b <branch> <path>` (create new branch)
-3. If fails (branch exists), try `git worktree add <path> <branch>` (use existing branch)
+1. Check for and fix `core.bare` misconfiguration (see [core.bare Prevention](#corebarefalse-prevention))
+2. Create parent directory if needed
+3. Try `git worktree add -b <branch> <path>` (create new branch)
+4. If fails (branch exists), try `git worktree add <path> <branch>` (use existing branch)
+5. Validate worktree was created successfully
 
 **Outputs**:
 - Success: Worktree created at path
-- Failure: Raises `subprocess.CalledProcessError`
+- Failure: Raises `subprocess.CalledProcessError` or `RuntimeError`
 
 **Side Effects**:
 - Creates new directory at `<path>`
 - Creates or checks out branch `<branch>`
 - Adds worktree to git's worktree registry
+- May fix `core.bare` configuration if misconfigured
+
+**Error Handling**:
+| Error | Recovery |
+|-------|----------|
+| `core.bare = true` detected | Auto-fix to `false`, retry operation |
+| `git worktree add` fails | Clean up partial state, raise with clear message |
+| Worktree directory not created | Raise `RuntimeError` with diagnostic info |
+| Branch creation fails | Fall back to existing branch checkout |
 
 ### Worktree Location Convention
 
@@ -254,6 +265,32 @@ git -C <path> status --porcelain
 - **When**: `remove_worktree(nonexistent_path)`
 - **Then**: Returns `(True, "")` - success (idempotent)
 
+### Scenario: core.bare=true auto-recovery
+- **Given**: Repository has `core.bare = true` in `.git/config` (corrupted state)
+- **When**: `swarm spawn --name worker --worktree -- command`
+- **Then**:
+  - Swarm detects `core.bare = true`
+  - Swarm runs `git config core.bare false` automatically
+  - Warning logged: "Fixed core.bare=true in git config"
+  - Worktree creation proceeds normally
+  - Worker spawns successfully
+
+### Scenario: Worktree creation fails mid-operation
+- **Given**: `git worktree add` fails after creating partial state
+- **When**: Spawn with `--worktree` fails
+- **Then**:
+  - No worker added to swarm state
+  - Partial worktree directory cleaned up if created
+  - `git worktree prune` run to clean git's worktree registry
+  - Error message explains what failed and suggests recovery
+
+### Scenario: Spawn with worktree in bare repo
+- **Given**: Repository is actually bare (not just misconfigured)
+- **When**: `swarm spawn --name worker --worktree -- command`
+- **Then**:
+  - Error: "Cannot create worktree: repository is bare. Worktrees require a working directory."
+  - No partial state created
+
 ## Edge Cases
 
 - Worker name with special characters may cause branch name issues
@@ -263,6 +300,43 @@ git -C <path> status --porcelain
 - Worktree with no commits (brand new branch) is considered clean
 - Empty untracked directories don't trigger dirty detection
 - `.gitignore`d files don't trigger dirty detection
+
+### Worktree Creation Failures
+
+| Failure Mode | Detection | Recovery |
+|--------------|-----------|----------|
+| `core.bare = true` in config | Check before `git worktree add` | Auto-fix with `git config core.bare false` |
+| Worktree already exists at path | `git worktree add` returns error | Remove stale entry with `git worktree prune`, retry |
+| Branch already checked out elsewhere | `git worktree add -b` returns error | Fall back to `git worktree add <path> <branch>` |
+| Path inside main repository | `git worktree add` returns error | Fail with clear message about path requirements |
+| Disk full or permissions | Directory creation fails | Clean up any partial state, raise error |
+| Interrupted operation | Worktree exists but incomplete | `git worktree prune` to clean, retry |
+
+### core.bare=true Prevention
+
+**Problem**: Under certain error conditions (interrupted worktree operations, concurrent git access, corrupted state), the main repository's `core.bare` config can be set to `true`, causing all git operations to fail with "fatal: this operation must be run in a work tree".
+
+**Detection**: Before any worktree operation, check:
+```bash
+git config --get core.bare
+```
+
+**Prevention**:
+1. Run `git config core.bare` check at start of worktree operations
+2. If `core.bare = true`, auto-fix with `git config core.bare false`
+3. Log the fix so users know it happened
+
+**Recovery** (if swarm doesn't auto-fix):
+```bash
+git config core.bare false
+```
+
+**Root Causes**:
+- Interrupted `git worktree add` during branch creation phase
+- Concurrent worktree operations from multiple processes
+- Manual corruption of `.git/config`
+
+**Implementation Note**: The `create_worktree()` function should check and fix `core.bare` before attempting worktree operations. This is a fail-safe that prevents cascading failures.
 
 ## Recovery Procedures
 
@@ -299,6 +373,25 @@ git worktree prune
 # Re-check list
 git worktree list
 ```
+
+### core.bare=true corruption
+**Symptoms**: All git commands fail with "fatal: this operation must be run in a work tree"
+
+```bash
+# Check if this is the issue
+git config --get core.bare
+# If output is "true", fix it:
+
+git config core.bare false
+
+# Verify fix
+git status  # Should work now
+
+# Resume swarm operations
+swarm spawn --name worker --worktree -- command
+```
+
+**Note**: Swarm v1.x and later auto-detect and fix this issue. If you see a warning "Fixed core.bare=true in git config", the issue was resolved automatically.
 
 ### Worktree on missing branch
 If the branch was deleted remotely:

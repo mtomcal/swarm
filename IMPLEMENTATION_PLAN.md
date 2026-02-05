@@ -54,7 +54,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Add transactional spawn requirements (B2)
   - Document rollback behavior on failure
 
-- [ ] **1.4 Update `specs/worktree-isolation.md`**
+- [x] **1.4 Update `specs/worktree-isolation.md`**
   - Add error handling for `git worktree add` failures (B3)
   - Document `core.bare` prevention/recovery
   - Add edge case scenarios
