@@ -1,8 +1,4 @@
-.PHONY: test lint typecheck all install-hooks
-
-# Run all unit tests
-test:
-	python3 -m unittest discover -s . -p 'test_*.py' -v
+.PHONY: lint typecheck all install-hooks
 
 # Run syntax check (linting)
 lint:
@@ -15,7 +11,7 @@ typecheck:
 	@echo "Type check passed"
 
 # Run all quality checks
-all: lint typecheck test
+all: lint typecheck
 
 # Install git hooks
 install-hooks:

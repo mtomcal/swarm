@@ -139,6 +139,7 @@ Generate specs in this order:
 | `environment.md` | Python 3.10+, tmux, git, fcntl, directory structure | `setup.sh`, `Makefile` | Complete |
 | `cli-interface.md` | Argument parsing, exit codes, output formats | `swarm.py:709-851` | Complete |
 | `cli-help-standards.md` | Help text format, examples, documentation standards | N/A (meta-spec) | Complete |
+| `security-permissions.md` | Permission bypass, sandboxing, security mitigations | `README.md`, Claude Code docs | Complete |
 
 ---
 

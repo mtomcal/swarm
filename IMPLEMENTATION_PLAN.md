@@ -1,536 +1,273 @@
-# Implementation Plan: Heartbeat, Workflow, and CLI Help Improvements
+# Implementation Plan: Ralph Bug Fixes and Improvements
 
-**Created**: 2026-02-04
-**Status**: Not Started
-**Goal**: Add heartbeat system for rate limit recovery, workflow orchestration for multi-stage pipelines, and comprehensive CLI help across all commands
+**Created**: 2026-02-05
+**Status**: IN PROGRESS
+**Goal**: Fix ralph bugs from user feedback and add quality-of-life features
 
 ---
 
 ## Problem Statement
 
-1. **Rate limits interrupt work**: When agents hit API rate limits during overnight/unattended work, they sit idle until manually restarted
-2. **No multi-stage orchestration**: Complex tasks (plan → build → validate) require manual handoffs between stages
-3. **Inconsistent CLI help**: Most commands have minimal help text; agents struggle to learn swarm from `-h` alone
-4. **No scheduling**: Can't queue work to start when rate limits renew (e.g., at 2am)
+Real-world usage of `swarm ralph` revealed several bugs and UX issues:
+
+1. **Status ambiguity**: Ralph status shows "stopped/killed" even for successful completions
+2. **Stale state**: Ralph state persists after `kill --rm-worktree`, blocking respawns
+3. **Failed spawns leave partial state**: No transaction rollback on spawn failure
+4. **Git corruption**: Worktree operations can set `core.bare = true`, breaking git
+5. **Monitor disconnect**: Monitor can stop while worker keeps running
+6. **Inconsistent flags**: `--tmux` errors confusingly for ralph spawn
+7. **Timeout too short**: 60s default doesn't work for repos with CI hooks
 
 ---
 
 ## Solution Overview
 
-| Feature | Description | Spec |
-|---------|-------------|------|
-| **Heartbeat** | Periodic nudges to workers on configurable interval with expiration | `specs/heartbeat.md` |
-| **Workflow** | Multi-stage pipelines defined in YAML with scheduling and failure handling | `specs/workflow.md` |
-| **CLI Help** | Comprehensive help text with examples for all commands | `specs/cli-help-standards.md` |
+| Category | Changes |
+|----------|---------|
+| **Bug Fixes** | 7 fixes addressing state management, error handling, UX |
+| **Features** | 5 new features for better workflow |
+| **Spec Updates** | 7 specs need updates to match new behavior |
 
 ---
 
 ## Tasks
 
-### Phase 1: CLI Help Improvements (Existing Commands)
+### Phase 1: Spec Updates
 
-Improve help text for all existing commands to match the quality of `ralph spawn --help`.
+Update specs BEFORE implementation to define expected behavior.
 
-- [x] **1.1 Enhance `swarm --help` (root command)**
-  - Add overview of swarm purpose
-  - Add quick start example
-  - Group commands by category
+- [ ] **1.1 Update `specs/ralph-loop.md`**
+  - Add `--replace` flag documentation (F1)
+  - Add `--clean-state` flag documentation (F5)
+  - Add `swarm ralph logs` command section (F2)
+  - Update default inactivity timeout to 180s (B7)
+  - Add `--tmux` as no-op note (B6)
+  - Add ETA display in status output (F3)
+  - Document exit_reason tracking (B4)
+  - Document monitor disconnect handling (B5)
 
-- [x] **1.2 Enhance `swarm spawn --help`**
-  - Add description paragraph explaining worker types
-  - Add 4+ examples (basic, worktree, env vars, ready-wait)
-  - Add "Common Patterns" section
-  - Document all flag defaults explicitly
+- [ ] **1.2 Update `specs/kill.md`**
+  - Add ralph state cleanup behavior for `--rm-worktree` (B1)
+  - Add scenario: "Kill ralph worker with worktree removal"
 
-- [x] **1.3 Enhance `swarm ls --help`**
-  - Add description explaining output formats
-  - Add examples for each format (table, json, names)
-  - Add filter examples (--status, --tag)
+- [ ] **1.3 Update `specs/spawn.md`**
+  - Add transactional spawn requirements (B2)
+  - Document rollback behavior on failure
 
-- [x] **1.4 Enhance `swarm status --help`**
-  - Add description of status output fields
-  - Add examples showing different worker states
+- [ ] **1.4 Update `specs/worktree-isolation.md`**
+  - Add error handling for `git worktree add` failures (B3)
+  - Document `core.bare` prevention/recovery
+  - Add edge case scenarios
 
-- [x] **1.5 Enhance `swarm send --help`**
-  - Add description explaining tmux requirement
-  - Add examples: single worker, broadcast, no-enter
-  - Add "Intervention Patterns" section
+- [ ] **1.5 Update `specs/cli-interface.md`**
+  - Document `--tmux` as no-op for ralph spawn (B6)
+  - Add ralph logs command to CLI reference
 
-- [x] **1.6 Enhance `swarm kill --help`**
-  - Add description with safety warnings
-  - Add examples: basic, with worktree, force-dirty
-  - Add "Warnings" section about data loss
-  - Add recovery commands for mistakes
+- [ ] **1.6 Update `specs/data-structures.md`**
+  - Add `exit_reason` field to RalphState (B4)
+  - Document iteration timing for ETA (F3)
 
-- [x] **1.7 Enhance `swarm logs --help`**
-  - Add description of log storage
-  - Add examples: basic, follow, tail
+- [ ] **1.7 Update `specs/logs.md`**
+  - Add cross-reference to `swarm ralph logs` (F2)
 
-- [x] **1.8 Enhance `swarm wait --help`**
-  - Add description of exit code propagation
-  - Add examples: basic, with timeout, exit code check
+### Phase 2: Bug Fixes
 
-- [x] **1.9 Enhance `swarm clean --help`**
-  - Add description of what gets cleaned
-  - Add "Warnings" section
-  - Add examples with filters
+- [ ] **2.1 Fix: Ralph state cleanup on kill (B1)**
+  - In `cmd_kill()`, delete `~/.swarm/ralph/<name>/` when killing ralph workers with `--rm-worktree`
+  - Test: Kill ralph worker with `--rm-worktree`, verify ralph state directory removed
+  - File: `swarm.py` (cmd_kill function)
 
-- [x] **1.10 Enhance `swarm respawn --help`**
-  - Add description of what's preserved
-  - Add examples showing different scenarios
+- [ ] **2.2 Fix: Transactional ralph spawn (B2)**
+  - Wrap ralph spawn in try/except with rollback
+  - If ralph state creation fails, remove worker from state
+  - If tmux window creation fails, remove worktree
+  - Test: Simulate failures at each stage, verify no orphaned state
+  - File: `swarm.py` (cmd_ralph_spawn function)
 
-- [x] **1.11 Enhance `swarm interrupt --help`**
-  - Add description of Ctrl-C behavior
-  - Add examples and use cases
+- [ ] **2.3 Fix: Worktree error handling (B3)**
+  - Add proper error checking in `create_worktree()`
+  - Validate worktree actually created before returning
+  - Add `core.bare` check and auto-fix at start of worktree operations
+  - Test: Simulate worktree creation failure, verify clean state
+  - File: `swarm.py` (create_worktree function)
 
-- [x] **1.12 Enhance `swarm eof --help`**
-  - Add description of Ctrl-D behavior
-  - Add examples and use cases
+- [ ] **2.4 Fix: Status/reason accuracy (B4)**
+  - Add `exit_reason` field to RalphState
+  - Track actual completion reason: `done_pattern`, `max_iterations`, `killed`, `failed`
+  - Update `cmd_kill()` to only set `reason=killed` when actually killed
+  - Update ralph status display to show accurate reason
+  - Test: Complete ralph loop normally, verify reason shows correctly
+  - File: `swarm.py` (RalphState, cmd_kill, _run_ralph_loop)
 
-- [x] **1.13 Enhance `swarm attach --help`**
-  - Add description of tmux attachment
-  - Add detach instructions
-  - Add examples
+- [ ] **2.5 Fix: Monitor disconnect handling (B5)**
+  - Add worker-alive verification after `detect_inactivity()` returns
+  - Distinguish "monitor stopped" from "worker stopped" in status
+  - Log why monitor stopped
+  - Consider auto-recovery: if worker alive, resume monitoring
+  - Test: Kill monitor process while worker runs, verify status reflects reality
+  - File: `swarm.py` (_run_ralph_loop, detect_inactivity)
 
-- [x] **1.14 Enhance `swarm init --help`**
-  - Add description of what gets initialized
-  - Add examples
+- [ ] **2.6 Fix: `--tmux` flag as no-op (B6)**
+  - Add `--tmux` argument to ralph spawn parser (store_true, no effect)
+  - Print informational message: "Note: Ralph workers always use tmux"
+  - Test: Run `swarm ralph spawn --tmux ...`, verify no error
+  - File: `swarm.py` (argparse for ralph spawn)
 
-### Phase 2: Heartbeat Implementation
+- [ ] **2.7 Fix: Increase default inactivity timeout (B7)**
+  - Change default from 60s to 180s
+  - Update help text to explain the default
+  - Test: Spawn ralph without `--inactivity-timeout`, verify 180s used
+  - File: `swarm.py` (argparse default)
 
-- [x] **2.1 Add HeartbeatState dataclass**
-  - Fields: worker_name, interval_seconds, expire_at, message, created_at, last_beat_at, beat_count, status
-  - Add to data-structures section of swarm.py
+### Phase 3: New Features
 
-- [x] **2.2 Add heartbeat state persistence**
-  - Storage: `~/.swarm/heartbeats/<worker>.json`
-  - Load/save functions with file locking
-  - Status enum: active, paused, expired, stopped
+- [ ] **3.1 Feature: `--replace` flag for ralph spawn (F1)**
+  - Add `--replace` argument to ralph spawn
+  - If worker exists: kill it, remove worktree if present, remove ralph state
+  - Then proceed with normal spawn
+  - Test: Spawn, then spawn again with `--replace`, verify clean replacement
+  - File: `swarm.py` (cmd_ralph_spawn)
 
-- [x] **2.3 Implement `swarm heartbeat start`**
-  - Parse --interval (duration string)
-  - Parse --expire (duration string, optional)
-  - Parse --message (string, default "continue")
-  - Parse --force (replace existing)
-  - Validate worker exists and is tmux
-  - Create heartbeat state
-  - Start background monitor thread
+- [ ] **3.2 Feature: `swarm ralph logs` command (F2)**
+  - Add `ralph logs` subcommand
+  - Show iteration log from `~/.swarm/ralph/<name>/iterations.log`
+  - Add `--live` flag for tail -f behavior
+  - Add `--lines N` flag for last N entries
+  - Test: Run ralph, use `ralph logs` to view history
+  - File: `swarm.py` (new cmd_ralph_logs function)
 
-- [x] **2.4 Implement heartbeat monitor thread**
-  - Check interval using monotonic time
-  - Send message via `tmux send-keys`
-  - Update last_beat_at and beat_count
-  - Check expiration
-  - Detect worker death and auto-stop
+- [ ] **3.3 Feature: ETA in ralph status (F3)**
+  - Track iteration start/end times in RalphState
+  - Calculate average iteration duration
+  - Display ETA in `swarm ralph status` output
+  - Format: "Iteration: 3/10 (avg 4m/iter, ~28m remaining)"
+  - Test: Run multi-iteration ralph, verify ETA displayed
+  - File: `swarm.py` (RalphState, cmd_ralph_status)
 
-- [x] **2.5 Implement `swarm heartbeat stop`**
-  - Set status to stopped
-  - Terminate monitor thread
+- [ ] **3.4 Feature: `--clean-state` flag for ralph spawn (F5)**
+  - Add `--clean-state` argument to ralph spawn
+  - Delete existing ralph state directory before spawn (not worker/worktree)
+  - Useful when respawning with different config
+  - Test: Spawn, kill, spawn with `--clean-state`, verify fresh state
+  - File: `swarm.py` (cmd_ralph_spawn)
 
-- [x] **2.6 Implement `swarm heartbeat list`**
-  - Table output: worker, interval, next beat, expires, status, beats
-  - JSON output option
+- [ ] **3.5 Feature: Document test artifact prevention (F7)**
+  - Add "Best Practices" section to `specs/ralph-loop.md`
+  - Document prompt guidelines to avoid test file creation
+  - Add example `.gitignore` patterns for common test artifacts
+  - File: `specs/ralph-loop.md`
 
-- [x] **2.7 Implement `swarm heartbeat status`**
-  - Detailed output for single heartbeat
-  - Next beat time calculation
-  - JSON output format support
+### Phase 4: Testing
 
-- [x] **2.8 Implement `swarm heartbeat pause/resume`**
-  - Set status to paused/active
+- [ ] **4.1 Add unit tests for bug fixes**
+  - Test ralph state cleanup on kill
+  - Test transactional spawn rollback
+  - Test worktree error handling
+  - Test status/reason accuracy
+  - Test `--tmux` no-op behavior
+  - Test default timeout value
+  - File: `test_cmd_ralph.py`
 
-- [x] **2.9 Add --heartbeat flag to spawn**
-  - Parse --heartbeat (duration)
-  - Parse --heartbeat-expire (duration)
-  - Parse --heartbeat-message (string)
-  - Auto-start heartbeat after spawn
+- [ ] **4.2 Add unit tests for new features**
+  - Test `--replace` flag
+  - Test `ralph logs` command
+  - Test ETA calculation
+  - Test `--clean-state` flag
+  - File: `test_cmd_ralph.py`
 
-- [x] **2.10 Add heartbeat cleanup on kill**
-  - When worker killed, stop associated heartbeat
+- [ ] **4.3 Add integration tests**
+  - Test full ralph lifecycle with new features
+  - Test replace workflow
+  - Test logs during active ralph
+  - File: `tests/test_integration_ralph.py`
 
-- [x] **2.11 Add comprehensive heartbeat help text**
-  - Follow cli-help-standards.md
-  - Include duration format docs
-  - Include rate limit recovery explanation
-
-- [x] **2.12 Add heartbeat unit tests**
-  - Test state persistence
-  - Test interval calculation
-  - Test expiration
-  - Test worker death detection
-
-### Phase 3: Workflow Implementation
-
-- [x] **3.1 Add WorkflowState and StageState dataclasses**
-  - WorkflowState: name, status, current_stage, stages dict, timestamps
-  - StageState: status, worker_name, attempts, timestamps, exit_reason
-
-- [x] **3.2 Implement YAML parser for workflow definitions**
-  - Parse all fields from workflow.md spec
-  - Validate required fields
-  - Validate stage types
-  - Validate on-failure values
-  - Handle both prompt and prompt-file
-
-- [x] **3.3 Add workflow state persistence**
-  - Storage: `~/.swarm/workflows/<name>/state.json`
-  - Copy workflow YAML to state directory
-  - Store workflow hash for change detection
-
-- [x] **3.4 Implement `swarm workflow validate`**
-  - Parse and validate YAML
-  - Check prompt files exist
-  - Report all errors
-
-- [x] **3.5 Implement `swarm workflow run`**
-  - Parse --at (time)
-  - Parse --in (duration)
-  - Parse --name (override)
-  - Parse --force (overwrite)
-  - If scheduled, set status and return
-  - Otherwise, start first stage
-
-- [x] **3.6 Implement stage spawning logic**
-  - For worker type: spawn with done-pattern detection
-  - For ralph type: ralph spawn with configured options
-  - Apply global settings (heartbeat, worktree, cwd, env)
-  - Apply stage overrides
-
-- [x] **3.7 Implement stage completion detection**
-  - Monitor worker output for done-pattern
-  - Handle timeout
-  - Detect worker exit
-
-- [x] **3.8 Implement stage transition logic**
-  - Mark stage completed/failed/skipped
-  - Handle on-failure: stop/retry/skip
-  - Handle on-complete: next/stop
-  - Start next stage or complete workflow
-
-- [x] **3.9 Implement workflow monitor loop**
-  - Background process managing workflow execution
-  - Handle scheduled start times
-  - Manage stage transitions
-  - Handle heartbeats
-
-- [x] **3.10 Implement `swarm workflow status`**
-  - Show overall workflow status
-  - Show each stage status
-  - Show current stage details
-  - Show timing information
-
-- [x] **3.11 Implement `swarm workflow list`**
-  - Table: name, status, current stage, started, source
-  - JSON output option
-
-- [x] **3.12 Implement `swarm workflow cancel`**
-  - Kill current stage worker
-  - Stop heartbeats
-  - Set status to cancelled
-
-- [x] **3.13 Implement `swarm workflow resume`**
-  - Parse --from (stage name)
-  - Restart from failed/specified stage
-  - Reset attempt counts if needed
-
-- [x] **3.14 Implement `swarm workflow logs`**
-  - Parse --stage (filter)
-  - Show aggregated logs
-  - Per-stage log viewing
-
-- [x] **3.15 Add comprehensive workflow help text**
-  - Follow cli-help-standards.md
-  - Include full YAML schema in `run --help`
-  - Include examples for all common patterns
-
-- [x] **3.16 Add workflow unit tests**
-  - Test YAML parsing
-  - Test validation
-  - Test state persistence
-  - Test stage transitions
-
-- [x] **3.17 Add workflow integration tests**
-  - Test simple 2-stage workflow
-  - Test retry behavior
-  - Test skip behavior
-  - Test scheduling
-
-### Phase 4: Integration and Polish
-
-- [x] **4.1 Add heartbeat support to ralph spawn**
-  - Same --heartbeat flags as regular spawn
-  - Heartbeat during ralph loop
-
-- [x] **4.2 Add repo-local workflow discovery**
-  - Check `.swarm/workflows/` before global
-  - Document in help text
-
-- [x] **4.3 Resume heartbeats on swarm startup**
-  - Check for active heartbeats
-  - Restart monitor threads
-
-- [x] **4.4 Resume workflows on swarm startup**
-  - Check for running workflows
-  - Provide `swarm workflow resume-all` command
-
-- [x] **4.5 Update CLAUDE.md**
-  - Add heartbeat section
-  - Add workflow section
-  - Update examples
-
-- [x] **4.6 Final help text review**
-  - Verify all commands meet cli-help-standards.md
-  - Ensure consistency
-
-### Phase 5: Verification
-
-- [x] **5.1 Run all unit tests**
+- [ ] **4.4 Run full test suite**
   ```bash
   python3 -m unittest discover -v
   ```
 
-- [x] **5.2 Run integration tests**
+### Phase 5: Documentation
+
+- [ ] **5.1 Update CLAUDE.md**
+  - Document new ralph flags (`--replace`, `--clean-state`)
+  - Document `ralph logs` command
+  - Update default timeout mention
+  - Add troubleshooting for common issues
+
+- [ ] **5.2 Update help text**
+  - Verify all new commands have comprehensive help
+  - Follow `specs/cli-help-standards.md`
+
+- [ ] **5.3 Update FEEDBACK.md**
+  - Mark addressed issues as resolved
+  - Note any deferred items
+
+### Phase 6: Verification
+
+- [ ] **6.1 Manual verification - bug fixes**
   ```bash
-  timeout 300 python3 -m unittest tests.test_integration_ralph -v
+  # B1: Ralph state cleanup
+  swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --worktree -- bash -c 'echo done'
+  swarm kill test --rm-worktree
+  ls ~/.swarm/ralph/test  # Should not exist
+
+  # B3: Worktree error handling
+  git config core.bare  # Should be false or unset
+
+  # B7: Default timeout
+  swarm ralph spawn --help | grep inactivity  # Should show 180
   ```
 
-- [ ] **5.3 Manual verification - heartbeat**
+- [ ] **6.2 Manual verification - features**
   ```bash
-  swarm spawn --name test --tmux -- bash -c 'while true; do sleep 10; done'
-  swarm heartbeat start test --interval 30s --expire 5m --message "ping"
-  swarm heartbeat status test
-  swarm heartbeat list
-  # Wait and observe beats
-  swarm heartbeat stop test
-  swarm kill test
+  # F1: --replace
+  swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --no-run -- bash
+  swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --replace --no-run -- bash
+
+  # F2: ralph logs
+  swarm ralph logs test
+  swarm ralph logs test --live
+
+  # F5: --clean-state
+  swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --clean-state --no-run -- bash
   ```
-
-- [ ] **5.4 Manual verification - workflow**
-  ```bash
-  cat > /tmp/test-workflow.yaml << 'EOF'
-  name: test-workflow
-  stages:
-    - name: stage1
-      type: worker
-      prompt: |
-        echo "Stage 1 complete"
-        echo "/done"
-      done-pattern: "/done"
-      timeout: 1m
-    - name: stage2
-      type: worker
-      prompt: |
-        echo "Stage 2 complete"
-        echo "/done"
-      done-pattern: "/done"
-      timeout: 1m
-  EOF
-  swarm workflow validate /tmp/test-workflow.yaml
-  swarm workflow run /tmp/test-workflow.yaml
-  swarm workflow status test-workflow
-  swarm workflow list
-  ```
-
-- [ ] **5.5 Manual verification - help text**
-  ```bash
-  swarm --help
-  swarm spawn --help
-  swarm kill --help
-  swarm heartbeat --help
-  swarm heartbeat start --help
-  swarm workflow --help
-  swarm workflow run --help
-  ```
-
-### Phase 6: Coverage and Test Quality
-
-Current coverage: 94% (181 lines missing). Target: 90%+ ✓
-
-- [x] **6.1 Add tests for main() argument parsing**
-  - The `main()` function (lines 4249-4905) has no direct test coverage
-  - Add tests that invoke argument parsing for all commands
-  - Test help text generation
-  - Test argument validation and error messages
-  - Use `unittest.mock` to avoid actual command execution
-
-- [x] **6.2 Add tests for uncovered error paths**
-  - Review lines 8229-8523 (workflow monitor, stage transitions)
-  - Add tests for edge cases: worker death during stage, retry exhaustion
-  - Add tests for workflow cancellation mid-stage
-  - Test heartbeat expiration scenarios
-
-- [x] **6.3 Add tests for uncovered utility functions**
-  - Lines 9031-9187: review and add tests for any untested helpers
-  - Lines 9241-9282: add tests for edge cases
-  - Ensure all public functions have test coverage
-
-- [x] **6.4 Audit tests for low-quality patterns**
-  - Search for tests that only check "no exception thrown"
-  - Search for tests with no assertions or weak assertions
-  - Search for tests that mock too much (testing mocks, not code)
-  - Search for flaky tests (timing-dependent, order-dependent)
-  - Search for tests with hardcoded paths or environment assumptions
-  - Document findings in `TEST_AUDIT.md`
-
-- [x] **6.5 Fix or rewrite low-quality tests**
-  - Implemented SWARM_DIR environment variable support for test isolation
-  - Strengthened 16 weak `assert_called()` assertions to use `assert_called_once()` or proper call count checks with argument verification
-  - All affected tests in test_cmd_workflow.py, test_cmd_ralph.py, and test_cmd_respawn.py now pass
-
-- [x] **6.6 Search for risky test patterns**
-  - Tests that modify global state without cleanup
-  - Tests that leave temp files/directories behind
-  - Tests that depend on execution order
-  - Tests that could interfere with real swarm state (~/.swarm/)
-  - Tests with subprocess calls that could hang indefinitely
-  - Add `timeout` decorators to any test that could hang
-  - **DONE**: Added timeout=5 to 15 proc.communicate() calls in test_cmd_workflow.py
-  - **DONE**: Added timeout=5 to 7 proc.communicate() calls in tests/test_integration_workflow.py
-  - **DONE**: Added timeout=30 to 14 git subprocess.run() calls in test_worktree_protection.py
-  - **DONE**: Added timeout=30 to 2 proc.wait() calls in test_core_functions.py
-  - **DONE**: Updated TEST_AUDIT.md with findings for sections 10-14
-
-- [x] **6.7 Verify coverage reaches 90%+**
-  ```bash
-  python3 -m coverage run --source=swarm -m unittest discover -b
-  python3 -m coverage report --fail-under=90
-  ```
-  - **DONE**: Added 41 tests in TestMainFunctionDispatch class in test_cmd_main.py
-  - **DONE**: Coverage increased from 89% to 94%
-
-### Phase 7: Memory Exhaustion Investigation
-
-The test suite has caused memory exhaustion events that crash the system. This phase investigates and fixes the root causes.
-
-- [x] **7.1 Profile test suite memory usage**
-  - Run tests with memory profiling (`memory_profiler` or `tracemalloc`)
-  - Identify which test files/classes consume the most memory
-  - Check for memory growth patterns during test runs
-  - Document baseline memory usage per test file
-  - **DONE**: Created `profile_test_memory.py` script, profiled all 31 test files
-  - **DONE**: Added Section 15 to TEST_AUDIT.md with detailed findings
-  - **FINDING**: Memory usage is healthy (45 MB peak), no leaks detected
-
-- [x] **7.2 Identify memory leak patterns in tests**
-  - Search for tests that create large data structures without cleanup
-  - Check for subprocess/Popen objects not being properly terminated
-  - Look for tmux sessions or processes left running between tests
-  - Check for file handles not being closed
-  - Review mock objects that might retain references
-  - **DONE**: Comprehensive analysis found no memory leak patterns
-  - **FINDING**: All subprocess/Popen properly terminated with try/finally or try/except TimeoutExpired
-  - **FINDING**: All file handles use context managers (with open)
-  - **FINDING**: TmuxIsolatedTestCase properly cleans up tmux sessions
-  - **FINDING**: Mock objects use small, bounded side_effect lists
-  - **FINDING**: No global data structure accumulation
-  - Results documented in TEST_AUDIT.md Section 16
-
-- [x] **7.3 Audit subprocess and process management**
-  - Review all `subprocess.Popen` usage in tests
-  - Ensure all spawned processes are terminated in tearDown
-  - Check for zombie processes accumulating
-  - Verify `proc.communicate()` is called to collect output and prevent pipe buffer issues
-  - Look for infinite loops or blocking reads on subprocess pipes
-  - **DONE**: Comprehensive audit found all Popen objects properly managed
-  - **FINDING**: All 24 Popen objects use terminate+wait or kill+communicate patterns
-  - **FINDING**: No zombie process or blocking read risks identified
-  - **FINDING**: Some subprocess.run calls lack timeout (low risk - commands are fast)
-  - Results documented in TEST_AUDIT.md Section 17
-
-- [x] **7.4 Review tmux session cleanup**
-  - Check if tmux sessions are properly killed after tests
-  - Look for orphaned tmux sessions from failed tests
-  - Verify `TmuxIsolatedTestCase` cleanup is robust
-  - Add tmux session listing before/after test runs to detect leaks
-  - **DONE**: Added timeout to tearDown kill-server (10s) with pkill fallback (5s)
-  - **DONE**: Added timeout to tmux_cmd helper (default 30s)
-  - **DONE**: Added timeout to run_swarm helper (default 30s)
-  - **DONE**: Added `list_orphaned_test_sessions()` utility function
-  - **DONE**: Added `cleanup_orphaned_test_sessions()` utility function
-  - **DONE**: Added `count_tmux_sessions(socket)` utility function
-  - **DONE**: Added `_active_sockets` tracking for leak detection
-  - **DONE**: Added `verify_tmux_cleanup()` method to TmuxIsolatedTestCase
-  - **DONE**: Added TestTmuxCleanupUtilities and TestActiveSocketTracking test classes
-  - **DONE**: Documented findings in TEST_AUDIT.md Section 18
-
-- [x] **7.5 Check for large string/buffer accumulation**
-  - Review tests that capture stdout/stderr (could accumulate large outputs)
-  - Check for tests reading large files into memory
-  - Look for log file contents being loaded entirely into memory
-  - Review JSON parsing of potentially large state files
-  - **DONE**: Comprehensive analysis found no accumulation risks
-  - **FINDING**: All stdout/stderr captures are short-lived and method-scoped
-  - **FINDING**: All file reads are for small, bounded files (< 5KB)
-  - **FINDING**: Log files are streamed via print(), not accumulated
-  - **FINDING**: JSON parsing handles small state files only
-  - Results documented in TEST_AUDIT.md Section 19
-
-- [x] **7.6 Add memory safeguards to test infrastructure**
-  - Add memory limit warnings to test runner
-  - Implement test isolation to prevent cross-test memory accumulation
-  - Add periodic garbage collection between test classes
-  - Consider running memory-heavy tests in separate processes
-  - **DONE**: Created `memory_safe_runner.py` with comprehensive memory monitoring
-  - **DONE**: `MemorySafeTestRunner` - runner with memory limits, warnings, and GC between classes
-  - **DONE**: `GCBetweenClassesSuite` - suite wrapper that forces GC between test classes
-  - **DONE**: `MemoryMonitorMixin` - mixin for individual test memory tracking
-  - **DONE**: `memory_limit_context()` - context manager for memory monitoring
-  - **DONE**: Created `test_memory_safe_runner.py` with 38 unit tests
-  - **DONE**: Documented in TEST_AUDIT.md Section 20
-
-- [x] **7.7 Fix identified memory issues**
-  - Apply fixes for all identified memory leaks
-  - Add cleanup code where missing
-  - Optimize memory-heavy test patterns
-  - Verify fixes with memory profiling
-  - **DONE**: Comprehensive audit (tasks 7.1-7.6) found no memory leaks or issues
-  - **FINDING**: Memory usage is healthy (~45 MB peak for full test suite)
-  - **FINDING**: All subprocess/Popen objects properly terminated
-  - **FINDING**: All file handles use context managers
-  - **FINDING**: Tmux sessions properly cleaned up
-  - **FINDING**: No large string/buffer accumulation patterns
-  - **STATUS**: No fixes required - test infrastructure already follows best practices
 
 ---
-
-## Files to Create
-
-| File | Description |
-|------|-------------|
-| `specs/heartbeat.md` | Heartbeat behavioral spec (DONE) |
-| `specs/workflow.md` | Workflow behavioral spec (DONE) |
-| `specs/cli-help-standards.md` | CLI help standards spec (DONE) |
-| `test_cmd_heartbeat.py` | Heartbeat unit tests |
-| `test_cmd_workflow.py` | Workflow unit tests |
-| `tests/test_integration_workflow.py` | Workflow integration tests |
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `swarm.py` | Add heartbeat, workflow commands; enhance all help text |
-| `CLAUDE.md` | Add heartbeat, workflow documentation |
-| `specs/README.md` | Add new specs to TOC (DONE) |
+| `swarm.py` | Bug fixes, new features, argparse updates |
+| `specs/ralph-loop.md` | Major updates for all ralph changes |
+| `specs/kill.md` | Ralph state cleanup |
+| `specs/spawn.md` | Transactional spawn |
+| `specs/worktree-isolation.md` | Error handling |
+| `specs/cli-interface.md` | CLI updates |
+| `specs/data-structures.md` | RalphState schema |
+| `specs/logs.md` | Cross-reference |
+| `test_cmd_ralph.py` | New tests |
+| `tests/test_integration_ralph.py` | Integration tests |
+| `CLAUDE.md` | Documentation |
 
 ---
 
 ## Design Decisions
 
-1. **Heartbeat as blind nudge**: Simpler than rate limit detection, handles many blocking scenarios
-2. **Expiration for safety**: Prevents infinite nudging of abandoned workers
-3. **YAML workflows**: Familiar format, supports inline prompts to reduce file litter
-4. **Help text as documentation**: Agents primarily learn from `-h`, so it must be comprehensive
-5. **Linear stages first**: DAG support deferred to avoid complexity
-6. **Stage workers named `<workflow>-<stage>`**: Prevents naming conflicts
+1. **`--replace` vs `--force`**: Using `--replace` to be explicit about the destructive operation
+2. **`--clean-state` separate from `--replace`**: Allows cleaning state without killing worker
+3. **180s default timeout**: Balances responsiveness with CI hook compatibility
+4. **ETA calculation**: Simple average, not weighted - keeps implementation simple
+5. **Ralph logs separate from swarm logs**: Different format (iteration history vs tmux output)
 
 ---
 
 ## Rollback Plan
 
-All features are additive:
-1. Heartbeat commands are new - can be removed without breaking existing functionality
-2. Workflow commands are new - can be removed without breaking existing functionality
-3. Help text improvements are backwards compatible
+All changes are backwards compatible:
+1. New flags are optional with sensible defaults
+2. Bug fixes improve existing behavior without API changes
+3. Spec updates document new behavior alongside existing
 
 ---
 
@@ -538,12 +275,11 @@ All features are additive:
 
 | Phase | Tasks | Complexity |
 |-------|-------|------------|
-| Phase 1: CLI Help | 14 tasks | Low (text changes only) |
-| Phase 2: Heartbeat | 12 tasks | Medium (new subsystem) |
-| Phase 3: Workflow | 17 tasks | High (orchestration logic) |
-| Phase 4: Integration | 6 tasks | Medium (cross-cutting) |
-| Phase 5: Verification | 5 tasks | Low (testing) |
-| Phase 6: Coverage & Test Quality | 7 tasks | Medium (test improvements) |
-| Phase 7: Memory Investigation | 7 tasks | Medium (debugging/profiling) |
+| Phase 1: Spec Updates | 7 tasks | Low (documentation) |
+| Phase 2: Bug Fixes | 7 tasks | Medium (code changes) |
+| Phase 3: Features | 5 tasks | Medium (new functionality) |
+| Phase 4: Testing | 4 tasks | Medium (test coverage) |
+| Phase 5: Documentation | 3 tasks | Low (docs) |
+| Phase 6: Verification | 2 tasks | Low (manual testing) |
 
-Total: 68 tasks
+**Total: 28 tasks**

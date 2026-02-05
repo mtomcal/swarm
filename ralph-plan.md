@@ -195,7 +195,7 @@ Test file: `test_cmd_ralph.py`
 | TestRalphRunSigterm | 5 | Passing |
 | TestRalphRunLoopInternal | 2 | Passing |
 | TestCmdKillRalphWorker | 4 | Passing |
-| **Total** | **198** | **All Passing** |
+| **Total** | **248** | **All Passing** |
 
 **Coverage**: Ralph-specific code coverage is **97.9%** (all ralph functions well tested)
 
@@ -221,10 +221,9 @@ All phases are now COMPLETE. The ralph loop feature is fully implemented includi
 - Failure handling with exponential backoff (formula: `min(2^(n-1), 300)`)
 - Graceful SIGTERM shutdown support
 - Worker metadata tracking (`ralph: true`, `ralph_iteration`)
-- All 198 ralph tests pass, coverage at 97.9%
+- All 248 ralph tests pass, coverage at 97.9%
 
-Possible future enhancements:
-- Add integration tests with real tmux sessions
+**Integration tests added**: `tests/test_integration_ralph.py` contains 15 integration tests that run with real tmux sessions, covering spawn, status, pause/resume, inactivity detection, list, and init commands.
 
 ## Recent Changes
 

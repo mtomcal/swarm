@@ -100,7 +100,7 @@ Key Features:
 
 ROOT_HELP_EPILOG = """\
 Quick Start:
-  1. Spawn a worker:     swarm spawn --name my-agent --tmux --worktree -- claude
+  1. Spawn a worker:     swarm spawn --name my-agent --tmux --worktree -- claude --dangerously-skip-permissions
   2. Check status:       swarm ls
   3. Send a message:     swarm send my-agent "implement feature X"
   4. View output:        swarm logs my-agent --follow
@@ -135,11 +135,11 @@ Command Groups:
 
 Examples:
   # Spawn parallel workers for different features
-  swarm spawn --name auth --tmux --worktree -- claude
-  swarm spawn --name api --tmux --worktree -- claude
+  swarm spawn --name auth --tmux --worktree -- claude --dangerously-skip-permissions
+  swarm spawn --name api --tmux --worktree -- claude --dangerously-skip-permissions
 
   # Autonomous overnight work with ralph
-  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude --dangerously-skip-permissions
 
   # Broadcast to all workers
   swarm send --all "wrap up and commit your changes"
@@ -162,41 +162,41 @@ agent works independently, and changes can be merged via pull requests.
 
 SPAWN_HELP_EPILOG = """\
 Examples:
-  # Basic: spawn an agent in tmux
-  swarm spawn --name worker1 --tmux -- claude
+  # Basic: spawn an agent in tmux (autonomous mode)
+  swarm spawn --name worker1 --tmux -- claude --dangerously-skip-permissions
 
   # With git worktree isolation (recommended for parallel work)
-  swarm spawn --name feature-auth --tmux --worktree -- claude
+  swarm spawn --name feature-auth --tmux --worktree -- claude --dangerously-skip-permissions
 
   # Custom branch name (worktree dir still uses --name)
-  swarm spawn --name w1 --tmux --worktree --branch feature/auth -- claude
+  swarm spawn --name w1 --tmux --worktree --branch feature/auth -- claude --dangerously-skip-permissions
 
   # With environment variables
   swarm spawn --name api-dev --tmux --worktree \\
-    --env API_KEY=test-key --env DEBUG=1 -- claude
+    --env API_KEY=test-key --env DEBUG=1 -- claude --dangerously-skip-permissions
 
   # With tags for filtering
   swarm spawn --name backend --tmux --worktree \\
-    --tag team-a --tag priority -- claude
+    --tag team-a --tag priority -- claude --dangerously-skip-permissions
 
   # Wait for agent to be ready before returning
-  swarm spawn --name worker1 --tmux --ready-wait -- claude
+  swarm spawn --name worker1 --tmux --ready-wait -- claude --dangerously-skip-permissions
 
   # With custom ready timeout (default: 120s)
-  swarm spawn --name worker1 --tmux --ready-wait --ready-timeout 60 -- claude
+  swarm spawn --name worker1 --tmux --ready-wait --ready-timeout 60 -- claude --dangerously-skip-permissions
 
   # Background process mode (no tmux)
   swarm spawn --name batch-job -- python process_data.py
 
 Common Patterns:
   Parallel Feature Development:
-    swarm spawn --name auth --tmux --worktree -- claude
-    swarm spawn --name api --tmux --worktree -- claude
-    swarm spawn --name ui --tmux --worktree -- claude
+    swarm spawn --name auth --tmux --worktree -- claude --dangerously-skip-permissions
+    swarm spawn --name api --tmux --worktree -- claude --dangerously-skip-permissions
+    swarm spawn --name ui --tmux --worktree -- claude --dangerously-skip-permissions
     swarm ls  # see all workers
 
   Scripted Orchestration:
-    swarm spawn --name worker --tmux --ready-wait -- claude
+    swarm spawn --name worker --tmux --ready-wait -- claude --dangerously-skip-permissions
     swarm send worker "implement the login feature"
     swarm wait worker
 
@@ -205,6 +205,11 @@ Tips:
   - Use --worktree when running multiple agents on the same repo
   - Use --ready-wait in scripts that send commands after spawn
   - Tags help organize workers: filter with 'swarm ls --tag <tag>'
+
+Security Note:
+  The --dangerously-skip-permissions flag is required for autonomous operation.
+  Consider using Claude's native sandbox (/sandbox) or Docker Sandboxes for
+  isolation. See README.md for sandboxing options.
 
 See Also:
   swarm ls --help        List workers
@@ -996,37 +1001,37 @@ Use --no-run to spawn without starting the loop.
 RALPH_SPAWN_HELP_EPILOG = """\
 Examples:
   # Basic autonomous loop (blocks while running)
-  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude --dangerously-skip-permissions
 
   # With isolated git worktree
   swarm ralph spawn --name feature --prompt-file PROMPT.md --max-iterations 20 \\
-    --worktree -- claude
+    --worktree -- claude --dangerously-skip-permissions
 
   # With heartbeat for overnight work (recovers from rate limits)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
-    --heartbeat 4h --heartbeat-expire 24h -- claude
+    --heartbeat 4h --heartbeat-expire 24h -- claude --dangerously-skip-permissions
 
   # Stop when pattern matched (checked after each agent exit)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
-    --done-pattern "All tasks complete" -- claude
+    --done-pattern "All tasks complete" -- claude --dangerously-skip-permissions
 
   # Stop immediately when pattern appears (continuous checking)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
-    --done-pattern "All tasks complete" --check-done-continuous -- claude
+    --done-pattern "All tasks complete" --check-done-continuous -- claude --dangerously-skip-permissions
 
   # Spawn only (run loop separately or later)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
-    --no-run -- claude
+    --no-run -- claude --dangerously-skip-permissions
   swarm ralph run dev
 
 Heartbeat for Rate Limit Recovery:
   # Nudge every 4 hours for overnight work (24h expiry)
   swarm ralph spawn --name agent --prompt-file PROMPT.md --max-iterations 100 \\
-    --heartbeat 4h --heartbeat-expire 24h -- claude
+    --heartbeat 4h --heartbeat-expire 24h -- claude --dangerously-skip-permissions
 
   # Custom message for specific recovery behavior
   swarm ralph spawn --name agent --prompt-file PROMPT.md --max-iterations 50 \\
-    --heartbeat 4h --heartbeat-message "please continue where you left off" -- claude
+    --heartbeat 4h --heartbeat-message "please continue where you left off" -- claude --dangerously-skip-permissions
 
 Intervention:
   # Send a message to the running agent mid-iteration
@@ -1037,6 +1042,11 @@ Monitoring:
   swarm ralph status dev      # Check iteration progress
   swarm attach dev            # Watch agent live (detach: Ctrl-B D)
   swarm logs dev --follow     # Stream agent output
+
+Security Note:
+  The --dangerously-skip-permissions flag is required for autonomous operation.
+  For overnight/unattended work, consider using Claude's native sandbox (/sandbox)
+  or Docker Sandboxes for isolation. See README.md for sandboxing options.
 """
 
 RALPH_INIT_HELP_EPILOG = """\
