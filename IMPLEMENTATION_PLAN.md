@@ -353,7 +353,7 @@ Current coverage: 84% (513 lines missing). Target: 90%+
   - Test argument validation and error messages
   - Use `unittest.mock` to avoid actual command execution
 
-- [ ] **6.2 Add tests for uncovered error paths**
+- [x] **6.2 Add tests for uncovered error paths**
   - Review lines 8229-8523 (workflow monitor, stage transitions)
   - Add tests for edge cases: worker death during stage, retry exhaustion
   - Add tests for workflow cancellation mid-stage
