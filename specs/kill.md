@@ -14,6 +14,7 @@ The `kill` command terminates running workers. It handles both tmux-based worker
   - `state-management.md` (worker registry)
   - `worktree-isolation.md` (worktree removal)
   - `tmux-integration.md` (window and session management)
+  - `ralph-loop.md` (ralph state management)
 
 ## Behavior
 
@@ -87,6 +88,25 @@ The `kill` command terminates running workers. It handles both tmux-based worker
 swarm: warning: cannot remove worktree for '<name>': <message>
 swarm: use --force-dirty to remove anyway
 ```
+
+### Ralph State Cleanup
+
+**Description**: Clean up ralph state when killing ralph workers with `--rm-worktree`.
+
+**Behavior**:
+1. If `--rm-worktree` and worker is a ralph worker (has `metadata.ralph == true`):
+2. Delete ralph state directory at `~/.swarm/ralph/<name>/`
+3. This removes `state.json`, `iterations.log`, and any other ralph-related files
+4. If deletion fails, print warning but continue
+
+**Rationale**: When removing a worktree, the user typically intends to start fresh. Leaving ralph state behind causes issues when respawning with different configuration (e.g., new timeout values persist from old state).
+
+**Output on Failure**:
+```
+swarm: warning: cannot remove ralph state for '<name>': <message>
+```
+
+**Note**: Ralph state is only cleaned when `--rm-worktree` is specified. A simple `swarm kill <name>` preserves ralph state, allowing later resume or inspection.
 
 ### Session Cleanup
 
@@ -190,6 +210,25 @@ killed <name>
   - Worktree removed (changes lost!)
   - Output: "killed dirty"
 
+### Scenario: Kill ralph worker with worktree removal
+- **Given**: Ralph worker "agent" with worktree at `/repo-worktrees/agent` and ralph state at `~/.swarm/ralph/agent/`
+- **When**: `swarm kill agent --rm-worktree`
+- **Then**:
+  - Worker terminated
+  - Worktree removed via `git worktree remove`
+  - Ralph state directory `~/.swarm/ralph/agent/` deleted (including `state.json`, `iterations.log`)
+  - Output: "killed agent"
+  - Worker can now be respawned with fresh state
+
+### Scenario: Kill ralph worker without --rm-worktree preserves state
+- **Given**: Ralph worker "agent" with ralph state at `~/.swarm/ralph/agent/`
+- **When**: `swarm kill agent`
+- **Then**:
+  - Worker terminated
+  - Ralph state preserved at `~/.swarm/ralph/agent/`
+  - Worker status updated to "stopped"
+  - `swarm ralph resume agent` can continue the loop later
+
 ### Scenario: Kill nonexistent worker
 - **Given**: No worker named "ghost"
 - **When**: `swarm kill ghost`
@@ -241,6 +280,9 @@ killed <name>
 - Worktree removal failure is a warning, not an error (exit code still 0)
 - Process termination timeout is 5 seconds (50 × 0.1s polls)
 - SIGKILL is only sent if process is still alive after SIGTERM timeout
+- Ralph state cleanup is tied to `--rm-worktree`, not to worktree existence (a ralph worker without worktree still gets ralph state cleaned with `--rm-worktree`)
+- Ralph state cleanup failure is a warning, not an error (exit code still 0)
+- When killing all workers with `--all --rm-worktree`, ralph state is cleaned for each ralph worker
 
 ## Recovery Procedures
 
@@ -283,6 +325,21 @@ swarm ls
 
 # Then clean up
 swarm clean <name>
+```
+
+### Ralph state persists after kill
+```bash
+# Option 1: Use --rm-worktree to clean everything
+swarm kill <name> --rm-worktree
+
+# Option 2: Use --clean-state on next spawn
+swarm ralph spawn --name <name> --clean-state --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+
+# Option 3: Use --replace on next spawn
+swarm ralph spawn --name <name> --replace --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+
+# Option 4: Manual cleanup
+rm -rf ~/.swarm/ralph/<name>/
 ```
 
 ## Implementation Notes

@@ -46,7 +46,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Document exit_reason tracking (B4)
   - Document monitor disconnect handling (B5)
 
-- [ ] **1.2 Update `specs/kill.md`**
+- [x] **1.2 Update `specs/kill.md`**
   - Add ralph state cleanup behavior for `--rm-worktree` (B1)
   - Add scenario: "Kill ralph worker with worktree removal"
 
