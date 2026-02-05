@@ -121,7 +121,7 @@ Update specs BEFORE implementation to define expected behavior.
 
 ### Phase 3: New Features
 
-- [ ] **3.1 Feature: `--replace` flag for ralph spawn (F1)**
+- [x] **3.1 Feature: `--replace` flag for ralph spawn (F1)**
   - Add `--replace` argument to ralph spawn
   - If worker exists: kill it, remove worktree if present, remove ralph state
   - Then proceed with normal spawn

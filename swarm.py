@@ -4776,6 +4776,8 @@ def main() -> None:
                                help="Check done pattern during monitoring, not just after exit")
     ralph_spawn_p.add_argument("--no-run", action="store_true",
                                help="Spawn worker but don't start monitoring loop (default: auto-start)")
+    ralph_spawn_p.add_argument("--replace", action="store_true",
+                               help="Auto-clean existing worker/worktree/state before spawning")
     ralph_spawn_p.add_argument("--session", default=None,
                                help="Tmux session name (default: hash-based isolation)")
     ralph_spawn_p.add_argument("--tmux-socket", default=None,
@@ -6187,9 +6189,52 @@ def cmd_ralph_spawn(args) -> None:
 
     # Load state and check for duplicate name
     state = State()
-    if state.get_worker(args.name) is not None:
-        print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
-        sys.exit(1)
+    existing_worker = state.get_worker(args.name)
+
+    # Handle --replace flag: clean up existing worker before spawning
+    if existing_worker is not None:
+        if getattr(args, 'replace', False):
+            # Kill the existing worker
+            if existing_worker.tmux:
+                socket = existing_worker.tmux.socket if existing_worker.tmux else None
+                session = existing_worker.tmux.session
+                cmd_prefix = tmux_cmd_prefix(socket)
+                subprocess.run(
+                    cmd_prefix + ["kill-window", "-t", f"{session}:{existing_worker.tmux.window}"],
+                    capture_output=True
+                )
+
+            # Remove worktree if present
+            if existing_worker.worktree:
+                success, msg = remove_worktree(Path(existing_worker.worktree.path), force=True)
+                if not success:
+                    print(f"swarm: warning: cannot remove worktree for '{args.name}': {msg}", file=sys.stderr)
+
+            # Remove ralph state if present
+            ralph_state_dir = RALPH_DIR / args.name
+            if ralph_state_dir.exists():
+                import shutil
+                try:
+                    shutil.rmtree(ralph_state_dir)
+                except OSError as e:
+                    print(f"swarm: warning: cannot remove ralph state for '{args.name}': {e}", file=sys.stderr)
+
+            # Stop heartbeat if active
+            heartbeat_state = load_heartbeat_state(args.name)
+            if heartbeat_state and heartbeat_state.status in ("active", "paused"):
+                stop_heartbeat_monitor(heartbeat_state)
+                heartbeat_state.status = "stopped"
+                heartbeat_state.monitor_pid = None
+                save_heartbeat_state(heartbeat_state)
+
+            # Remove worker from state
+            state.remove_worker(args.name)
+            state.save()
+
+            print(f"replaced existing worker {args.name}")
+        else:
+            print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
+            sys.exit(1)
 
     # Parse environment variables from KEY=VAL format (validation only, no resources created)
     env_dict = {}

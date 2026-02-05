@@ -825,6 +825,18 @@ class TestRalphSpawnArguments(unittest.TestCase):
         # Should indicate it's for consistency/no-op
         self.assertIn('consistency', result.stdout.lower())
 
+    def test_replace_flag_exists_in_ralph_spawn(self):
+        """Test that --replace flag is accepted by ralph spawn (F1)."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--replace', result.stdout)
+        # Should indicate it auto-cleans existing worker
+        self.assertIn('existing', result.stdout.lower())
+
 
 class TestRalphSpawnValidation(unittest.TestCase):
     """Test ralph spawn validation logic."""
@@ -912,6 +924,190 @@ class TestRalphSpawnValidation(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         error_calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any('already exists' in call for call in error_calls))
+
+    def test_ralph_spawn_replace_cleans_existing_worker(self):
+        """Test ralph spawn with --replace cleans up existing worker (F1)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='existing-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=True,  # The --replace flag
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock existing worker with tmux info
+        mock_tmux = swarm.TmuxInfo(session='swarm-test', window='existing-worker', socket=None)
+        mock_worker = swarm.Worker(
+            name='existing-worker',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=mock_tmux
+        )
+
+        # Create a mock state that returns the existing worker
+        mock_state = swarm.State()
+        mock_state.workers = [mock_worker]
+
+        # Track if remove_worker was called
+        removed_workers = []
+        original_remove = mock_state.remove_worker
+        def track_remove(name):
+            removed_workers.append(name)
+            return original_remove(name)
+        mock_state.remove_worker = track_remove
+
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch('subprocess.run') as mock_run:
+                # Mock successful tmux operations
+                mock_run.return_value.returncode = 0
+                with patch.object(swarm, 'create_tmux_window'):
+                    with patch.object(swarm, 'save_ralph_state'):
+                        with patch.object(swarm, 'log_ralph_iteration'):
+                            with patch.object(swarm, 'send_prompt_to_worker'):
+                                with patch('builtins.print') as mock_print:
+                                    swarm.cmd_ralph_spawn(args)
+
+        # Verify the existing worker was removed
+        self.assertIn('existing-worker', removed_workers)
+        # Verify the "replaced" message was printed
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('replaced' in call for call in print_calls))
+
+    def test_ralph_spawn_replace_removes_worktree(self):
+        """Test ralph spawn with --replace removes existing worktree (F1)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='existing-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,  # Not creating a new worktree, but existing has one
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=True,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock existing worker with worktree
+        mock_worktree = swarm.WorktreeInfo(
+            path='/tmp/test-worktrees/existing-worker',
+            branch='existing-worker',
+            base_repo='/tmp/test-repo'
+        )
+        mock_tmux = swarm.TmuxInfo(session='swarm-test', window='existing-worker', socket=None)
+        mock_worker = swarm.Worker(
+            name='existing-worker',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=mock_tmux,
+            worktree=mock_worktree
+        )
+
+        mock_state = swarm.State()
+        mock_state.workers = [mock_worker]
+
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value.returncode = 0
+                with patch.object(swarm, 'remove_worktree') as mock_remove_worktree:
+                    mock_remove_worktree.return_value = (True, None)
+                    with patch.object(swarm, 'create_tmux_window'):
+                        with patch.object(swarm, 'save_ralph_state'):
+                            with patch.object(swarm, 'log_ralph_iteration'):
+                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                    with patch('builtins.print'):
+                                        swarm.cmd_ralph_spawn(args)
+
+        # Verify remove_worktree was called with force=True
+        mock_remove_worktree.assert_called_once()
+        call_args = mock_remove_worktree.call_args
+        self.assertEqual(call_args[1].get('force'), True)
+
+    def test_ralph_spawn_replace_removes_ralph_state(self):
+        """Test ralph spawn with --replace removes existing ralph state (F1)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='existing-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=True,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock existing worker
+        mock_tmux = swarm.TmuxInfo(session='swarm-test', window='existing-worker', socket=None)
+        mock_worker = swarm.Worker(
+            name='existing-worker',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=mock_tmux
+        )
+
+        mock_state = swarm.State()
+        mock_state.workers = [mock_worker]
+
+        # Create a temporary ralph state directory
+        ralph_state_dir = swarm.RALPH_DIR / 'existing-worker'
+        ralph_state_dir.mkdir(parents=True, exist_ok=True)
+        (ralph_state_dir / 'state.json').write_text('{}')
+
+        try:
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch('subprocess.run') as mock_run:
+                    mock_run.return_value.returncode = 0
+                    with patch.object(swarm, 'create_tmux_window'):
+                        with patch.object(swarm, 'save_ralph_state'):
+                            with patch.object(swarm, 'log_ralph_iteration'):
+                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                    with patch('builtins.print'):
+                                        swarm.cmd_ralph_spawn(args)
+
+            # Verify ralph state directory was removed
+            self.assertFalse(ralph_state_dir.exists())
+        finally:
+            # Cleanup in case test failed
+            if ralph_state_dir.exists():
+                import shutil
+                shutil.rmtree(ralph_state_dir)
 
     def test_ralph_spawn_prompt_file_not_found(self):
         """Test ralph spawn with non-existent prompt file fails."""
