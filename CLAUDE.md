@@ -1,6 +1,46 @@
 # Agent Instructions
 
+## Security: Autonomous Agent Permissions
+
+Swarm workers require `--dangerously-skip-permissions` to operate autonomously. Without this flag, Claude will prompt for confirmation on each tool use, causing workers to stall.
+
+### Required Flag
+```bash
+swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
+```
+
+### Sandboxing Mitigations
+
+For production or unattended use, enable sandboxing to limit what agents can access:
+
+**Option 1: Claude's Native Sandbox** (recommended)
+```bash
+# Configure sandbox before spawning (run interactively once)
+claude
+> /sandbox   # Enable auto-allow mode with filesystem/network isolation
+
+# Workers inherit sandbox settings
+swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
+```
+
+**Option 2: Docker Sandboxes**
+```bash
+# Run swarm inside Docker Desktop Sandboxes (4.50+)
+docker sandbox run --image claude-code-sandbox -- swarm spawn ...
+```
+
+**Option 3: Restricted Tools**
+```bash
+# Limit to file operations only (no bash)
+swarm spawn --name agent --tmux --worktree -- \
+  claude --dangerously-skip-permissions --allowedTools "Edit Read Grep Glob"
+```
+
+See [README.md Security Considerations](README.md#security-considerations) for details.
+
 ## Swarm-Specific Caveats
+
+**Pre-commit hook runs full test suite.** Every commit triggers the test suite (~94% coverage), which takes significant time. Plan for this when committing.
 
 **Warning: Running `make test` in this repo will crash swarm workers.**
 
@@ -24,7 +64,7 @@ Swarm manages parallel agent workers in isolated git worktrees via tmux.
 
 ### Quick Reference
 ```bash
-swarm spawn --name <id> --tmux --worktree -- claude  # Start agent in isolated worktree
+swarm spawn --name <id> --tmux --worktree -- claude --dangerously-skip-permissions  # Start agent
 swarm ls                          # List all workers
 swarm status <name>               # Check worker status
 swarm send <name> "prompt"        # Send prompt to worker
@@ -36,7 +76,7 @@ swarm kill <name> --rm-worktree   # Stop and cleanup
 ### Worktree Isolation
 Each `--worktree` worker gets its own git branch and directory:
 ```bash
-swarm spawn --name feature-auth --tmux --worktree -- claude
+swarm spawn --name feature-auth --tmux --worktree -- claude --dangerously-skip-permissions
 # Creates: <repo>-worktrees/feature-auth on branch 'feature-auth'
 ```
 
@@ -68,8 +108,8 @@ swarm heartbeat stop builder             # Stop permanently
 
 **Attach heartbeat at spawn time**:
 ```bash
-swarm spawn --name agent --tmux --heartbeat 4h --heartbeat-expire 24h -- claude
-swarm ralph spawn --name agent --prompt-file ./PROMPT.md --heartbeat 4h -- claude
+swarm spawn --name agent --tmux --heartbeat 4h --heartbeat-expire 24h -- claude --dangerously-skip-permissions
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --heartbeat 4h -- claude --dangerously-skip-permissions
 ```
 
 State stored in `~/.swarm/heartbeats/<worker>.json`.
@@ -143,7 +183,7 @@ Ralph mode enables autonomous agent looping with fresh context windows.
 
 ```bash
 # Single command spawns worker AND starts monitoring loop (blocks until complete)
-swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude --dangerously-skip-permissions
 
 # Other commands
 swarm ralph status agent     # Check iteration progress
@@ -155,7 +195,7 @@ swarm ralph list             # List all ralph workers
 
 **Scripting/Advanced**: Use `--no-run` to spawn without starting the loop:
 ```bash
-swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --no-run -- claude
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --no-run -- claude --dangerously-skip-permissions
 swarm ralph run agent        # Start monitoring loop separately
 ```
 
