@@ -63,7 +63,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Document `--tmux` as no-op for ralph spawn (B6)
   - Add ralph logs command to CLI reference
 
-- [ ] **1.6 Update `specs/data-structures.md`**
+- [x] **1.6 Update `specs/data-structures.md`**
   - Add `exit_reason` field to RalphState (B4)
   - Document iteration timing for ETA (F3)
 

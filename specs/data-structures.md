@@ -290,9 +290,153 @@ mv ~/.swarm/state.json ~/.swarm/state.json.backup
 swarm ls  # Creates fresh empty state
 ```
 
+### RalphState Dataclass
+
+**Description**: Stores ralph loop state for autonomous agent iteration tracking. Persisted separately from worker state in `~/.swarm/ralph/<worker-name>/state.json`.
+
+**Schema**:
+```python
+@dataclass
+class RalphState:
+    worker_name: str                      # Associated worker name
+    prompt_file: str                      # Path to prompt file
+    max_iterations: int                   # Maximum iteration count
+    current_iteration: int = 0            # Current iteration number
+    status: str = "running"               # running, paused, stopped, failed
+    started: str = ""                     # ISO 8601 timestamp (loop start)
+    last_iteration_started: str = ""      # ISO 8601 timestamp
+    last_iteration_ended: str = ""        # ISO 8601 timestamp
+    iteration_durations: list[int] = field(default_factory=list)  # Durations in seconds
+    consecutive_failures: int = 0         # Consecutive failure count
+    total_failures: int = 0               # Total failure count
+    done_pattern: Optional[str] = None    # Regex to stop loop
+    inactivity_timeout: int = 180         # Seconds before restart
+    check_done_continuous: bool = False   # Check pattern during monitoring
+    exit_reason: Optional[str] = None     # Why loop stopped
+```
+
+**JSON Representation**:
+```json
+{
+  "worker_name": "string",
+  "prompt_file": "/absolute/path/to/PROMPT.md",
+  "max_iterations": 100,
+  "current_iteration": 5,
+  "status": "running|paused|stopped|failed",
+  "started": "2024-01-15T10:30:00.000000",
+  "last_iteration_started": "2024-01-15T12:45:00.000000",
+  "last_iteration_ended": "2024-01-15T12:50:00.000000",
+  "iteration_durations": [342, 298, 315],
+  "consecutive_failures": 0,
+  "total_failures": 2,
+  "done_pattern": "regex|null",
+  "inactivity_timeout": 180,
+  "check_done_continuous": false,
+  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null"
+}
+```
+
+**Field Constraints**:
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `worker_name` | string | Yes | - | Associated worker name |
+| `prompt_file` | string | Yes | - | Absolute path to prompt file |
+| `max_iterations` | int | Yes | - | Maximum number of iterations |
+| `current_iteration` | int | No | 0 | Current iteration (0 = not started) |
+| `status` | string | No | "running" | Loop status |
+| `started` | string | No | "" | ISO 8601 timestamp when loop started |
+| `last_iteration_started` | string | No | "" | When current iteration began |
+| `last_iteration_ended` | string | No | "" | When last iteration completed |
+| `iteration_durations` | list[int] | No | `[]` | Duration of each completed iteration in seconds |
+| `consecutive_failures` | int | No | 0 | Failures without success |
+| `total_failures` | int | No | 0 | Total failures across all iterations |
+| `done_pattern` | string | No | null | Regex to match for loop completion |
+| `inactivity_timeout` | int | No | 180 | Seconds of screen stability before restart |
+| `check_done_continuous` | bool | No | false | Check done pattern during monitoring |
+| `exit_reason` | string | No | null | Why the loop stopped |
+
+**Status Values**:
+| Status | Description |
+|--------|-------------|
+| `running` | Loop is actively monitoring/iterating |
+| `paused` | Loop paused via `swarm ralph pause` |
+| `stopped` | Loop completed normally |
+| `failed` | Loop stopped due to errors |
+
+**Exit Reason Values**:
+| Reason | Description |
+|--------|-------------|
+| `done_pattern` | Done pattern matched in agent output |
+| `max_iterations` | Reached maximum iteration count |
+| `killed` | Stopped via `swarm kill` command |
+| `failed` | 5 consecutive failures |
+| `monitor_disconnected` | Monitor process lost connection |
+| `null` | Still running (no exit yet) |
+
+**Iteration Duration Tracking**:
+The `iteration_durations` field stores the duration of each completed iteration in seconds. This enables:
+- ETA calculation: `avg_duration * remaining_iterations`
+- Performance analysis: identify slow iterations
+- Status display: "avg 5m12s/iter, ~48m remaining"
+
+Duration is calculated as `last_iteration_ended - last_iteration_started` and appended after each successful iteration.
+
+**State File Location**: `~/.swarm/ralph/<worker-name>/state.json`
+
+**Iteration Log File**: `~/.swarm/ralph/<worker-name>/iterations.log`
+
+Log format:
+```
+2024-01-15T10:30:00 [START] iteration 1/100
+2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
+2024-01-15T12:00:00 [DONE] loop complete after 47 iterations reason=done_pattern
+```
+
+### Scenario: Create ralph state with all fields
+- **Given**: Ralph loop starting with full configuration
+- **When**: RalphState instance is created
+- **Then**:
+  - All fields populated correctly
+  - `to_dict()` produces valid JSON-serializable dict
+  - `from_dict(state.to_dict())` produces equivalent RalphState
+
+### Scenario: Track iteration durations for ETA
+- **Given**: Ralph loop has completed 5 iterations
+- **When**: Status is displayed
+- **Then**:
+  - `iteration_durations` contains 5 duration values
+  - Average can be calculated: `sum(durations) / len(durations)`
+  - ETA: `avg * (max_iterations - current_iteration)`
+
+### Scenario: Record exit reason on loop completion
+- **Given**: Ralph loop running, done pattern matched
+- **When**: Loop stops
+- **Then**:
+  - `status` set to "stopped"
+  - `exit_reason` set to "done_pattern"
+  - `last_iteration_ended` set to current timestamp
+
+### Scenario: Exit reason on kill command
+- **Given**: Ralph loop running
+- **When**: `swarm kill <name>` executed
+- **Then**:
+  - `status` set to "stopped"
+  - `exit_reason` set to "killed"
+  - Distinct from natural completion
+
+### Scenario: Monitor disconnect exit reason
+- **Given**: Ralph monitor process crashes while worker runs
+- **When**: Monitor stops unexpectedly
+- **Then**:
+  - `exit_reason` set to "monitor_disconnected"
+  - Worker may still be running in tmux
+  - Status reflects actual state
+
 ## Implementation Notes
 
 - **Dataclass immutability**: Worker dataclasses are mutable by default. State management functions modify workers in-place before saving.
 - **No validation**: Dataclasses do not validate field values on construction. Invalid status strings or paths are accepted without error.
 - **Timestamp format**: Uses `datetime.now().isoformat()` which produces ISO 8601 format with microseconds.
 - **Dictionary spread**: `from_dict` uses `d.get()` for optional fields to provide defaults if missing.
+- **Ralph state isolation**: RalphState is stored separately from Worker state to allow independent lifecycle management and avoid coupling.
+- **Duration tracking**: Iteration durations are stored as integers (seconds) for simplicity and easy averaging.
