@@ -91,7 +91,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Simulate worktree creation failure, verify clean state
   - File: `swarm.py` (create_worktree function)
 
-- [ ] **2.4 Fix: Status/reason accuracy (B4)**
+- [x] **2.4 Fix: Status/reason accuracy (B4)**
   - Add `exit_reason` field to RalphState
   - Track actual completion reason: `done_pattern`, `max_iterations`, `killed`, `failed`
   - Update `cmd_kill()` to only set `reason=killed` when actually killed

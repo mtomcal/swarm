@@ -1979,6 +1979,10 @@ class TestRalphStateDataclass(unittest.TestCase):
         self.assertEqual(state.total_failures, 0)
         self.assertEqual(state.inactivity_timeout, 60)
         self.assertIsNone(state.done_pattern)
+        # New fields for B4
+        self.assertEqual(state.last_iteration_ended, "")
+        self.assertEqual(state.iteration_durations, [])
+        self.assertIsNone(state.exit_reason)
 
     def test_ralph_state_to_dict(self):
         """Test RalphState to_dict method."""
@@ -1995,6 +1999,27 @@ class TestRalphStateDataclass(unittest.TestCase):
         self.assertEqual(d['max_iterations'], 10)
         self.assertEqual(d['current_iteration'], 5)
         self.assertEqual(d['status'], 'paused')
+        # New fields for B4
+        self.assertEqual(d['last_iteration_ended'], '')
+        self.assertEqual(d['iteration_durations'], [])
+        self.assertIsNone(d['exit_reason'])
+
+    def test_ralph_state_to_dict_with_exit_reason(self):
+        """Test RalphState to_dict includes exit_reason field (B4)."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=10,
+            status='stopped',
+            exit_reason='max_iterations',
+            last_iteration_ended='2024-01-15T15:30:00',
+            iteration_durations=[300, 312, 298, 305, 310]
+        )
+        d = state.to_dict()
+        self.assertEqual(d['exit_reason'], 'max_iterations')
+        self.assertEqual(d['last_iteration_ended'], '2024-01-15T15:30:00')
+        self.assertEqual(d['iteration_durations'], [300, 312, 298, 305, 310])
 
     def test_ralph_state_from_dict(self):
         """Test RalphState from_dict method."""
@@ -2016,6 +2041,31 @@ class TestRalphStateDataclass(unittest.TestCase):
         self.assertEqual(state.current_iteration, 3)
         self.assertEqual(state.done_pattern, 'All tasks complete')
         self.assertEqual(state.inactivity_timeout, 600)
+        # New fields default correctly when missing
+        self.assertEqual(state.last_iteration_ended, '')
+        self.assertEqual(state.iteration_durations, [])
+        self.assertIsNone(state.exit_reason)
+
+    def test_ralph_state_from_dict_with_exit_reason(self):
+        """Test RalphState from_dict loads exit_reason and iteration tracking fields (B4)."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/path/to/prompt.md',
+            'max_iterations': 10,
+            'current_iteration': 10,
+            'status': 'stopped',
+            'started': '2024-01-15T10:30:00',
+            'last_iteration_started': '2024-01-15T15:25:00',
+            'last_iteration_ended': '2024-01-15T15:30:00',
+            'iteration_durations': [300, 312, 298],
+            'consecutive_failures': 0,
+            'total_failures': 1,
+            'exit_reason': 'done_pattern'
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertEqual(state.exit_reason, 'done_pattern')
+        self.assertEqual(state.last_iteration_ended, '2024-01-15T15:30:00')
+        self.assertEqual(state.iteration_durations, [300, 312, 298])
 
     def test_ralph_state_roundtrip(self):
         """Test RalphState survives round-trip through dict."""
@@ -2034,6 +2084,25 @@ class TestRalphStateDataclass(unittest.TestCase):
         self.assertEqual(original.worker_name, restored.worker_name)
         self.assertEqual(original.current_iteration, restored.current_iteration)
         self.assertEqual(original.status, restored.status)
+
+    def test_ralph_state_roundtrip_with_exit_reason(self):
+        """Test RalphState with exit_reason survives round-trip (B4)."""
+        original = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=10,
+            status='stopped',
+            started='2024-01-15T10:30:00',
+            last_iteration_ended='2024-01-15T15:30:00',
+            iteration_durations=[300, 312, 298, 305, 310],
+            exit_reason='max_iterations'
+        )
+        d = original.to_dict()
+        restored = swarm.RalphState.from_dict(d)
+        self.assertEqual(original.exit_reason, restored.exit_reason)
+        self.assertEqual(original.last_iteration_ended, restored.last_iteration_ended)
+        self.assertEqual(original.iteration_durations, restored.iteration_durations)
 
 
 class TestRalphStatePersistence(unittest.TestCase):
@@ -2200,6 +2269,140 @@ class TestCmdRalphStatus(unittest.TestCase):
         self.assertIn('Consecutive failures: 0', output)
         self.assertIn('Total failures: 2', output)
         self.assertIn('Done pattern: All tasks complete', output)
+
+    def test_status_shows_exit_reason_when_stopped(self):
+        """Test ralph status shows exit_reason when loop is stopped (B4)."""
+        # Create a worker with ralph state
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with exit_reason
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=10,
+            status='stopped',
+            started='2024-01-15T10:30:00',
+            last_iteration_ended='2024-01-15T15:30:00',
+            exit_reason='max_iterations'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('Status: stopped', output)
+        self.assertIn('Exit reason: max_iterations', output)
+
+    def test_status_shows_exit_reason_killed(self):
+        """Test ralph status shows exit_reason=killed when worker was killed (B4)."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=5,
+            status='stopped',
+            started='2024-01-15T10:30:00',
+            exit_reason='killed'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('Exit reason: killed', output)
+
+    def test_status_shows_no_exit_reason_when_running(self):
+        """Test ralph status shows (none - still running) when loop is running (B4)."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=5,
+            status='running',
+            started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('(none - still running)', output)
+
+    def test_status_shows_eta_with_iteration_durations(self):
+        """Test ralph status shows ETA when iteration_durations available (B4)."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='running',
+            started='2024-01-15T10:30:00',
+            iteration_durations=[300, 312, 298, 305, 310]  # avg ~305s
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        # Should show iteration with ETA
+        self.assertIn('5/10', output)
+        self.assertIn('avg', output)
+        self.assertIn('remaining', output)
 
 
 class TestCmdRalphPause(unittest.TestCase):
@@ -5478,9 +5681,10 @@ class TestCmdKillRalphWorker(unittest.TestCase):
             args = Namespace(name='ralph-worker', all=False, rm_worktree=False)
             swarm.cmd_kill(args)
 
-        # Verify ralph state is now stopped
+        # Verify ralph state is now stopped and exit_reason is set (B4)
         updated_state = swarm.load_ralph_state('ralph-worker')
         self.assertEqual(updated_state.status, 'stopped')
+        self.assertEqual(updated_state.exit_reason, 'killed')
 
     def test_kill_ralph_worker_logs_done_event(self):
         """Test killing a ralph worker logs DONE event with reason=killed."""

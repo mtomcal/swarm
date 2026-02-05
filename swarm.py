@@ -2149,11 +2149,14 @@ class RalphState:
     status: str = "running"  # running, paused, stopped, failed
     started: str = ""
     last_iteration_started: str = ""
+    last_iteration_ended: str = ""
+    iteration_durations: list = field(default_factory=list)  # Duration of each iteration in seconds
     consecutive_failures: int = 0
     total_failures: int = 0
     done_pattern: Optional[str] = None
     inactivity_timeout: int = 60
     check_done_continuous: bool = False
+    exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -2165,11 +2168,14 @@ class RalphState:
             "status": self.status,
             "started": self.started,
             "last_iteration_started": self.last_iteration_started,
+            "last_iteration_ended": self.last_iteration_ended,
+            "iteration_durations": self.iteration_durations,
             "consecutive_failures": self.consecutive_failures,
             "total_failures": self.total_failures,
             "done_pattern": self.done_pattern,
             "inactivity_timeout": self.inactivity_timeout,
             "check_done_continuous": self.check_done_continuous,
+            "exit_reason": self.exit_reason,
         }
 
     @classmethod
@@ -2183,11 +2189,14 @@ class RalphState:
             status=d.get("status", "running"),
             started=d.get("started", ""),
             last_iteration_started=d.get("last_iteration_started", ""),
+            last_iteration_ended=d.get("last_iteration_ended", ""),
+            iteration_durations=d.get("iteration_durations", []),
             consecutive_failures=d.get("consecutive_failures", 0),
             total_failures=d.get("total_failures", 0),
             done_pattern=d.get("done_pattern"),
             inactivity_timeout=d.get("inactivity_timeout", 60),
             check_done_continuous=d.get("check_done_continuous", False),
+            exit_reason=d.get("exit_reason"),
         )
 
 
@@ -5673,6 +5682,7 @@ def cmd_kill(args) -> None:
             else:
                 # Just update status if not removing
                 ralph_state.status = "stopped"
+                ralph_state.exit_reason = "killed"
                 save_ralph_state(ralph_state)
 
         # Stop heartbeat if active for this worker
@@ -6460,7 +6470,18 @@ def cmd_ralph_status(args) -> None:
     # Format output per spec
     print(f"Ralph Loop: {ralph_state.worker_name}")
     print(f"Status: {ralph_state.status}")
-    print(f"Iteration: {ralph_state.current_iteration}/{ralph_state.max_iterations}")
+
+    # Build iteration line with ETA if we have timing data
+    iteration_line = f"Iteration: {ralph_state.current_iteration}/{ralph_state.max_iterations}"
+    if ralph_state.iteration_durations:
+        avg_duration = sum(ralph_state.iteration_durations) / len(ralph_state.iteration_durations)
+        remaining_iterations = ralph_state.max_iterations - ralph_state.current_iteration
+        if remaining_iterations > 0 and ralph_state.status == "running":
+            remaining_secs = int(avg_duration * remaining_iterations)
+            iteration_line += f" (avg {format_duration(int(avg_duration))}/iter, ~{format_duration(remaining_secs)} remaining)"
+        else:
+            iteration_line += f" (avg {format_duration(int(avg_duration))}/iter)"
+    print(iteration_line)
 
     if ralph_state.started:
         # Parse ISO format and format nicely
@@ -6471,12 +6492,22 @@ def cmd_ralph_status(args) -> None:
         last_iter_dt = datetime.fromisoformat(ralph_state.last_iteration_started)
         print(f"Current iteration started: {last_iter_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
+    if ralph_state.last_iteration_ended and ralph_state.status == "stopped":
+        last_ended_dt = datetime.fromisoformat(ralph_state.last_iteration_ended)
+        print(f"Last iteration ended: {last_ended_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
     print(f"Consecutive failures: {ralph_state.consecutive_failures}")
     print(f"Total failures: {ralph_state.total_failures}")
     print(f"Inactivity timeout: {ralph_state.inactivity_timeout}s")
 
     if ralph_state.done_pattern:
         print(f"Done pattern: {ralph_state.done_pattern}")
+
+    # Show exit reason
+    if ralph_state.exit_reason:
+        print(f"Exit reason: {ralph_state.exit_reason}")
+    elif ralph_state.status == "running":
+        print(f"Exit reason: (none - still running)")
 
 
 def cmd_ralph_pause(args) -> None:
@@ -7046,6 +7077,7 @@ def _run_ralph_loop(args) -> None:
                 reason="max_iterations"
             )
             ralph_state.status = "stopped"
+            ralph_state.exit_reason = "max_iterations"
             save_ralph_state(ralph_state)
             break
 
@@ -7126,6 +7158,7 @@ def _run_ralph_loop(args) -> None:
                 if ralph_state.consecutive_failures >= 5:
                     print(f"[ralph] {args.name}: 5 consecutive failures, stopping loop")
                     ralph_state.status = "failed"
+                    ralph_state.exit_reason = "failed"
                     save_ralph_state(ralph_state)
                     sys.exit(1)
 
@@ -7171,6 +7204,7 @@ def _run_ralph_loop(args) -> None:
                 reason="done_pattern"
             )
             ralph_state.status = "stopped"
+            ralph_state.exit_reason = "done_pattern"
             save_ralph_state(ralph_state)
             # Kill the worker since we're stopping
             if worker:
@@ -7192,7 +7226,8 @@ def _run_ralph_loop(args) -> None:
                 kill_worker_for_ralph(worker, state)
         else:
             # Worker exited on its own (monitor_result == "exited")
-            duration = format_duration(time.time() - iteration_start)
+            iteration_duration_secs = int(time.time() - iteration_start)
+            duration = format_duration(iteration_duration_secs)
             print(f"[ralph] {args.name}: iteration {ralph_state.current_iteration} completed (exit: 0, duration: {duration})")
             log_ralph_iteration(
                 args.name,
@@ -7202,8 +7237,10 @@ def _run_ralph_loop(args) -> None:
                 duration=duration
             )
 
-            # Reset consecutive failures on success
+            # Reset consecutive failures on success and track iteration timing
             ralph_state.consecutive_failures = 0
+            ralph_state.last_iteration_ended = datetime.now().isoformat()
+            ralph_state.iteration_durations.append(iteration_duration_secs)
             save_ralph_state(ralph_state)
 
             # Check for done pattern (after exit, non-continuous mode)
@@ -7217,6 +7254,7 @@ def _run_ralph_loop(args) -> None:
                         reason="done_pattern"
                     )
                     ralph_state.status = "stopped"
+                    ralph_state.exit_reason = "done_pattern"
                     save_ralph_state(ralph_state)
                     return
 
