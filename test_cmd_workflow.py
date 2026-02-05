@@ -2204,8 +2204,9 @@ class TestCmdWorkflowRunDirect(unittest.TestCase):
         path.write_text(content)
         return str(path)
 
+    @patch('swarm.run_workflow_monitor')
     @patch('swarm.spawn_workflow_stage')
-    def test_run_immediate_direct(self, mock_spawn):
+    def test_run_immediate_direct(self, mock_spawn, mock_monitor):
         """Test running workflow immediately via direct call."""
         # Mock spawn to return a mock worker
         mock_worker = MagicMock()
@@ -2243,8 +2244,9 @@ stages:
         self.assertIsNotNone(state)
         self.assertEqual(state.status, "running")
 
+    @patch('swarm.run_workflow_monitor')
     @patch('swarm.spawn_workflow_stage')
-    def test_run_with_name_override_direct(self, mock_spawn):
+    def test_run_with_name_override_direct(self, mock_spawn, mock_monitor):
         """Test running with --name override via direct call."""
         # Mock spawn to return a mock worker
         mock_worker = MagicMock()
@@ -2277,7 +2279,8 @@ stages:
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "custom-name")
 
-    def test_run_scheduled_with_at_direct(self):
+    @patch('swarm.run_workflow_monitor')
+    def test_run_scheduled_with_at_direct(self, mock_monitor):
         """Test running scheduled workflow with --at via direct call."""
         yaml_path = self._write_yaml('at-schedule.yaml', '''
 name: at-scheduled
@@ -2302,7 +2305,8 @@ stages:
         self.assertEqual(state.status, "scheduled")
         self.assertIsNotNone(state.scheduled_for)
 
-    def test_run_scheduled_with_in_direct(self):
+    @patch('swarm.run_workflow_monitor')
+    def test_run_scheduled_with_in_direct(self, mock_monitor):
         """Test running scheduled workflow with --in via direct call."""
         yaml_path = self._write_yaml('in-schedule.yaml', '''
 name: in-scheduled
@@ -2339,8 +2343,9 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
+    @patch('swarm.run_workflow_monitor')
     @patch('swarm.spawn_workflow_stage')
-    def test_run_duplicate_error_direct(self, mock_spawn):
+    def test_run_duplicate_error_direct(self, mock_spawn, mock_monitor):
         """Test duplicate workflow error via direct call."""
         # Mock spawn to return a mock worker
         mock_worker = MagicMock()
@@ -2368,8 +2373,9 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
+    @patch('swarm.run_workflow_monitor')
     @patch('swarm.spawn_workflow_stage')
-    def test_run_force_overwrite_direct(self, mock_spawn):
+    def test_run_force_overwrite_direct(self, mock_spawn, mock_monitor):
         """Test --force overwrites via direct call."""
         # Mock spawn to return a mock worker
         mock_worker = MagicMock()
@@ -2458,7 +2464,8 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
-    def test_run_yaml_schedule_direct(self):
+    @patch('swarm.run_workflow_monitor')
+    def test_run_yaml_schedule_direct(self, mock_monitor):
         """Test workflow with schedule in YAML via direct call."""
         yaml_path = self._write_yaml('yaml-sched.yaml', '''
 name: yaml-sched-test
@@ -2476,7 +2483,8 @@ stages:
         state = swarm.load_workflow_state("yaml-sched-test")
         self.assertEqual(state.status, "scheduled")
 
-    def test_run_yaml_delay_direct(self):
+    @patch('swarm.run_workflow_monitor')
+    def test_run_yaml_delay_direct(self, mock_monitor):
         """Test workflow with delay in YAML via direct call."""
         yaml_path = self._write_yaml('yaml-delay.yaml', '''
 name: yaml-delay-test
@@ -2538,8 +2546,9 @@ stages:
             swarm.cmd_workflow_run(args)
         self.assertEqual(ctx.exception.code, 1)
 
+    @patch('swarm.run_workflow_monitor')
     @patch('swarm.spawn_workflow_stage')
-    def test_run_multi_stage_direct(self, mock_spawn):
+    def test_run_multi_stage_direct(self, mock_spawn, mock_monitor):
         """Test multi-stage workflow via direct call."""
         # Mock spawn to return a mock worker
         mock_worker = MagicMock()
@@ -2732,14 +2741,23 @@ stages:
     prompt: Create a plan
 ''')
         # Use --at to schedule instead of running immediately (avoids tmux)
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("Workflow 'test-workflow' scheduled", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        # Verify workflow state was created (output may not be captured due to buffering)
+        state = swarm.load_workflow_state("test-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
 
     def test_run_creates_workflow_state(self):
         """Test that running creates workflow state."""
@@ -2751,12 +2769,19 @@ stages:
     prompt: Do work
 ''')
         # Use scheduling to avoid tmux dependency
-        subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
         # Verify state was created
         state = swarm.load_workflow_state("state-test-workflow")
@@ -2777,19 +2802,25 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--name', 'custom-name'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("Workflow 'custom-name' started", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state uses custom name
+        # Verify state uses custom name (output may not be captured due to buffering)
         state = swarm.load_workflow_state("custom-name")
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "custom-name")
+        self.assertEqual(state.status, "running")
 
     def test_run_duplicate_name_error(self):
         """Test error when workflow with same name exists."""
@@ -2800,19 +2831,26 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # First run
-        subprocess.run(
+        # First run - use Popen since monitor loop runs in foreground
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Second run should fail
+        # Second run should fail immediately (no monitor loop started)
         result = subprocess.run(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2829,23 +2867,44 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # First run with scheduling (no tmux needed)
-        subprocess.run(
+        # First run with scheduling (no tmux needed) - use Popen since monitor loop runs
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Second run with --force should succeed
-        result = subprocess.run(
+        # Verify first workflow was created
+        state = swarm.load_workflow_state("force-workflow")
+        self.assertIsNotNone(state)
+        first_created_at = state.created_at
+
+        # Second run with --force should succeed - use Popen since monitor loop runs
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--force', '--at', '03:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("Workflow 'force-workflow' scheduled", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+
+        # Verify workflow was recreated (new created_at)
+        state = swarm.load_workflow_state("force-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
+        self.assertNotEqual(state.created_at, first_created_at)
 
     def test_run_missing_file_error(self):
         """Test error when file doesn't exist."""
@@ -2853,6 +2912,7 @@ stages:
             [sys.executable, 'swarm.py', 'workflow', 'run', '/nonexistent/path.yaml'],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2868,6 +2928,7 @@ stages: []
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2882,21 +2943,27 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("scheduled", result.stdout.lower())
-        self.assertIn("02:00", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state is scheduled
+        # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("scheduled-workflow")
         self.assertIsNotNone(state)
         self.assertEqual(state.status, "scheduled")
         self.assertIsNotNone(state.scheduled_for)
+        # Verify scheduled time contains "02:00"
+        self.assertIn("02:00", state.scheduled_for)
 
     def test_run_with_in_schedule(self):
         """Test running with --in delay."""
@@ -2907,17 +2974,21 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--in', '4h'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("scheduled", result.stdout.lower())
-        self.assertIn("in 4h", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state is scheduled
+        # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("delayed-workflow")
         self.assertIsNotNone(state)
         self.assertEqual(state.status, "scheduled")
@@ -2936,6 +3007,7 @@ stages:
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00', '--in', '4h'],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2954,6 +3026,7 @@ stages:
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', 'invalid'],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2972,6 +3045,7 @@ stages:
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--in', 'invalid'],
             capture_output=True,
             text=True,
+            timeout=5,
             env={**os.environ, 'HOME': self.temp_dir}
         )
         self.assertEqual(result.returncode, 1)
@@ -2987,17 +3061,23 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("scheduled", result.stdout.lower())
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state is scheduled
+        # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("yaml-scheduled-workflow")
+        self.assertIsNotNone(state)
         self.assertEqual(state.status, "scheduled")
 
     def test_run_with_yaml_delay(self):
@@ -3010,17 +3090,23 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        result = subprocess.run(
+        # The monitor loop runs in foreground, so use Popen to not block
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("scheduled", result.stdout.lower())
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state is scheduled
+        # Verify state is scheduled (output may not be captured due to buffering)
         state = swarm.load_workflow_state("yaml-delayed-workflow")
+        self.assertIsNotNone(state)
         self.assertEqual(state.status, "scheduled")
 
     def test_run_cli_schedule_overrides_yaml(self):
@@ -3033,15 +3119,24 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # Run with --at should use CLI time
-        result = subprocess.run(
+        # Run with --at should use CLI time - monitor loop runs, so use Popen
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '08:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("08:00", result.stdout)
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        # Verify scheduled_for uses CLI time, not YAML time (output may not be captured)
+        state = swarm.load_workflow_state("override-schedule-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
+        self.assertIn("08:00", state.scheduled_for)
 
     def test_run_multi_stage_workflow(self):
         """Test running workflow with multiple stages (scheduled to avoid tmux)."""
@@ -3059,17 +3154,24 @@ stages:
     type: worker
     prompt: Validate
 ''')
-        result = subprocess.run(
+        # Monitor loop runs, so use Popen
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("scheduled", result.stdout.lower())
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
-        # Verify state has all stages initialized
+        # Verify state has all stages initialized (output may not be captured due to buffering)
         state = swarm.load_workflow_state("multi-stage-workflow")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "scheduled")
         self.assertEqual(len(state.stages), 3)
         # All stages are pending since workflow is scheduled
         self.assertEqual(state.stages["plan"].status, "pending")
@@ -3086,12 +3188,19 @@ stages:
     prompt: Do work
 ''')
         # Use scheduling to avoid tmux - worker_name won't be set until stage starts
-        subprocess.run(
+        # Monitor loop runs, so use Popen
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
         state = swarm.load_workflow_state("worker-name-test")
         # Worker name is not set until stage actually starts
@@ -3106,13 +3215,19 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # Use scheduling to avoid tmux
-        subprocess.run(
+        # Use scheduling to avoid tmux - monitor loop runs, so use Popen
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
         # Verify YAML was copied
         yaml_copy_path = swarm.get_workflow_yaml_copy_path("copy-test-workflow")
@@ -3127,13 +3242,19 @@ stages:
     type: worker
     prompt: Do work
 ''')
-        # Use scheduling to avoid tmux
-        subprocess.run(
+        # Use scheduling to avoid tmux - monitor loop runs, so use Popen
+        proc = subprocess.Popen(
             [sys.executable, 'swarm.py', 'workflow', 'run', yaml_path, '--at', '02:00'],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, 'HOME': self.temp_dir}
         )
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
 
         # Verify logs directory was created
         logs_dir = swarm.get_workflow_logs_dir("logs-test-workflow")

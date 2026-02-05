@@ -284,7 +284,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
 
 ### Phase 5: Verification
 
-- [ ] **5.1 Run all unit tests**
+- [x] **5.1 Run all unit tests**
   ```bash
   python3 -m unittest discover -v
   ```
