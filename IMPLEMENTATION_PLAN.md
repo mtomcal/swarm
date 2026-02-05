@@ -278,7 +278,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Add workflow section
   - Update examples
 
-- [ ] **4.6 Final help text review**
+- [x] **4.6 Final help text review**
   - Verify all commands meet cli-help-standards.md
   - Ensure consistency
 
