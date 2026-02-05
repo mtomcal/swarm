@@ -36,7 +36,7 @@ Real-world usage of `swarm ralph` revealed several bugs and UX issues:
 
 Update specs BEFORE implementation to define expected behavior.
 
-- [ ] **1.1 Update `specs/ralph-loop.md`**
+- [x] **1.1 Update `specs/ralph-loop.md`**
   - Add `--replace` flag documentation (F1)
   - Add `--clean-state` flag documentation (F5)
   - Add `swarm ralph logs` command section (F2)

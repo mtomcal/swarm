@@ -34,14 +34,19 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 - `--prompt-file` (str, required): Path to prompt file read each iteration
 - `--max-iterations` (int, required): Maximum number of loop iterations
 - `--no-run` (bool, optional): Spawn worker but don't start monitoring loop (default: false)
+- `--replace` (bool, optional): Auto-clean existing worker before spawn (default: false)
+- `--clean-state` (bool, optional): Clear ralph state without affecting worker/worktree (default: false)
+- `--tmux` (bool, optional): No-op for consistency with `swarm spawn` (ralph always uses tmux)
 - `-- <command>` (required): Command to spawn (e.g., `claude`)
 
 **Behavior**:
 1. Validate prompt file exists and is readable
-2. Automatically use tmux mode (no `--tmux` flag needed)
-3. Create worker and ralph state
-4. Warn if `--max-iterations` exceeds 50
-5. **Auto-start loop**: Unless `--no-run` is specified, automatically start the monitoring loop after spawning
+2. Automatically use tmux mode (ralph always uses tmux; `--tmux` accepted as no-op for consistency)
+3. If `--replace` specified and worker exists: kill worker, remove worktree if present, remove ralph state
+4. If `--clean-state` specified: remove ralph state directory (without affecting worker/worktree)
+5. Create worker and ralph state
+6. Warn if `--max-iterations` exceeds 50
+7. **Auto-start loop**: Unless `--no-run` is specified, automatically start the monitoring loop after spawning
 
 **Auto-start Behavior**:
 - By default, `ralph spawn` both creates the worker AND starts monitoring
@@ -53,13 +58,14 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 |-----------|----------|
 | Prompt file not found | Exit 1 with "swarm: error: prompt file not found: <path>" |
 | `--max-iterations` > 50 | Warning to stderr: "swarm: warning: high iteration count (>50) may consume significant resources" |
+| `--tmux` flag used | Info message: "Note: Ralph workers always use tmux" (not an error, command proceeds) |
 
 ### Outer Loop Execution
 
 **Description**: The main ralph loop that manages agent lifecycle.
 
 **Inputs**:
-- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 60)
+- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 180). Increase for repos with slow CI/pre-commit hooks.
 - `--done-pattern` (str, optional): Regex pattern that stops the loop when matched in output
 - `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit (default: false)
 
@@ -97,7 +103,7 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 **Description**: Detect when an agent has become inactive using screen-stable detection (inspired by Playwright's `networkidle` pattern).
 
 **Inputs**:
-- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 60)
+- `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 180)
 
 **Algorithm**:
 1. Capture last 20 lines of tmux pane every 2 seconds
@@ -159,11 +165,14 @@ This enables the core ralph pattern: each iteration builds on the previous one's
   "status": "running|paused|stopped|failed",
   "started": "2024-01-15T10:30:00.000000",
   "last_iteration_started": "2024-01-15T12:45:00.000000",
+  "last_iteration_ended": "2024-01-15T12:50:00.000000",
+  "iteration_durations": [342, 298, 315],
   "consecutive_failures": 0,
   "total_failures": 2,
   "done_pattern": "regex|null",
   "inactivity_timeout": 300,
-  "check_done_continuous": false
+  "check_done_continuous": false,
+  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null"
 }
 ```
 
@@ -206,6 +215,40 @@ The worker record includes ralph iteration in metadata:
 | Pause already paused | Warning: "swarm: warning: worker '<name>' is already paused" |
 | Resume non-paused | Warning: "swarm: warning: worker '<name>' is not paused" |
 
+### Ralph Logs Command
+
+**Description**: View the ralph iteration history log without knowing the file path.
+
+**Command**:
+```bash
+swarm ralph logs <name> [--live] [--lines N]
+```
+
+**Inputs**:
+- `<name>` (str, required): Worker name
+- `--live` (bool, optional): Tail the log file in real-time (like `tail -f`)
+- `--lines N` (int, optional): Show last N entries (default: all)
+
+**Behavior**:
+1. Read iteration log from `~/.swarm/ralph/<name>/iterations.log`
+2. If `--live`, stream new entries as they appear
+3. If `--lines N`, show only last N lines
+4. Output log entries to stdout
+
+**Output Format** (same as iterations.log):
+```
+2024-01-15T10:30:00 [START] iteration 1/100
+2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
+2024-01-15T10:35:43 [START] iteration 2/100
+2024-01-15T12:00:00 [DONE] loop complete after 2 iterations reason=done_pattern
+```
+
+**Error Conditions**:
+| Condition | Behavior |
+|-----------|----------|
+| Worker not found | Exit 1 with "swarm: error: no ralph state found for worker '<name>'" |
+| Log file not found | Exit 1 with "swarm: error: no iteration log found for worker '<name>'" |
+
 ### Done Pattern Detection
 
 **Description**: Stop the loop when a pattern is matched in agent output.
@@ -229,6 +272,41 @@ The worker record includes ralph iteration in metadata:
 - `"All tasks complete"` - Simple string match
 - `"IMPLEMENTATION_PLAN.md.*100%"` - Plan completion
 - `"No remaining tasks"` - Task list empty
+
+### Monitor Disconnect Handling
+
+**Description**: Handle cases where the monitoring loop process stops while the worker continues running.
+
+**Problem**: The ralph monitoring process (the `swarm ralph spawn` command or `swarm ralph run` background process) can crash, lose connection, or be killed while the tmux worker continues running. This leaves the worker orphaned - still working, but not being monitored for restarts.
+
+**Detection**:
+After `detect_inactivity()` returns or before each loop iteration:
+1. Verify worker is still alive via `swarm status <name>`
+2. If worker running but monitor stopping: set `exit_reason: monitor_disconnected`
+3. Log the disconnect reason
+
+**Status Display**:
+When `exit_reason` is `monitor_disconnected`, status shows:
+```
+Ralph Loop: agent
+Status: stopped
+Exit reason: monitor_disconnected (worker still running)
+Worker status: running
+```
+
+**Recovery**:
+```bash
+# Check if worker is still running
+swarm status <name>
+
+# Resume monitoring if worker alive
+swarm ralph resume <name>
+```
+
+**Prevention**:
+- Use heartbeat to periodically nudge workers: `--heartbeat 4h`
+- Run the monitor in a persistent tmux session or screen
+- Use `nohup` when backgrounding: `nohup swarm ralph spawn ... &`
 
 ### Failure Handling with Backoff
 
@@ -454,14 +532,35 @@ Output:
 ```
 Ralph Loop: agent
 Status: running
-Iteration: 7/100
+Iteration: 7/100 (avg 5m12s/iter, ~48m remaining)
 Started: 2024-01-15 10:30:00
 Current iteration started: 2024-01-15 12:45:00
 Consecutive failures: 0
 Total failures: 2
-Inactivity timeout: 60s
+Inactivity timeout: 180s
 Done pattern: All tasks complete
+Exit reason: (none - still running)
 ```
+
+**Status when stopped shows exit reason**:
+```
+Ralph Loop: agent
+Status: stopped
+Iteration: 10/10
+Exit reason: max_iterations
+Started: 2024-01-15 10:30:00
+Last iteration ended: 2024-01-15 15:30:00
+Total duration: 5h 0m
+```
+
+**Exit Reason Values**:
+| Reason | Description |
+|--------|-------------|
+| `done_pattern` | Done pattern matched in agent output |
+| `max_iterations` | Reached maximum iteration count |
+| `killed` | Stopped via `swarm kill` or `swarm ralph pause` |
+| `failed` | 5 consecutive failures |
+| `monitor_disconnected` | Monitor process lost connection (worker may still be running) |
 
 ### Log Streaming
 
@@ -530,10 +629,13 @@ done
 | `--name` | str | Yes | - | Unique worker identifier |
 | `--prompt-file` | str | Yes | - | Path to prompt file |
 | `--max-iterations` | int | Yes | - | Maximum loop iterations |
-| `--inactivity-timeout` | int | No | 60 | Screen stability timeout (seconds) |
+| `--inactivity-timeout` | int | No | 180 | Screen stability timeout (seconds). Increase for repos with slow CI hooks. |
 | `--done-pattern` | str | No | null | Regex to stop loop |
 | `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
 | `--no-run` | bool | No | false | Spawn only, don't start loop |
+| `--replace` | bool | No | false | Auto-clean existing worker/worktree/state before spawn |
+| `--clean-state` | bool | No | false | Clear ralph state without affecting worker/worktree |
+| `--tmux` | bool | No | (no-op) | Accepted for consistency with `swarm spawn`, but ralph always uses tmux |
 | `--worktree` | bool | No | false | Create isolated git worktree |
 
 ### Ralph Management Subcommands
@@ -547,6 +649,9 @@ done
 | `swarm ralph resume <name>` | Resume ralph loop |
 | `swarm ralph status <name>` | Show ralph loop status |
 | `swarm ralph list` | List all ralph workers |
+| `swarm ralph logs <name>` | Show iteration history log |
+| `swarm ralph logs <name> --live` | Tail iteration log |
+| `swarm ralph logs <name> --lines N` | Show last N entries |
 | `swarm ralph init` | Create PROMPT.md template |
 | `swarm ralph template` | Output template to stdout |
 
@@ -582,11 +687,11 @@ done
   - Worker metadata updated: `ralph_iteration: 4`
 
 ### Scenario: Inactivity timeout triggers restart
-- **Given**: Ralph worker with `--inactivity-timeout 60`, agent idle for 60s
+- **Given**: Ralph worker with default `--inactivity-timeout 180`, agent idle for 180s
 - **When**: Inactivity timeout expires
 - **Then**:
   - Current agent killed
-  - Log: "[ralph] agent: inactivity timeout (60s), restarting"
+  - Log: "[ralph] agent: inactivity timeout (180s), restarting"
   - New iteration started
 
 ### Scenario: Done pattern stops loop (after exit)
@@ -650,18 +755,19 @@ done
   - Log: "[ralph] agent: starting iteration 6/10"
 
 ### Scenario: Ralph status check
-- **Given**: Ralph worker "agent" running, iteration 7/10
+- **Given**: Ralph worker "agent" running, iteration 7/10, previous iterations averaged 5m12s
 - **When**: `swarm ralph status agent`
 - **Then**:
   - Output shows:
     ```
     Ralph Loop: agent
     Status: running
-    Iteration: 7/10
+    Iteration: 7/10 (avg 5m12s/iter, ~16m remaining)
     Started: 2024-01-15 10:30:00
     Current iteration started: 2024-01-15 12:45:00
     Consecutive failures: 0
     Total failures: 2
+    Exit reason: (none - still running)
     ```
 
 ### Scenario: Prompt file edited mid-loop
@@ -700,6 +806,53 @@ done
   - Same worktree directory used
   - Any committed changes from iteration 1 are present
   - Worktree is NOT reset or recreated
+
+### Scenario: Replace existing worker with --replace
+- **Given**: Ralph worker "agent" exists with worktree and ralph state
+- **When**: `swarm ralph spawn --name agent --replace --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+- **Then**:
+  - Existing worker killed
+  - Worktree removed
+  - Ralph state directory removed (`~/.swarm/ralph/agent/`)
+  - New worker spawned fresh
+  - Output: "replaced existing worker agent"
+
+### Scenario: Clean state only with --clean-state
+- **Given**: Ralph state exists for "agent" (old settings), no running worker
+- **When**: `swarm ralph spawn --name agent --clean-state --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+- **Then**:
+  - Ralph state directory removed
+  - Worker spawned with new settings
+  - Worktree preserved (if it existed)
+
+### Scenario: --tmux flag accepted as no-op
+- **Given**: User runs ralph spawn with --tmux flag
+- **When**: `swarm ralph spawn --name agent --tmux --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+- **Then**:
+  - Info message: "Note: Ralph workers always use tmux"
+  - Worker spawns normally
+  - No error
+
+### Scenario: View ralph logs
+- **Given**: Ralph worker "agent" has run 3 iterations
+- **When**: `swarm ralph logs agent`
+- **Then**:
+  - Outputs iteration log from `~/.swarm/ralph/agent/iterations.log`
+  - Shows all entries
+
+### Scenario: View ralph logs with line limit
+- **Given**: Ralph worker "agent" has run 10 iterations
+- **When**: `swarm ralph logs agent --lines 5`
+- **Then**:
+  - Outputs last 5 entries from iteration log
+
+### Scenario: Monitor disconnect detected
+- **Given**: Ralph worker "agent" running, monitor process killed
+- **When**: Monitor process exits unexpectedly
+- **Then**:
+  - Ralph state set: `exit_reason: monitor_disconnected`
+  - Worker continues running in tmux
+  - `swarm ralph status agent` shows: "Exit reason: monitor_disconnected (worker still running)"
 
 ## Edge Cases
 
@@ -757,11 +910,94 @@ swarm ralph spawn --name <name> --prompt-file ./PROMPT.md --max-iterations 200 -
 ### Clean up ralph state
 
 ```bash
-# Remove ralph state for a worker
+# Option 1: Use --clean-state on next spawn (recommended)
+swarm ralph spawn --name <name> --clean-state --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+
+# Option 2: Use --replace to kill worker and clean everything
+swarm ralph spawn --name <name> --replace --prompt-file ./PROMPT.md --max-iterations 10 -- claude
+
+# Option 3: Manual cleanup
 rm -rf ~/.swarm/ralph/<name>/
 
 # Clean all ralph state
 rm -rf ~/.swarm/ralph/
+```
+
+### Monitor disconnected, worker still running
+
+```bash
+# Check worker status
+swarm status <name>
+
+# If worker is running, resume monitoring
+swarm ralph resume <name>
+
+# View what the worker has been doing
+swarm logs <name>
+
+# View ralph iteration history
+swarm ralph logs <name>
+```
+
+## Best Practices
+
+### Preventing Test Artifacts
+
+A common issue is agents creating test files (e.g., `test.txt`, `new.txt`) during verification that get accidentally committed. Prevent this with:
+
+**Prompt Guidelines**:
+- Include in your PROMPT.md: "Do NOT create test files. Use the existing test suite for verification."
+- Specify exact test commands: "Run `npm test` to verify changes"
+- Discourage exploratory file creation: "Verify by reading existing code, not by creating new files"
+
+**Example PROMPT.md Section**:
+```markdown
+IMPORTANT:
+- Do NOT create test files like test.txt, new.txt, temp.txt, etc.
+- Verify changes by running the existing test suite: `npm test`
+- If you need to test something, add a proper test to the test suite
+- Clean up any temporary files before committing
+```
+
+**.gitignore Patterns**:
+Add these to prevent accidental commits of test artifacts:
+```gitignore
+# Test artifacts
+test.txt
+new.txt
+temp.txt
+*.tmp
+temp/
+.test-output/
+```
+
+**Post-Loop Verification**:
+Before merging ralph-generated commits:
+```bash
+git log --oneline --name-only HEAD~10..HEAD  # Check what files were added
+git diff main..HEAD -- '*.txt'               # Look for unexpected text files
+```
+
+### Prompt Size Guidelines
+
+Keep prompts minimal to preserve context for actual work:
+- **Target**: Under 20 lines
+- **Focus**: One task per iteration
+- **Essential elements only**: task source, verification method, commit reminder
+
+**Bad** (too verbose):
+```markdown
+You are a helpful AI assistant. Your job is to improve this codebase.
+Please read through the implementation plan carefully and select an
+appropriate task to work on. When you're done, make sure to update
+the plan and commit your changes...
+[50 more lines of instructions]
+```
+
+**Good** (minimal):
+```markdown
+Read IMPLEMENTATION_PLAN.md. Pick ONE incomplete task.
+Verify by reading code first. Run tests. Update plan. Commit.
 ```
 
 ## Implementation Notes
