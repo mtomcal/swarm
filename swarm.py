@@ -5959,11 +5959,73 @@ def cmd_ralph(args) -> None:
         cmd_ralph_list(args)
 
 
+def _rollback_ralph_spawn(
+    worktree_path: Optional[Path],
+    tmux_info: Optional[TmuxInfo],
+    worker_name: Optional[str],
+    state: Optional["State"],
+    ralph_state_created: bool,
+) -> None:
+    """Rollback resources created during ralph spawn on failure.
+
+    Cleans up resources in reverse order of creation to ensure no orphaned state.
+    Rollback failures are logged as warnings but don't override the original error.
+
+    Args:
+        worktree_path: Path to worktree if created, None otherwise
+        tmux_info: TmuxInfo if window created, None otherwise
+        worker_name: Worker name if added to state, None otherwise
+        state: State instance for removing worker, None if not added
+        ralph_state_created: True if ralph state was saved
+    """
+    # Remove ralph state first (last created)
+    if ralph_state_created and worker_name:
+        ralph_state_dir = RALPH_DIR / worker_name
+        try:
+            import shutil
+            if ralph_state_dir.exists():
+                shutil.rmtree(ralph_state_dir)
+        except OSError as e:
+            print(f"swarm: warning: rollback failed: could not remove ralph state: {e}", file=sys.stderr)
+
+    # Remove worker from state
+    if worker_name and state:
+        try:
+            state.remove_worker(worker_name)
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not remove worker state: {e}", file=sys.stderr)
+
+    # Kill tmux window
+    if tmux_info:
+        try:
+            cmd_prefix = tmux_cmd_prefix(tmux_info.socket)
+            subprocess.run(
+                cmd_prefix + ["kill-window", "-t", f"{tmux_info.session}:{tmux_info.window}"],
+                capture_output=True
+            )
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not kill tmux window: {e}", file=sys.stderr)
+
+    # Remove worktree (first created)
+    if worktree_path and worktree_path.exists():
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree_path)],
+                capture_output=True,
+                text=True,
+            )
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not remove worktree: {e}", file=sys.stderr)
+
+
 def cmd_ralph_spawn(args) -> None:
     """Spawn a new ralph worker.
 
     Spawns a worker in tmux mode with ralph loop configuration.
     Creates both the worker and ralph state for autonomous looping.
+
+    Uses transactional semantics: if any step fails, all previously created
+    resources are cleaned up (worktree, tmux window, worker state, ralph state).
 
     Args:
         args: Namespace with spawn arguments
@@ -5994,52 +6056,7 @@ def cmd_ralph_spawn(args) -> None:
         print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
         sys.exit(1)
 
-    # Determine working directory
-    cwd = Path.cwd()
-    worktree_info = None
-
-    if args.worktree:
-        # Get git root
-        try:
-            git_root = get_git_root()
-        except subprocess.CalledProcessError:
-            print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
-            sys.exit(1)
-
-        # Compute worktree path relative to git root
-        if args.worktree_dir is None:
-            # Default: <repo-name>-worktrees as sibling to repo
-            worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
-        else:
-            worktree_dir = Path(args.worktree_dir)
-            if not worktree_dir.is_absolute():
-                worktree_dir = git_root.parent / worktree_dir
-
-        worktree_path = worktree_dir / args.name
-
-        # Determine branch name
-        branch = args.branch if args.branch else args.name
-
-        # Create worktree
-        try:
-            create_worktree(worktree_path, branch)
-        except subprocess.CalledProcessError as e:
-            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        # Set cwd to worktree
-        cwd = worktree_path
-
-        # Store worktree info
-        worktree_info = WorktreeInfo(
-            path=str(worktree_path),
-            branch=branch,
-            base_repo=str(git_root)
-        )
-    elif args.cwd:
-        cwd = Path(args.cwd)
-
-    # Parse environment variables from KEY=VAL format
+    # Parse environment variables from KEY=VAL format (validation only, no resources created)
     env_dict = {}
     for env_str in args.env:
         if "=" not in env_str:
@@ -6048,66 +6065,139 @@ def cmd_ralph_spawn(args) -> None:
         key, val = env_str.split("=", 1)
         env_dict[key] = val
 
-    # Spawn the worker in tmux (always tmux for ralph)
-    session = args.session if args.session else get_default_session_name()
-    socket = args.tmux_socket
+    # Track resources for rollback
+    worktree_path: Optional[Path] = None
+    worktree_info: Optional[WorktreeInfo] = None
+    tmux_info: Optional[TmuxInfo] = None
+    worker_added = False
+    ralph_state_created = False
+
+    # Determine working directory
+    cwd = Path.cwd()
+
     try:
+        # Step 1: Create worktree (if requested)
+        if args.worktree:
+            # Get git root
+            try:
+                git_root = get_git_root()
+            except subprocess.CalledProcessError:
+                print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
+                sys.exit(1)
+
+            # Compute worktree path relative to git root
+            if args.worktree_dir is None:
+                # Default: <repo-name>-worktrees as sibling to repo
+                worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
+            else:
+                worktree_dir = Path(args.worktree_dir)
+                if not worktree_dir.is_absolute():
+                    worktree_dir = git_root.parent / worktree_dir
+
+            worktree_path = worktree_dir / args.name
+
+            # Determine branch name
+            branch = args.branch if args.branch else args.name
+
+            # Create worktree (first resource)
+            create_worktree(worktree_path, branch)
+
+            # Set cwd to worktree
+            cwd = worktree_path
+
+            # Store worktree info
+            worktree_info = WorktreeInfo(
+                path=str(worktree_path),
+                branch=branch,
+                base_repo=str(git_root)
+            )
+        elif args.cwd:
+            cwd = Path(args.cwd)
+
+        # Step 2: Create tmux window
+        session = args.session if args.session else get_default_session_name()
+        socket = args.tmux_socket
         create_tmux_window(session, args.name, cwd, cmd, socket)
         tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
+
+        # Step 3: Add worker to state
+        metadata = {
+            "ralph": True,
+            "ralph_iteration": 1,  # Starting with iteration 1
+        }
+
+        worker = Worker(
+            name=args.name,
+            status="running",
+            cmd=cmd,
+            started=datetime.now().isoformat(),
+            cwd=str(cwd),
+            env=env_dict,
+            tags=args.tags,
+            tmux=tmux_info,
+            worktree=worktree_info,
+            pid=None,
+            metadata=metadata,
+        )
+
+        state.add_worker(worker)
+        worker_added = True
+
+        # Step 4: Create ralph state
+        ralph_state = RalphState(
+            worker_name=args.name,
+            prompt_file=str(Path(args.prompt_file).resolve()),
+            max_iterations=args.max_iterations,
+            current_iteration=1,  # Starting at iteration 1, not 0
+            status="running",
+            started=datetime.now().isoformat(),
+            last_iteration_started=datetime.now().isoformat(),
+            inactivity_timeout=args.inactivity_timeout,
+            done_pattern=args.done_pattern,
+            check_done_continuous=getattr(args, 'check_done_continuous', False),
+        )
+        save_ralph_state(ralph_state)
+        ralph_state_created = True
+
+        # Step 5: Log the iteration start
+        log_ralph_iteration(
+            args.name,
+            "START",
+            iteration=1,
+            max_iterations=args.max_iterations
+        )
+
+        # Step 6: Send the prompt to the worker for the first iteration
+        prompt_content = Path(args.prompt_file).read_text()
+        send_prompt_to_worker(worker, prompt_content)
+
     except subprocess.CalledProcessError as e:
-        print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
+        # Handle worktree or tmux creation failures
+        print("swarm: warning: spawn failed, cleaning up partial state", file=sys.stderr)
+        _rollback_ralph_spawn(
+            worktree_path if worktree_info else None,
+            tmux_info,
+            args.name if worker_added else None,
+            state if worker_added else None,
+            ralph_state_created,
+        )
+        if "worktree" in str(e).lower() or (worktree_path and not tmux_info):
+            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
+        else:
+            print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
         sys.exit(1)
-
-    # Build metadata for ralph worker
-    metadata = {
-        "ralph": True,
-        "ralph_iteration": 1,  # Starting with iteration 1
-    }
-
-    # Create Worker object
-    worker = Worker(
-        name=args.name,
-        status="running",
-        cmd=cmd,
-        started=datetime.now().isoformat(),
-        cwd=str(cwd),
-        env=env_dict,
-        tags=args.tags,
-        tmux=tmux_info,
-        worktree=worktree_info,
-        pid=None,
-        metadata=metadata,
-    )
-
-    # Add to state
-    state.add_worker(worker)
-
-    # Create ralph state
-    ralph_state = RalphState(
-        worker_name=args.name,
-        prompt_file=str(Path(args.prompt_file).resolve()),
-        max_iterations=args.max_iterations,
-        current_iteration=1,  # Starting at iteration 1, not 0
-        status="running",
-        started=datetime.now().isoformat(),
-        last_iteration_started=datetime.now().isoformat(),
-        inactivity_timeout=args.inactivity_timeout,
-        done_pattern=args.done_pattern,
-        check_done_continuous=getattr(args, 'check_done_continuous', False),
-    )
-    save_ralph_state(ralph_state)
-
-    # Log the iteration start
-    log_ralph_iteration(
-        args.name,
-        "START",
-        iteration=1,
-        max_iterations=args.max_iterations
-    )
-
-    # Send the prompt to the worker for the first iteration
-    prompt_content = Path(args.prompt_file).read_text()
-    send_prompt_to_worker(worker, prompt_content)
+    except Exception as e:
+        # Handle any other unexpected errors
+        print("swarm: warning: spawn failed, cleaning up partial state", file=sys.stderr)
+        _rollback_ralph_spawn(
+            worktree_path if worktree_info else None,
+            tmux_info,
+            args.name if worker_added else None,
+            state if worker_added else None,
+            ralph_state_created,
+        )
+        print(f"swarm: error: spawn failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Wait for agent to be ready if requested
     if args.ready_wait:

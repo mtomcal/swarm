@@ -8591,5 +8591,271 @@ class TestRalphSpawnHeartbeatHelp(unittest.TestCase):
         self.assertIn('Rate Limit Recovery', swarm.RALPH_SPAWN_HELP_EPILOG)
 
 
+class TestRalphSpawnTransactionalRollback(unittest.TestCase):
+    """Test transactional spawn with rollback on failure.
+
+    From specs/spawn.md:
+    - Spawn operations are atomic - either fully complete or leave no orphaned state
+    - If any step fails after previous steps completed, perform rollback
+    - Rollback removes resources in reverse order of creation
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        # Create a test prompt file
+        Path('PROMPT.md').write_text('study specs/README.md\n')
+        # Create mock state directory
+        self.state_dir = Path(self.temp_dir) / ".swarm"
+        self.state_dir.mkdir()
+        self.ralph_dir = Path(self.temp_dir) / ".swarm" / "ralph"
+        self.ralph_dir.mkdir()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_rollback_on_tmux_failure_after_worktree(self):
+        """Test rollback removes worktree if tmux creation fails.
+
+        Scenario: Rollback on tmux failure after worktree creation
+        Given: In git repository, tmux unavailable or fails
+        When: swarm ralph spawn --name worker --worktree -- echo hi
+        Then:
+          - Worktree created
+          - Tmux window creation fails
+          - Rollback: worktree removed
+          - Warning: "swarm: warning: spawn failed, cleaning up partial state"
+          - Exit code 1
+          - Error about tmux failure
+          - No worker entry in state
+        """
+        args = Namespace(
+            ralph_command='spawn',
+            name='rollback-test-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=True,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'hi']
+        )
+
+        worktree_created = []
+        worktree_removed = []
+
+        def mock_create_worktree(path, branch):
+            worktree_created.append(str(path))
+            # Actually don't create anything, just track the call
+
+        def mock_create_tmux_window(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, 'tmux', 'tmux failed')
+
+        def mock_git_worktree_remove(*args, **kwargs):
+            worktree_removed.append(str(args))
+
+        with patch('swarm.get_git_root', return_value=Path(self.temp_dir)):
+            with patch('swarm.create_worktree', side_effect=mock_create_worktree):
+                with patch('swarm.create_tmux_window', side_effect=mock_create_tmux_window):
+                    with patch.object(swarm.State, 'get_worker', return_value=None):
+                        with patch.object(swarm.State, 'add_worker') as mock_add:
+                            with patch('subprocess.run') as mock_run:  # Catch worktree remove
+                                with patch('builtins.print') as mock_print:
+                                    with self.assertRaises(SystemExit) as ctx:
+                                        swarm.cmd_ralph_spawn(args)
+
+        # Verify exit code
+        self.assertEqual(ctx.exception.code, 1)
+
+        # Verify worktree creation was attempted
+        self.assertTrue(len(worktree_created) > 0)
+
+        # Verify warning message about cleanup
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('spawn failed, cleaning up' in call for call in all_calls))
+
+        # Verify error message about tmux
+        self.assertTrue(any('tmux' in call.lower() for call in all_calls))
+
+        # Verify worker was NOT added to state
+        mock_add.assert_not_called()
+
+    def test_rollback_on_state_failure_after_tmux(self):
+        """Test rollback removes tmux window and worktree if state update fails.
+
+        If state.add_worker() fails, we should clean up:
+        - The tmux window that was created
+        - The worktree if it was created
+        """
+        args = Namespace(
+            ralph_command='spawn',
+            name='state-fail-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,  # No worktree for this test
+            session='test-session',
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'hi']
+        )
+
+        tmux_killed = []
+
+        def mock_add_worker(worker):
+            raise Exception("State file locked")
+
+        def mock_subprocess_run(cmd, *args, **kwargs):
+            if 'kill-window' in cmd:
+                tmux_killed.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='test-session'):
+                with patch.object(swarm.State, 'get_worker', return_value=None):
+                    with patch.object(swarm.State, 'add_worker', side_effect=mock_add_worker):
+                        with patch('subprocess.run', side_effect=mock_subprocess_run):
+                            with patch('builtins.print') as mock_print:
+                                with self.assertRaises(SystemExit) as ctx:
+                                    swarm.cmd_ralph_spawn(args)
+
+        # Verify exit code
+        self.assertEqual(ctx.exception.code, 1)
+
+        # Verify cleanup warning
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('spawn failed, cleaning up' in call for call in all_calls))
+
+        # Verify tmux window was killed during rollback
+        self.assertTrue(len(tmux_killed) > 0)
+        self.assertTrue(any('kill-window' in str(cmd) for cmd in tmux_killed))
+
+    def test_rollback_on_ralph_state_failure(self):
+        """Test rollback on ralph state creation failure.
+
+        If save_ralph_state() fails after worker is added, we should:
+        - Remove worker from state
+        - Kill tmux window
+        """
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-state-fail-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session='test-session',
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'hi']
+        )
+
+        def mock_save_ralph_state(state):
+            raise OSError("Cannot write ralph state")
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='test-session'):
+                with patch.object(swarm.State, 'get_worker', return_value=None):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch.object(swarm.State, 'remove_worker') as mock_remove:
+                            with patch('swarm.save_ralph_state', side_effect=mock_save_ralph_state):
+                                with patch('subprocess.run'):  # For tmux kill
+                                    with patch('builtins.print') as mock_print:
+                                        with self.assertRaises(SystemExit) as ctx:
+                                            swarm.cmd_ralph_spawn(args)
+
+        # Verify exit code
+        self.assertEqual(ctx.exception.code, 1)
+
+        # Verify cleanup warning
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('spawn failed, cleaning up' in call for call in all_calls))
+
+        # Verify worker was removed during rollback
+        mock_remove.assert_called_once_with('ralph-state-fail-worker')
+
+    def test_no_rollback_on_validation_failure(self):
+        """Test no rollback needed when validation fails (before resource creation)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='validation-fail-worker',
+            prompt_file='missing-file.md',  # File doesn't exist
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'hi']
+        )
+
+        with patch('swarm.create_worktree') as mock_worktree:
+            with patch('swarm.create_tmux_window') as mock_tmux:
+                with patch('builtins.print') as mock_print:
+                    with self.assertRaises(SystemExit) as ctx:
+                        swarm.cmd_ralph_spawn(args)
+
+        # Verify exit code
+        self.assertEqual(ctx.exception.code, 1)
+
+        # Verify no resources were created
+        mock_worktree.assert_not_called()
+        mock_tmux.assert_not_called()
+
+        # Verify NO cleanup warning (nothing to clean up)
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertFalse(any('spawn failed, cleaning up' in call for call in all_calls))
+
+    def test_rollback_helper_function_exists(self):
+        """Test _rollback_ralph_spawn helper function exists."""
+        self.assertTrue(hasattr(swarm, '_rollback_ralph_spawn'))
+        self.assertTrue(callable(swarm._rollback_ralph_spawn))
+
+    def test_rollback_helper_handles_none_gracefully(self):
+        """Test _rollback_ralph_spawn handles None parameters without errors."""
+        # Should not raise any exceptions
+        with patch('builtins.print'):  # Suppress any warnings
+            swarm._rollback_ralph_spawn(
+                worktree_path=None,
+                tmux_info=None,
+                worker_name=None,
+                state=None,
+                ralph_state_created=False,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

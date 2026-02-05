@@ -77,7 +77,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Kill ralph worker with `--rm-worktree`, verify ralph state directory removed
   - File: `swarm.py` (cmd_kill function)
 
-- [ ] **2.2 Fix: Transactional ralph spawn (B2)**
+- [x] **2.2 Fix: Transactional ralph spawn (B2)**
   - Wrap ralph spawn in try/except with rollback
   - If ralph state creation fails, remove worker from state
   - If tmux window creation fails, remove worktree
