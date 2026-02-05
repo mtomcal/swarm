@@ -783,6 +783,146 @@ These changes would provide defense in depth but are not critical since no actua
 
 ---
 
+## 18. Tmux Session Cleanup Review (Task 7.4)
+
+Comprehensive review of tmux session cleanup in integration tests to ensure no orphaned sessions accumulate.
+
+### 1. TmuxIsolatedTestCase Cleanup Analysis
+
+The `TmuxIsolatedTestCase` class (tests/test_tmux_isolation.py) provides the base tmux isolation:
+
+**Mechanism:**
+- Each test gets a unique socket: `swarm-test-{uuid}` (8 hex chars)
+- tearDown() calls `tmux -L <socket> kill-server`
+- This kills all sessions on that socket, ensuring complete cleanup
+
+**Improvements Made (Task 7.4):**
+
+1. **Added timeout to tearDown cleanup** (line 66-79):
+   ```python
+   try:
+       subprocess.run(["tmux", "-L", socket, "kill-server"], timeout=10)
+   except subprocess.TimeoutExpired:
+       subprocess.run(["pkill", "-f", f"tmux.*-L.*{socket}"], timeout=5)
+   ```
+
+2. **Added timeout to tmux_cmd helper** (line 82-99):
+   - Default 30-second timeout prevents hanging tests
+
+3. **Added timeout to run_swarm helper** (line 295):
+   - Default 30-second timeout for all swarm commands
+
+4. **Added active socket tracking** (class attribute `_active_sockets`):
+   - Tracks which sockets are in use across test instances
+   - Enables leak detection during test runs
+
+5. **Added verify_tmux_cleanup method** (line 102-112):
+   - Tests can verify cleanup succeeded
+   - Returns True if no sessions remain on the socket
+
+### 2. Orphaned Session Cleanup Utilities
+
+Added new utility functions for detecting and cleaning orphaned sessions:
+
+| Function | Purpose |
+|----------|---------|
+| `list_orphaned_test_sessions()` | Lists tmux sockets matching `swarm-test-*` pattern |
+| `cleanup_orphaned_test_sessions()` | Kills orphaned test sessions, returns (count, names) |
+| `count_tmux_sessions(socket)` | Counts sessions on a specific socket |
+
+**Usage for manual cleanup:**
+```python
+from tests.test_tmux_isolation import cleanup_orphaned_test_sessions
+
+count, names = cleanup_orphaned_test_sessions()
+print(f"Cleaned up {count} orphaned sessions: {names}")
+```
+
+### 3. Orphaned Session Risk Analysis
+
+**How orphaned sessions can occur:**
+1. Test process killed by user (Ctrl+C)
+2. Test process killed by OOM
+3. Test timeout (if using `timeout` command wrapper)
+4. Machine reboot/crash during tests (sessions persist in tmux server)
+5. Test exception before tearDown completes
+
+**Mitigations in place:**
+1. Each test uses unique socket - orphaned sessions don't affect new tests
+2. tearDown has fallback pkill if kill-server times out
+3. cleanup_orphaned_test_sessions() can be run manually or in CI setup
+
+### 4. Integration Test Cleanup Patterns
+
+Both integration test files have additional cleanup in tearDown:
+
+**test_integration_ralph.py:**
+```python
+def tearDown(self):
+    # Kill swarm workers
+    for w in self.get_workers():
+        self.run_swarm('kill', w['name'])
+    self.run_swarm('clean', '--all')
+
+    # Clean ralph state directories
+    ralph_dir = Path.home() / ".swarm" / "ralph"
+    # Remove test-specific subdirectories
+
+    super().tearDown()  # Kills tmux server
+```
+
+**test_integration_workflow.py:**
+```python
+def tearDown(self):
+    # Clean workflow state directories
+    workflows_dir = Path.home() / ".swarm" / "workflows"
+    # Remove test-specific subdirectories
+
+    # Kill swarm workers
+    for w in self.get_workers():
+        self.run_swarm('kill', w['name'])
+
+    super().tearDown()  # Kills tmux server
+```
+
+**Finding:** Both use proper cleanup patterns with exception handling.
+
+### 5. Potential Remaining Risks
+
+| Risk | Severity | Status |
+|------|----------|--------|
+| Test crash before tearDown | Low | Mitigated by socket uniqueness |
+| ~/.swarm state file accumulation | Medium | Uses socket-based worker name prefixes |
+| tmux socket file left behind | Low | OS cleans /tmp on reboot |
+| Memory from orphaned tmux servers | Low | Each server is isolated |
+
+### 6. Recommendations
+
+1. **For CI/CD:**
+   ```bash
+   # Run at start of test job
+   python3 -c "from tests.test_tmux_isolation import cleanup_orphaned_test_sessions; print(cleanup_orphaned_test_sessions())"
+   ```
+
+2. **For local development:**
+   - Run `tmux ls` after tests to check for unexpected sessions
+   - Use `cleanup_orphaned_test_sessions()` if tests crash
+
+3. **For comprehensive verification:**
+   - Add session count checks to test setup/teardown
+   - The new `verify_tmux_cleanup()` method enables this
+
+### 7. Tests Added for Cleanup Utilities
+
+New test classes added in test_tmux_isolation.py:
+
+- `TestTmuxCleanupUtilities`: Tests the orphaned session detection/cleanup functions
+- `TestActiveSocketTracking`: Tests the socket tracking mechanism
+
+All tests pass.
+
+---
+
 ## Test Coverage Notes
 
 Current coverage is 94% (up from 84%). The patterns identified in this audit are primarily about test quality rather than coverage gaps.

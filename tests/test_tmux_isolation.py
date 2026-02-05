@@ -8,6 +8,7 @@ parallel test execution.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +16,100 @@ import time
 import unittest
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+
+def list_orphaned_test_sessions() -> List[str]:
+    """List tmux sessions that appear to be orphaned from previous test runs.
+
+    This function searches for tmux sockets matching the pattern 'swarm-test-*'
+    that may have been left behind by tests that crashed before cleanup.
+
+    Returns:
+        List of socket names that appear to be orphaned test sessions.
+
+    Note:
+        This function scans the default tmux socket directory. On most systems
+        this is /tmp/tmux-{uid}/ or similar.
+    """
+    orphaned = []
+
+    # Try to find tmux socket directory
+    # Common locations: /tmp/tmux-{uid}, /var/run/tmux/tmux-{uid}, etc.
+    uid = os.getuid()
+    possible_dirs = [
+        Path(f"/tmp/tmux-{uid}"),
+        Path(f"/var/run/tmux/tmux-{uid}"),
+        Path(f"/run/tmux/tmux-{uid}"),
+    ]
+
+    # Also check TMUX_TMPDIR if set
+    tmux_tmpdir = os.environ.get('TMUX_TMPDIR')
+    if tmux_tmpdir:
+        possible_dirs.insert(0, Path(tmux_tmpdir) / f"tmux-{uid}")
+
+    for socket_dir in possible_dirs:
+        if socket_dir.exists() and socket_dir.is_dir():
+            for socket_file in socket_dir.iterdir():
+                if socket_file.name.startswith('swarm-test-'):
+                    orphaned.append(socket_file.name)
+
+    return orphaned
+
+
+def cleanup_orphaned_test_sessions() -> Tuple[int, List[str]]:
+    """Clean up orphaned tmux sessions from previous test runs.
+
+    This function finds and kills any tmux sessions that appear to be left
+    behind from tests that did not clean up properly.
+
+    Returns:
+        Tuple of (number cleaned, list of socket names that were cleaned)
+
+    Example:
+        >>> count, names = cleanup_orphaned_test_sessions()
+        >>> print(f"Cleaned up {count} orphaned sessions: {names}")
+    """
+    orphaned = list_orphaned_test_sessions()
+    cleaned = []
+
+    for socket_name in orphaned:
+        try:
+            result = subprocess.run(
+                ["tmux", "-L", socket_name, "kill-server"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                cleaned.append(socket_name)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass  # Best effort cleanup
+
+    return len(cleaned), cleaned
+
+
+def count_tmux_sessions(socket: Optional[str] = None) -> int:
+    """Count tmux sessions on a given socket (or default socket).
+
+    Args:
+        socket: Optional socket name. If None, uses the default tmux socket.
+
+    Returns:
+        Number of sessions, or 0 if tmux server is not running.
+    """
+    cmd = ["tmux"]
+    if socket:
+        cmd.extend(["-L", socket])
+    cmd.extend(["list-sessions", "-F", "#{session_name}"])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return 0
+        sessions = [s for s in result.stdout.strip().split('\n') if s]
+        return len(sessions)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return 0
 
 
 class TmuxIsolatedTestCase(unittest.TestCase):
@@ -27,27 +121,64 @@ class TmuxIsolatedTestCase(unittest.TestCase):
 
     Attributes:
         tmux_socket: Unique socket name for this test's tmux server
+
+    Class Attributes:
+        _active_sockets: Set of socket names currently in use by tests (for leak detection)
     """
+
+    # Track active sockets across all test instances for leak detection
+    _active_sockets: set = set()
 
     def setUp(self):
         """Create unique tmux socket for this test."""
         super().setUp()
         self.tmux_socket = f"swarm-test-{uuid.uuid4().hex[:8]}"
+        # Track this socket as active
+        TmuxIsolatedTestCase._active_sockets.add(self.tmux_socket)
 
     def tearDown(self):
         """Kill isolated tmux server and clean up."""
         # Kill entire tmux server for this socket
-        subprocess.run(
-            ["tmux", "-L", self.tmux_socket, "kill-server"],
-            capture_output=True
-        )
+        # Use timeout to prevent hanging if tmux is unresponsive
+        try:
+            subprocess.run(
+                ["tmux", "-L", self.tmux_socket, "kill-server"],
+                capture_output=True,
+                timeout=10
+            )
+        except subprocess.TimeoutExpired:
+            # If kill-server times out, try to kill any remaining sessions individually
+            try:
+                subprocess.run(
+                    ["pkill", "-f", f"tmux.*-L.*{self.tmux_socket}"],
+                    capture_output=True,
+                    timeout=5
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass  # Best effort cleanup
+
+        # Remove this socket from active tracking
+        TmuxIsolatedTestCase._active_sockets.discard(self.tmux_socket)
         super().tearDown()
 
-    def tmux_cmd(self, *args) -> subprocess.CompletedProcess:
+    def verify_tmux_cleanup(self) -> bool:
+        """Verify that this test's tmux server was properly cleaned up.
+
+        Returns:
+            True if no sessions remain on this socket, False otherwise.
+
+        Note:
+            This method can be called in tearDown to verify cleanup succeeded,
+            or from test assertions to check cleanup behavior.
+        """
+        return count_tmux_sessions(self.tmux_socket) == 0
+
+    def tmux_cmd(self, *args, timeout: int = 30) -> subprocess.CompletedProcess:
         """Run tmux command with isolated socket.
 
         Args:
             *args: Arguments to pass to tmux command
+            timeout: Maximum time in seconds to wait for command (default: 30)
 
         Returns:
             CompletedProcess with stdout/stderr captured as text
@@ -58,7 +189,8 @@ class TmuxIsolatedTestCase(unittest.TestCase):
         return subprocess.run(
             ["tmux", "-L", self.tmux_socket] + list(args),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=timeout
         )
 
     def list_sessions(self) -> List[str]:
@@ -181,6 +313,9 @@ class TmuxIsolatedTestCase(unittest.TestCase):
             kwargs["capture_output"] = True
         if "text" not in kwargs:
             kwargs["text"] = True
+        # Default timeout of 30 seconds to prevent hanging tests
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = 30
 
         return subprocess.run(cmd, **kwargs)
 
@@ -1315,6 +1450,100 @@ class TestStatusRefreshAccuracy(TmuxIsolatedTestCase):
                 f"but got '{actual_status}'. This indicates refresh_worker_status() did not "
                 f"correctly detect the worker's actual state. Full worker: {workers_map[worker_id]!r}"
             )
+
+
+class TestTmuxCleanupUtilities(unittest.TestCase):
+    """Test the tmux cleanup utility functions.
+
+    These tests verify that the cleanup utilities for detecting and removing
+    orphaned tmux sessions work correctly.
+    """
+
+    def test_list_orphaned_test_sessions_returns_list(self):
+        """Verify list_orphaned_test_sessions returns a list."""
+        result = list_orphaned_test_sessions()
+        self.assertIsInstance(
+            result,
+            list,
+            f"Expected list_orphaned_test_sessions to return a list, got: {type(result)}"
+        )
+
+    def test_cleanup_orphaned_test_sessions_returns_tuple(self):
+        """Verify cleanup_orphaned_test_sessions returns correct tuple format."""
+        count, names = cleanup_orphaned_test_sessions()
+        self.assertIsInstance(
+            count,
+            int,
+            f"Expected count to be int, got: {type(count)}"
+        )
+        self.assertIsInstance(
+            names,
+            list,
+            f"Expected names to be list, got: {type(names)}"
+        )
+        self.assertEqual(
+            count,
+            len(names),
+            f"Expected count ({count}) to equal len(names) ({len(names)})"
+        )
+
+    def test_count_tmux_sessions_returns_int(self):
+        """Verify count_tmux_sessions returns an integer."""
+        result = count_tmux_sessions()
+        self.assertIsInstance(
+            result,
+            int,
+            f"Expected count_tmux_sessions to return int, got: {type(result)}"
+        )
+        self.assertGreaterEqual(
+            result,
+            0,
+            f"Expected non-negative count, got: {result}"
+        )
+
+    def test_count_tmux_sessions_nonexistent_socket(self):
+        """Verify count_tmux_sessions returns 0 for non-existent socket."""
+        result = count_tmux_sessions(socket="nonexistent-socket-12345")
+        self.assertEqual(
+            result,
+            0,
+            f"Expected 0 sessions for non-existent socket, got: {result}"
+        )
+
+
+class TestActiveSocketTracking(TmuxIsolatedTestCase):
+    """Test that the active socket tracking mechanism works correctly."""
+
+    @skip_if_no_tmux
+    def test_socket_added_to_active_set_on_setup(self):
+        """Verify socket is tracked in _active_sockets after setUp."""
+        self.assertIn(
+            self.tmux_socket,
+            TmuxIsolatedTestCase._active_sockets,
+            f"Expected socket '{self.tmux_socket}' to be in _active_sockets"
+        )
+
+    @skip_if_no_tmux
+    def test_verify_tmux_cleanup_works_after_no_sessions(self):
+        """Verify verify_tmux_cleanup returns True when no sessions exist."""
+        # No sessions created yet - should be clean
+        self.assertTrue(
+            self.verify_tmux_cleanup(),
+            "Expected verify_tmux_cleanup to return True when no sessions exist"
+        )
+
+    @skip_if_no_tmux
+    def test_verify_tmux_cleanup_detects_active_sessions(self):
+        """Verify verify_tmux_cleanup returns False when sessions exist."""
+        # Create a session
+        result = self.tmux_cmd("new-session", "-d", "-s", "test-active")
+        self.assertEqual(result.returncode, 0)
+
+        # Should detect active session
+        self.assertFalse(
+            self.verify_tmux_cleanup(),
+            "Expected verify_tmux_cleanup to return False when sessions exist"
+        )
 
 
 if __name__ == "__main__":

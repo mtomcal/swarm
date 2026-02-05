@@ -437,11 +437,21 @@ The test suite has caused memory exhaustion events that crash the system. This p
   - **FINDING**: Some subprocess.run calls lack timeout (low risk - commands are fast)
   - Results documented in TEST_AUDIT.md Section 17
 
-- [ ] **7.4 Review tmux session cleanup**
+- [x] **7.4 Review tmux session cleanup**
   - Check if tmux sessions are properly killed after tests
   - Look for orphaned tmux sessions from failed tests
   - Verify `TmuxIsolatedTestCase` cleanup is robust
   - Add tmux session listing before/after test runs to detect leaks
+  - **DONE**: Added timeout to tearDown kill-server (10s) with pkill fallback (5s)
+  - **DONE**: Added timeout to tmux_cmd helper (default 30s)
+  - **DONE**: Added timeout to run_swarm helper (default 30s)
+  - **DONE**: Added `list_orphaned_test_sessions()` utility function
+  - **DONE**: Added `cleanup_orphaned_test_sessions()` utility function
+  - **DONE**: Added `count_tmux_sessions(socket)` utility function
+  - **DONE**: Added `_active_sockets` tracking for leak detection
+  - **DONE**: Added `verify_tmux_cleanup()` method to TmuxIsolatedTestCase
+  - **DONE**: Added TestTmuxCleanupUtilities and TestActiveSocketTracking test classes
+  - **DONE**: Documented findings in TEST_AUDIT.md Section 18
 
 - [ ] **7.5 Check for large string/buffer accumulation**
   - Review tests that capture stdout/stderr (could accumulate large outputs)
