@@ -107,7 +107,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Kill monitor process while worker runs, verify status reflects reality
   - File: `swarm.py` (_run_ralph_loop, detect_inactivity)
 
-- [ ] **2.6 Fix: `--tmux` flag as no-op (B6)**
+- [x] **2.6 Fix: `--tmux` flag as no-op (B6)**
   - Add `--tmux` argument to ralph spawn parser (store_true, no effect)
   - Print informational message: "Note: Ralph workers always use tmux"
   - Test: Run `swarm ralph spawn --tmux ...`, verify no error

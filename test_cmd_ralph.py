@@ -813,6 +813,18 @@ class TestRalphSpawnArguments(unittest.TestCase):
         self.assertNotIn('--inactivity-timeout', result.stdout)
         self.assertNotIn('--done-pattern', result.stdout)
 
+    def test_tmux_flag_exists_in_ralph_spawn(self):
+        """Test that --tmux flag is accepted by ralph spawn (B6)."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--tmux', result.stdout)
+        # Should indicate it's for consistency/no-op
+        self.assertIn('consistency', result.stdout.lower())
+
 
 class TestRalphSpawnValidation(unittest.TestCase):
     """Test ralph spawn validation logic."""
@@ -966,6 +978,78 @@ class TestRalphSpawnValidation(unittest.TestCase):
         # Check warning was printed
         all_calls = [str(call) for call in mock_print.call_args_list]
         self.assertTrue(any('high iteration count' in call for call in all_calls))
+
+    def test_ralph_spawn_tmux_flag_shows_note(self):
+        """Test ralph spawn with --tmux flag shows informational note (B6)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='test-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            tmux=True,  # The --tmux flag
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_ralph_spawn(args)
+
+        # Check note was printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('Ralph workers always use tmux' in call for call in all_calls))
+
+    def test_ralph_spawn_no_tmux_flag_no_note(self):
+        """Test ralph spawn without --tmux flag doesn't show the note."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='test-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            tmux=False,  # No --tmux flag
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Mock State and other functions to prevent actual spawning
+        with patch.object(swarm.State, 'get_worker', return_value=None):
+            with patch.object(swarm.State, 'add_worker'):
+                with patch('swarm.create_tmux_window'):
+                    with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                        with patch('swarm.send_prompt_to_worker'):
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_ralph_spawn(args)
+
+        # Check note was NOT printed
+        all_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertFalse(any('Ralph workers always use tmux' in call for call in all_calls))
 
     def test_ralph_spawn_uses_tmux(self):
         """Test ralph spawn always uses tmux."""

@@ -4800,6 +4800,8 @@ def main() -> None:
                                help='Stop heartbeat after this duration (e.g., "24h"). Default: no expiration')
     ralph_spawn_p.add_argument("--heartbeat-message", default="continue",
                                help='Message to send on each heartbeat. Default: "continue"')
+    ralph_spawn_p.add_argument("--tmux", action="store_true",
+                               help="Accepted for consistency with spawn (ralph always uses tmux)")
     ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                                help="Command to run (after --)")
 
@@ -6178,6 +6180,10 @@ def cmd_ralph_spawn(args) -> None:
     # Warn for high iteration count
     if args.max_iterations > 50:
         print("swarm: warning: high iteration count (>50) may consume significant resources", file=sys.stderr)
+
+    # Note about --tmux flag (it's a no-op for ralph, but accepted for consistency)
+    if getattr(args, 'tmux', False):
+        print("swarm: note: Ralph workers always use tmux (--tmux flag has no effect)", file=sys.stderr)
 
     # Load state and check for duplicate name
     state = State()
