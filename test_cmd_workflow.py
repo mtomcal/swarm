@@ -7943,5 +7943,594 @@ class TestWorkflowResumeAllSubcommand(unittest.TestCase):
         self.assertIn("--background", swarm.WORKFLOW_RESUME_ALL_HELP_EPILOG)
 
 
+class TestCmdWorkflowLogsErrorPaths(unittest.TestCase):
+    """Test error paths in cmd_workflow_logs function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_logs_dir = swarm.LOGS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.LOGS_DIR = swarm.SWARM_DIR / "logs"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.LOGS_DIR = self.original_logs_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_state(self, name, **kwargs):
+        """Create a workflow state and save it."""
+        defaults = {
+            "name": name,
+            "status": "running",
+            "current_stage": "plan",
+            "current_stage_index": 0,
+            "created_at": "2026-02-04T10:00:00+00:00",
+            "started_at": "2026-02-04T10:00:00+00:00",
+            "scheduled_for": None,
+            "completed_at": None,
+            "stages": {
+                "plan": swarm.StageState(
+                    status="completed",
+                    started_at="2026-02-04T10:00:00+00:00",
+                    completed_at="2026-02-04T10:30:00+00:00",
+                    worker_name=f"{name}-plan",
+                    attempts=1,
+                    exit_reason="done_pattern",
+                ),
+                "build": swarm.StageState(
+                    status="running",
+                    started_at="2026-02-04T10:30:00+00:00",
+                    worker_name=f"{name}-build",
+                    attempts=1,
+                ),
+            },
+            "workflow_file": "/path/to/workflow.yaml",
+            "workflow_hash": "abc123",
+        }
+        defaults.update(kwargs)
+        workflow_state = swarm.WorkflowState(**defaults)
+        swarm.save_workflow_state(workflow_state)
+        return workflow_state
+
+    def test_logs_tmux_capture_exception(self):
+        """Test error handling when tmux_capture_pane raises exception."""
+        self._create_workflow_state("test-workflow")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Create a mock tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = MagicMock()
+        mock_worker.tmux.session = "swarm"
+        mock_worker.tmux.window = "build"
+        mock_worker.tmux.socket = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                # Make tmux_capture_pane raise an exception
+                with patch.object(swarm, 'tmux_capture_pane', side_effect=Exception("tmux error")):
+                    swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("error capturing tmux pane", output)
+        self.assertIn("tmux error", output)
+
+    def test_logs_non_tmux_log_file_read_error(self):
+        """Test error handling when log file read raises exception."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a log file for the worker (it will exist)
+        log_path = swarm.LOGS_DIR / "test-workflow-build.stdout.log"
+        log_path.write_text("Some log content\n")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Create a mock non-tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                # Make read_text raise an exception
+                with patch.object(Path, 'read_text', side_effect=IOError("Permission denied")):
+                    swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("error reading log file", output)
+
+    def test_logs_non_tmux_no_log_file(self):
+        """Test handling when log file does not exist for non-tmux worker."""
+        self._create_workflow_state("test-workflow")
+
+        # Don't create a log file - let it not exist
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=1000
+        )
+
+        # Create a mock non-tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        self.assertIn("no log file found at", output)
+
+    def test_logs_non_tmux_with_line_limit(self):
+        """Test that log file reading respects line limit."""
+        self._create_workflow_state("test-workflow")
+
+        # Create a log file with multiple lines
+        log_path = swarm.LOGS_DIR / "test-workflow-build.stdout.log"
+        log_path.write_text("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n")
+
+        args = Namespace(
+            name="test-workflow",
+            stage="build",
+            follow=False,
+            lines=3  # Only last 3 lines
+        )
+
+        # Create a mock non-tmux worker
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-build"
+        mock_worker.tmux = None
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                swarm.cmd_workflow_logs(args)
+
+        output = captured.getvalue()
+        # Should contain last 3 lines (but last line is empty after split)
+        self.assertIn("Line 4", output)
+        self.assertIn("Line 5", output)
+
+
+class TestCmdWorkflowRunErrorPaths(unittest.TestCase):
+    """Test error paths in cmd_workflow_run function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_logs_dir = swarm.LOGS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.LOGS_DIR = swarm.SWARM_DIR / "logs"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.LOGS_DIR = self.original_logs_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_run_file_ioerror(self):
+        """Test handling of IOError when reading workflow file."""
+        # Create a workflow file that exists but will fail to read
+        yaml_path = Path(self.temp_dir) / "workflow.yaml"
+        yaml_path.write_text("name: test\nstages: []")
+
+        args = Namespace(
+            file=str(yaml_path),
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+
+        # Mock resolve_workflow_file to return the path
+        # Mock open to raise IOError
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            with patch.object(swarm, 'resolve_workflow_file', return_value=yaml_path):
+                with patch('builtins.open', side_effect=IOError("Permission denied")):
+                    with self.assertRaises(SystemExit) as ctx:
+                        swarm.cmd_workflow_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("cannot read workflow file", captured.getvalue())
+
+    def test_run_parse_file_not_found_error(self):
+        """Test handling of FileNotFoundError from parse_workflow_yaml."""
+        yaml_path = Path(self.temp_dir) / "workflow.yaml"
+        yaml_path.write_text("name: test\nstages: []")
+
+        args = Namespace(
+            file=str(yaml_path),
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            with patch.object(swarm, 'resolve_workflow_file', return_value=yaml_path):
+                with patch.object(swarm, 'parse_workflow_yaml', side_effect=FileNotFoundError("Missing file")):
+                    with self.assertRaises(SystemExit) as ctx:
+                        swarm.cmd_workflow_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Missing file", captured.getvalue())
+
+    def test_run_parse_validation_error(self):
+        """Test handling of WorkflowValidationError from parse_workflow_yaml."""
+        yaml_path = Path(self.temp_dir) / "workflow.yaml"
+        yaml_path.write_text("name: test\nstages: []")
+
+        args = Namespace(
+            file=str(yaml_path),
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            with patch.object(swarm, 'resolve_workflow_file', return_value=yaml_path):
+                with patch.object(swarm, 'parse_workflow_yaml', side_effect=swarm.WorkflowValidationError("Invalid stages")):
+                    with self.assertRaises(SystemExit) as ctx:
+                        swarm.cmd_workflow_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Invalid stages", captured.getvalue())
+
+    def test_run_force_cleans_up_existing_workers(self):
+        """Test that --force cleans up workers from existing workflow."""
+        yaml_path = Path(self.temp_dir) / "workflow.yaml"
+        yaml_content = """name: test-workflow
+stages:
+  - name: stage1
+    type: worker
+    prompt: "test"
+    done-pattern: "/done"
+"""
+        yaml_path.write_text(yaml_content)
+
+        # Create existing workflow state with a worker
+        existing_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="completed",
+            current_stage=None,
+            created_at="2026-02-04T10:00:00+00:00",
+            stages={
+                "stage1": swarm.StageState(
+                    status="completed",
+                    worker_name="test-workflow-stage1"
+                )
+            }
+        )
+        swarm.save_workflow_state(existing_state)
+
+        args = Namespace(
+            file=str(yaml_path),
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=True
+        )
+
+        # Create a mock worker to be cleaned up
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-stage1"
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state.remove_worker = MagicMock()
+
+        # Mock functions to avoid actually running the workflow
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch.object(swarm, 'run_workflow_monitor'):
+                with patch.object(swarm, 'spawn_workflow_stage') as mock_spawn:
+                    mock_spawn.return_value = MagicMock(
+                        name="test-workflow-stage1",
+                        tmux=MagicMock(session="swarm", window="stage1")
+                    )
+                    swarm.cmd_workflow_run(args)
+
+        # Verify remove_worker was called for the old worker
+        mock_state.remove_worker.assert_called_once_with("test-workflow-stage1")
+
+    def test_run_spawn_stage_fails(self):
+        """Test handling when spawn_workflow_stage raises RuntimeError."""
+        yaml_path = Path(self.temp_dir) / "workflow.yaml"
+        yaml_content = """name: test-workflow
+stages:
+  - name: stage1
+    type: worker
+    prompt: "test"
+    done-pattern: "/done"
+"""
+        yaml_path.write_text(yaml_content)
+
+        args = Namespace(
+            file=str(yaml_path),
+            at_time=None,
+            in_delay=None,
+            name=None,
+            force=False
+        )
+
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            with patch.object(swarm, 'spawn_workflow_stage', side_effect=RuntimeError("Failed to spawn")):
+                with self.assertRaises(SystemExit) as ctx:
+                    swarm.cmd_workflow_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("failed to spawn stage worker", captured.getvalue())
+
+        # Verify workflow state was updated to failed
+        workflow_state = swarm.load_workflow_state("test-workflow")
+        self.assertEqual(workflow_state.status, "failed")
+        self.assertEqual(workflow_state.stages["stage1"].status, "failed")
+        self.assertEqual(workflow_state.stages["stage1"].exit_reason, "error")
+
+
+class TestResumeWorkflowFunctions(unittest.TestCase):
+    """Test _resume_workflow_foreground and _resume_workflow_in_background functions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_workflows_dir = swarm.WORKFLOWS_DIR
+        self.original_logs_dir = swarm.LOGS_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.WORKFLOWS_DIR = swarm.SWARM_DIR / "workflows"
+        swarm.LOGS_DIR = swarm.SWARM_DIR / "logs"
+        swarm.WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.WORKFLOWS_DIR = self.original_workflows_dir
+        swarm.LOGS_DIR = self.original_logs_dir
+        swarm.WORKFLOW_LOCK_FILE = swarm.SWARM_DIR / "workflow.lock"
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _create_workflow_def(self):
+        """Create a test workflow definition."""
+        return swarm.WorkflowDefinition(
+            name="test-workflow",
+            stages=[
+                swarm.StageDefinition(
+                    name="stage1",
+                    type="worker",
+                    prompt="test prompt",
+                    done_pattern="/done"
+                )
+            ]
+        )
+
+    def test_resume_foreground_scheduled_workflow(self):
+        """Test resuming a scheduled workflow in foreground."""
+        workflow_def = self._create_workflow_def()
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="scheduled",
+            scheduled_for="2026-02-05T02:00:00+00:00",
+            created_at="2026-02-04T10:00:00+00:00",
+            stages={
+                "stage1": swarm.StageState(status="pending")
+            }
+        )
+        swarm.save_workflow_state(workflow_state)
+        workflow_dir = Path(self.temp_dir)
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                swarm._resume_workflow_foreground(
+                    workflow_name="test-workflow",
+                    workflow_state=workflow_state,
+                    workflow_def=workflow_def,
+                    workflow_dir=workflow_dir
+                )
+
+        self.assertIn("scheduled, resuming schedule wait", captured.getvalue())
+        mock_monitor.assert_called_once()
+
+    def test_resume_foreground_running_workflow_worker_still_running(self):
+        """Test resuming a running workflow where the worker is still running."""
+        workflow_def = self._create_workflow_def()
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="stage1",
+            current_stage_index=0,
+            created_at="2026-02-04T10:00:00+00:00",
+            started_at="2026-02-04T10:00:00+00:00",
+            stages={
+                "stage1": swarm.StageState(
+                    status="running",
+                    worker_name="test-workflow-stage1",
+                    attempts=1
+                )
+            }
+        )
+        swarm.save_workflow_state(workflow_state)
+        workflow_dir = Path(self.temp_dir)
+
+        # Mock worker as still running
+        mock_worker = MagicMock()
+        mock_worker.name = "test-workflow-stage1"
+        mock_worker.status = "running"
+
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch.object(swarm, 'refresh_worker_status', return_value="running"):
+                    with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                        swarm._resume_workflow_foreground(
+                            workflow_name="test-workflow",
+                            workflow_state=workflow_state,
+                            workflow_def=workflow_def,
+                            workflow_dir=workflow_dir
+                        )
+
+        self.assertIn("still running, resuming monitoring", captured.getvalue())
+        mock_monitor.assert_called_once()
+
+    def test_resume_foreground_running_workflow_respawn_worker(self):
+        """Test resuming a running workflow where the worker needs to be respawned."""
+        workflow_def = self._create_workflow_def()
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="stage1",
+            current_stage_index=0,
+            created_at="2026-02-04T10:00:00+00:00",
+            started_at="2026-02-04T10:00:00+00:00",
+            stages={
+                "stage1": swarm.StageState(
+                    status="running",
+                    worker_name="test-workflow-stage1",
+                    attempts=1
+                )
+            }
+        )
+        swarm.save_workflow_state(workflow_state)
+        workflow_dir = Path(self.temp_dir)
+
+        # Mock worker as not found (needs respawn)
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        mock_spawned_worker = MagicMock()
+        mock_spawned_worker.name = "test-workflow-stage1"
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch.object(swarm, 'spawn_workflow_stage', return_value=mock_spawned_worker) as mock_spawn:
+                    with patch.object(swarm, 'run_workflow_monitor') as mock_monitor:
+                        swarm._resume_workflow_foreground(
+                            workflow_name="test-workflow",
+                            workflow_state=workflow_state,
+                            workflow_def=workflow_def,
+                            workflow_dir=workflow_dir
+                        )
+
+        self.assertIn("respawning stage", captured.getvalue())
+        mock_spawn.assert_called_once()
+        mock_monitor.assert_called_once()
+
+    def test_resume_background_running_workflow_respawn_worker(self):
+        """Test resuming a running workflow in background where worker needs respawn."""
+        workflow_def = self._create_workflow_def()
+        workflow_state = swarm.WorkflowState(
+            name="test-workflow",
+            status="running",
+            current_stage="stage1",
+            current_stage_index=0,
+            created_at="2026-02-04T10:00:00+00:00",
+            started_at="2026-02-04T10:00:00+00:00",
+            stages={
+                "stage1": swarm.StageState(
+                    status="running",
+                    worker_name="test-workflow-stage1",
+                    attempts=1
+                )
+            }
+        )
+        swarm.save_workflow_state(workflow_state)
+        workflow_dir = Path(self.temp_dir)
+
+        # Create the YAML copy that _resume_workflow_in_background expects
+        yaml_copy_path = swarm.get_workflow_yaml_copy_path("test-workflow")
+        yaml_copy_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_copy_path.write_text("""name: test-workflow
+stages:
+  - name: stage1
+    type: worker
+    prompt: "test"
+    done-pattern: "/done"
+""")
+
+        # Mock worker as not found (needs respawn)
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = None
+
+        mock_spawned_worker = MagicMock()
+        mock_spawned_worker.name = "test-workflow-stage1"
+
+        captured = io.StringIO()
+        with patch('sys.stdout', captured):
+            with patch.object(swarm, 'State', return_value=mock_state):
+                with patch.object(swarm, 'spawn_workflow_stage', return_value=mock_spawned_worker) as mock_spawn:
+                    with patch('subprocess.Popen') as mock_popen:
+                        mock_popen.return_value = MagicMock(pid=12345)
+                        swarm._resume_workflow_in_background(
+                            workflow_name="test-workflow",
+                            workflow_state=workflow_state,
+                            workflow_def=workflow_def,
+                            workflow_dir=workflow_dir
+                        )
+
+        # Worker should be respawned
+        mock_spawn.assert_called_once()
+        # Background process should be started
+        mock_popen.assert_called_once()
+        self.assertIn("Monitor PID: 12345", captured.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

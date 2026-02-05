@@ -359,7 +359,7 @@ Current coverage: 84% (513 lines missing). Target: 90%+
   - Add tests for workflow cancellation mid-stage
   - Test heartbeat expiration scenarios
 
-- [ ] **6.3 Add tests for uncovered utility functions**
+- [x] **6.3 Add tests for uncovered utility functions**
   - Lines 9031-9187: review and add tests for any untested helpers
   - Lines 9241-9282: add tests for edge cases
   - Ensure all public functions have test coverage
