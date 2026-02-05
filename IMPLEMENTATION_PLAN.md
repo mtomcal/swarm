@@ -99,7 +99,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Test: Complete ralph loop normally, verify reason shows correctly
   - File: `swarm.py` (RalphState, cmd_kill, _run_ralph_loop)
 
-- [ ] **2.5 Fix: Monitor disconnect handling (B5)**
+- [x] **2.5 Fix: Monitor disconnect handling (B5)**
   - Add worker-alive verification after `detect_inactivity()` returns
   - Distinguish "monitor stopped" from "worker stopped" in status
   - Log why monitor stopped

@@ -2404,6 +2404,213 @@ class TestCmdRalphStatus(unittest.TestCase):
         self.assertIn('avg', output)
         self.assertIn('remaining', output)
 
+    def test_status_shows_monitor_disconnected_with_worker_status(self):
+        """Test ralph status shows monitor_disconnected exit reason with worker status (B5)."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='stopped',
+            started='2024-01-15T10:30:00',
+            exit_reason='monitor_disconnected'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            with patch.object(swarm, 'refresh_worker_status', return_value='running'):
+                swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('monitor_disconnected', output)
+        self.assertIn('Worker status: running', output)
+
+
+class TestCheckMonitorDisconnect(unittest.TestCase):
+    """Test _check_monitor_disconnect function (B5)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_sets_monitor_disconnected_when_worker_still_running(self):
+        """Test _check_monitor_disconnect sets exit_reason when worker is still running (B5)."""
+        # Create worker that is still running
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state in running status with no exit_reason
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='running',
+            started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Mock refresh_worker_status to return 'running'
+        with patch.object(swarm, 'refresh_worker_status', return_value='running'):
+            with patch.object(swarm, 'log_ralph_iteration') as mock_log:
+                swarm._check_monitor_disconnect('ralph-worker')
+
+        # Verify ralph state was updated
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'stopped')
+        self.assertEqual(updated_state.exit_reason, 'monitor_disconnected')
+
+        # Verify log was called
+        mock_log.assert_called_once()
+        call_args = mock_log.call_args
+        self.assertEqual(call_args[0][1], 'DISCONNECT')
+        self.assertEqual(call_args[1]['reason'], 'monitor_disconnected')
+
+    def test_does_not_update_when_worker_stopped(self):
+        """Test _check_monitor_disconnect does not update state when worker is stopped (B5)."""
+        # Create worker that is stopped
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state in running status
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='running',
+            started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Mock refresh_worker_status to return 'stopped'
+        with patch.object(swarm, 'refresh_worker_status', return_value='stopped'):
+            swarm._check_monitor_disconnect('ralph-worker')
+
+        # Verify ralph state was NOT updated
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'running')  # Unchanged
+        self.assertIsNone(updated_state.exit_reason)  # No exit_reason set
+
+    def test_does_not_update_when_already_has_exit_reason(self):
+        """Test _check_monitor_disconnect does not update state when exit_reason already set (B5)."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state with exit_reason already set
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=10,
+            status='stopped',
+            started='2024-01-15T10:30:00',
+            exit_reason='max_iterations'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Even if worker is running, should not change exit_reason
+        with patch.object(swarm, 'refresh_worker_status', return_value='running'):
+            swarm._check_monitor_disconnect('ralph-worker')
+
+        # Verify ralph state was NOT changed
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.exit_reason, 'max_iterations')  # Unchanged
+
+    def test_does_not_update_when_ralph_state_not_found(self):
+        """Test _check_monitor_disconnect handles missing ralph state gracefully (B5)."""
+        # No ralph state created - should not raise an error
+        swarm._check_monitor_disconnect('nonexistent-worker')
+
+    def test_does_not_update_when_status_is_paused(self):
+        """Test _check_monitor_disconnect does not update state when status is paused (B5)."""
+        # Create worker that is running
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state in paused status (not 'running')
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=5,
+            status='paused',
+            started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Should not update because status is not 'running'
+        with patch.object(swarm, 'refresh_worker_status', return_value='running'):
+            swarm._check_monitor_disconnect('ralph-worker')
+
+        # Verify ralph state was NOT updated
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.status, 'paused')  # Unchanged
+        self.assertIsNone(updated_state.exit_reason)
+
 
 class TestCmdRalphPause(unittest.TestCase):
     """Test cmd_ralph_pause function."""

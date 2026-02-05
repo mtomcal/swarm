@@ -6503,9 +6503,15 @@ def cmd_ralph_status(args) -> None:
     if ralph_state.done_pattern:
         print(f"Done pattern: {ralph_state.done_pattern}")
 
-    # Show exit reason
+    # Show exit reason (B5: special handling for monitor_disconnected)
     if ralph_state.exit_reason:
-        print(f"Exit reason: {ralph_state.exit_reason}")
+        if ralph_state.exit_reason == "monitor_disconnected":
+            # Check current worker status to provide helpful context
+            worker_status = refresh_worker_status(worker) if worker else "unknown"
+            print(f"Exit reason: monitor_disconnected (worker {worker_status})")
+            print(f"Worker status: {worker_status}")
+        else:
+            print(f"Exit reason: {ralph_state.exit_reason}")
     elif ralph_state.status == "running":
         print(f"Exit reason: (none - still running)")
 
@@ -7055,7 +7061,75 @@ def _run_ralph_loop(args) -> None:
     session = original_tmux.session
     socket = original_tmux.socket
 
-    # Main ralph loop
+    # Main ralph loop - wrapped in try/finally to detect monitor disconnect (B5)
+    try:
+        _run_ralph_loop_inner(args, original_cmd, original_cwd, original_env, original_tags, session, socket, original_worktree)
+    finally:
+        # B5: Check for monitor disconnect - if we're exiting but worker is still running
+        _check_monitor_disconnect(args.name)
+
+
+def _check_monitor_disconnect(worker_name: str) -> None:
+    """Check if monitor is disconnecting while worker is still running (B5).
+
+    This is called when the ralph monitor loop exits for any reason.
+    If the worker is still running, we set exit_reason to monitor_disconnected
+    to help users understand what happened.
+
+    Args:
+        worker_name: Name of the worker to check
+    """
+    ralph_state = load_ralph_state(worker_name)
+    if not ralph_state:
+        return
+
+    # Only update if the ralph state indicates it should be running or is in an
+    # indeterminate state (no exit_reason yet, status is 'running')
+    if ralph_state.status == "running" and ralph_state.exit_reason is None:
+        # Check if worker is actually still running
+        state = State()
+        worker = state.get_worker(worker_name)
+        if worker and refresh_worker_status(worker) == "running":
+            # Worker is still running but monitor is exiting
+            ralph_state.status = "stopped"
+            ralph_state.exit_reason = "monitor_disconnected"
+            save_ralph_state(ralph_state)
+            log_ralph_iteration(
+                worker_name,
+                "DISCONNECT",
+                reason="monitor_disconnected",
+                worker_status="running"
+            )
+            print(f"[ralph] {worker_name}: monitor disconnected (worker still running)")
+
+
+def _run_ralph_loop_inner(
+    args,
+    original_cmd: list[str],
+    original_cwd: Path,
+    original_env: dict[str, str],
+    original_tags: list[str],
+    session: str,
+    socket: Optional[str],
+    original_worktree: Optional[WorktreeInfo]
+) -> None:
+    """Inner implementation of the ralph loop.
+
+    This function contains the actual loop logic, separated to allow
+    proper monitor disconnect detection in the outer function.
+
+    Args:
+        args: Namespace with name attribute
+        original_cmd: Original command to spawn
+        original_cwd: Original working directory
+        original_env: Original environment variables
+        original_tags: Original tags
+        session: Tmux session name
+        socket: Tmux socket path
+        original_worktree: Original worktree info
+    """
+    import re
+
     while True:
         # Reload ralph state (could have been paused externally)
         ralph_state = load_ralph_state(args.name)
