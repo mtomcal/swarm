@@ -398,6 +398,57 @@ Current coverage: 94% (181 lines missing). Target: 90%+ ✓
   - **DONE**: Added 41 tests in TestMainFunctionDispatch class in test_cmd_main.py
   - **DONE**: Coverage increased from 89% to 94%
 
+### Phase 7: Memory Exhaustion Investigation
+
+The test suite has caused memory exhaustion events that crash the system. This phase investigates and fixes the root causes.
+
+- [x] **7.1 Profile test suite memory usage**
+  - Run tests with memory profiling (`memory_profiler` or `tracemalloc`)
+  - Identify which test files/classes consume the most memory
+  - Check for memory growth patterns during test runs
+  - Document baseline memory usage per test file
+  - **DONE**: Created `profile_test_memory.py` script, profiled all 31 test files
+  - **DONE**: Added Section 15 to TEST_AUDIT.md with detailed findings
+  - **FINDING**: Memory usage is healthy (45 MB peak), no leaks detected
+
+- [ ] **7.2 Identify memory leak patterns in tests**
+  - Search for tests that create large data structures without cleanup
+  - Check for subprocess/Popen objects not being properly terminated
+  - Look for tmux sessions or processes left running between tests
+  - Check for file handles not being closed
+  - Review mock objects that might retain references
+
+- [ ] **7.3 Audit subprocess and process management**
+  - Review all `subprocess.Popen` usage in tests
+  - Ensure all spawned processes are terminated in tearDown
+  - Check for zombie processes accumulating
+  - Verify `proc.communicate()` is called to collect output and prevent pipe buffer issues
+  - Look for infinite loops or blocking reads on subprocess pipes
+
+- [ ] **7.4 Review tmux session cleanup**
+  - Check if tmux sessions are properly killed after tests
+  - Look for orphaned tmux sessions from failed tests
+  - Verify `TmuxIsolatedTestCase` cleanup is robust
+  - Add tmux session listing before/after test runs to detect leaks
+
+- [ ] **7.5 Check for large string/buffer accumulation**
+  - Review tests that capture stdout/stderr (could accumulate large outputs)
+  - Check for tests reading large files into memory
+  - Look for log file contents being loaded entirely into memory
+  - Review JSON parsing of potentially large state files
+
+- [ ] **7.6 Add memory safeguards to test infrastructure**
+  - Add memory limit warnings to test runner
+  - Implement test isolation to prevent cross-test memory accumulation
+  - Add periodic garbage collection between test classes
+  - Consider running memory-heavy tests in separate processes
+
+- [ ] **7.7 Fix identified memory issues**
+  - Apply fixes for all identified memory leaks
+  - Add cleanup code where missing
+  - Optimize memory-heavy test patterns
+  - Verify fixes with memory profiling
+
 ---
 
 ## Files to Create
@@ -451,5 +502,6 @@ All features are additive:
 | Phase 4: Integration | 6 tasks | Medium (cross-cutting) |
 | Phase 5: Verification | 5 tasks | Low (testing) |
 | Phase 6: Coverage & Test Quality | 7 tasks | Medium (test improvements) |
+| Phase 7: Memory Investigation | 7 tasks | Medium (debugging/profiling) |
 
-Total: 61 tasks
+Total: 68 tasks

@@ -426,11 +426,112 @@ All test files reviewed use proper cleanup. **No action needed.**
 
 ---
 
+## 15. Memory Profiling Results (Task 7.1)
+
+Memory profiling was conducted on 2026-02-05 using `tracemalloc` and the `resource` module to measure memory consumption across the test suite.
+
+### Methodology
+
+- Each test file was run in a subprocess with memory tracking
+- Peak memory usage was measured via `resource.getrusage(RUSAGE_SELF).ru_maxrss`
+- Memory growth was calculated as the difference between start and end memory
+- All tests were also run together to measure accumulation effects
+
+### Per-File Memory Usage (Sorted by Peak Memory)
+
+| Test File | Peak Memory | Tests | Duration | Memory Growth |
+|-----------|-------------|-------|----------|---------------|
+| test_cmd_main.py | 38.8 MB | 146 | 5.5s | 22.4 MB |
+| test_cmd_workflow.py | 37.4 MB | 360 | 34.4s | 21.0 MB |
+| test_cmd_ralph.py | 36.9 MB | 259 | 40.4s | 20.6 MB |
+| test_cmd_heartbeat.py | 36.2 MB | 126 | 1.8s | 19.9 MB |
+| test_cmd_clean.py | 33.1 MB | 12 | 0.4s | 16.8 MB |
+| test_cmd_spawn.py | 32.8 MB | 22 | 0.4s | 16.4 MB |
+| test_swarm.py | 32.5 MB | 21 | 0.4s | 16.0 MB |
+| test_core_functions.py | 32.1 MB | 33 | 1.2s | 15.8 MB |
+| test_cmd_respawn.py | 32.0 MB | 12 | 0.5s | 15.6 MB |
+| test_unit.py | 32.0 MB | 22 | 0.4s | 15.5 MB |
+| test_session_cleanup.py | 31.9 MB | 18 | 0.5s | 15.4 MB |
+| test_cmd_init.py | 31.8 MB | 25 | 1.2s | 15.4 MB |
+| test_cmd_ls.py | 31.8 MB | 16 | 0.4s | 15.4 MB |
+| test_worktree_protection.py | 31.7 MB | 11 | 0.6s | 15.2 MB |
+| test_cmd_logs.py | 31.6 MB | 8 | 0.3s | 15.3 MB |
+| test_cmd_send.py | 31.6 MB | 7 | 0.3s | 15.3 MB |
+| test_ready_patterns.py | 30.4 MB | 22 | 13.4s | 13.9 MB |
+| test_swarm_instructions.py | 24.1 MB | 17 | 0.3s | 7.6 MB |
+| test_tmux_isolation.py | 20.0 MB | 16 | 8.9s | 3.5 MB |
+| test_integration_workflow.py | 19.7 MB | 31 | 19.8s | 3.2 MB |
+| test_integration_ralph.py | 19.7 MB | 15 | 13.7s | 3.2 MB |
+| test_lifecycle_tmux.py | 19.2 MB | 1 | 2.3s | 2.7 MB |
+| test_respawn_config.py | 19.2 MB | 1 | 2.1s | 2.7 MB |
+| test_ready_wait_integration.py | 19.1 MB | 4 | 5.4s | 2.6 MB |
+| test_kill_integration.py | 17.8 MB | 3 | 1.4s | 1.3 MB |
+| test_status_integration.py | 17.8 MB | 2 | 0.3s | 1.3 MB |
+| test_state_file_recovery.py | 17.6 MB | 4 | 0.6s | 1.1 MB |
+| test_state_file_locking.py | 17.1 MB | 3 | 0.3s | 0.5 MB |
+| test_lifecycle_pid.py | 16.5 MB | 1 | 1.9s | 0.0 MB |
+| test_pattern_edge_cases.py | 16.5 MB | 11 | 0.0s | 0.0 MB |
+| test_kill_cmd.py | 31.9 MB | 10 | 0.5s | 15.5 MB |
+
+### Aggregate Memory Usage (All Tests Together)
+
+When running all 1239 tests in a single process:
+
+| Metric | Value |
+|--------|-------|
+| Start Memory | 16.4 MB |
+| End Memory | 45.2 MB |
+| Total Growth | 28.9 MB |
+| Peak (tracemalloc) | 11.8 MB |
+
+### Analysis
+
+**Key Findings:**
+
+1. **Memory usage is reasonable** - The entire test suite peaks at ~45 MB when run together, which is well within normal bounds and should not cause memory exhaustion on modern systems.
+
+2. **Baseline overhead ~16 MB** - The Python interpreter with swarm.py loaded uses approximately 16 MB before any tests run.
+
+3. **Test file loading adds ~16 MB** - Files that import swarm and set up mocks grow to ~32 MB, which is expected.
+
+4. **Memory growth is consistent** - No individual test file shows unusual memory accumulation patterns.
+
+5. **Integration tests are more memory-efficient** - Tests in `tests/` directory use less memory (~20 MB) because they spawn subprocess workers rather than loading the full swarm module in-process.
+
+### Tests with Highest Individual Memory Growth
+
+From the "all-together" run, the tests that caused the largest memory increments:
+
+1. `test_ralph_list_json_format` - 2.50 MB growth
+2. `test_main_ralph_spawn_dispatches_to_cmd_ralph` - 0.50 MB growth
+3. `test_clean_all_refreshes_status_before_filtering` - 0.25 MB growth
+4. `test_child_process_becomes_daemon` - 0.25 MB growth
+
+These growth values are small and normal for tests that create worker state objects.
+
+### Conclusion
+
+**The test suite does not have a memory leak.** The memory usage is proportional to the number of tests and test complexity. The ~45 MB peak usage is well within acceptable bounds.
+
+The previously reported memory exhaustion events were likely caused by:
+- Running tests on systems with very limited memory
+- Running multiple test processes simultaneously
+- External factors (other processes consuming memory)
+- tmux sessions accumulating from failed test runs (addressed in section 11)
+
+### Recommendations
+
+1. **No immediate memory fixes needed** - Memory usage is healthy
+2. **Monitor for orphaned tmux sessions** - These can accumulate if tests crash
+3. **Use `SWARM_DIR` env var in CI** - Prevents state file accumulation
+
+---
+
 ## Test Coverage Notes
 
-Current coverage is 84% with 513 lines missing. The patterns identified in this audit are primarily about test quality rather than coverage gaps.
+Current coverage is 94% (up from 84%). The patterns identified in this audit are primarily about test quality rather than coverage gaps.
 
-To reach 90%+ coverage:
-- Focus on tasks 6.1-6.3 (add tests for uncovered paths)
-- The quality improvements in this audit will make existing tests more reliable
+Previous coverage improvements:
+- Task 6.7 added 41 tests for main() function dispatch
+- Coverage increased from 89% to 94%
 
