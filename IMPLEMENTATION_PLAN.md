@@ -273,7 +273,7 @@ Improve help text for all existing commands to match the quality of `ralph spawn
   - Check for running workflows
   - Provide `swarm workflow resume-all` command
 
-- [ ] **4.5 Update CLAUDE.md**
+- [x] **4.5 Update CLAUDE.md**
   - Add heartbeat section
   - Add workflow section
   - Update examples
