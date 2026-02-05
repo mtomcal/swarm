@@ -3888,8 +3888,8 @@ class TestRalphRunMainLoop(unittest.TestCase):
 
                             swarm.cmd_ralph_run(args)
 
-        # Verify spawn was called
-        mock_spawn.assert_called()
+        # Verify spawn was called exactly once
+        mock_spawn.assert_called_once()
 
     def test_loop_handles_done_pattern_match(self):
         """Test loop stops when done pattern matches."""

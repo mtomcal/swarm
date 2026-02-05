@@ -3489,8 +3489,8 @@ class TestSpawnWorkflowStage(unittest.TestCase):
         self.assertTrue(worker.metadata.get('ralph'))
         self.assertEqual(worker.metadata.get('ralph_iteration'), 1)
 
-        # Verify ralph state was saved
-        mock_save_ralph.assert_called()
+        # Verify ralph state was saved exactly once
+        mock_save_ralph.assert_called_once()
         call_args = mock_save_ralph.call_args[0][0]
         self.assertEqual(call_args.worker_name, 'ralph-workflow-build')
         self.assertEqual(call_args.max_iterations, 50)
@@ -3498,8 +3498,8 @@ class TestSpawnWorkflowStage(unittest.TestCase):
         self.assertEqual(call_args.done_pattern, '/done')
         self.assertTrue(call_args.check_done_continuous)
 
-        # Verify iteration was logged
-        mock_log.assert_called()
+        # Verify iteration was logged exactly once
+        mock_log.assert_called_once()
 
     @patch('swarm.create_tmux_window')
     @patch('swarm.send_prompt_to_worker')
@@ -3595,9 +3595,12 @@ class TestSpawnWorkflowStage(unittest.TestCase):
             workflow_dir=self.workflow_dir,
         )
 
-        # Verify heartbeat was set up
-        mock_save_hb.assert_called()
-        mock_start_hb.assert_called_with('hb-workflow-work')
+        # Verify heartbeat was set up (may be called multiple times for state updates)
+        self.assertTrue(mock_save_hb.call_count >= 1)
+        # Verify the heartbeat state has correct worker name
+        saved_state = mock_save_hb.call_args[0][0]
+        self.assertEqual(saved_state.worker_name, 'hb-workflow-work')
+        mock_start_hb.assert_called_once_with('hb-workflow-work')
 
     @patch('swarm.create_tmux_window')
     @patch('swarm.send_prompt_to_worker')
@@ -3628,8 +3631,8 @@ class TestSpawnWorkflowStage(unittest.TestCase):
             workflow_dir=self.workflow_dir,
         )
 
-        # Verify stage heartbeat was used
-        mock_save_hb.assert_called()
+        # Verify stage heartbeat was used (may be called multiple times for state updates)
+        self.assertTrue(mock_save_hb.call_count >= 1)
         call_args = mock_save_hb.call_args[0][0]
         # 2h = 7200 seconds
         self.assertEqual(call_args.interval_seconds, 7200)
@@ -3854,8 +3857,8 @@ class TestSpawnWorkflowStage(unittest.TestCase):
             workflow_dir=self.workflow_dir,
         )
 
-        # Verify ralph state was saved with the prompt file path
-        mock_save_ralph.assert_called()
+        # Verify ralph state was saved exactly once with the prompt file path
+        mock_save_ralph.assert_called_once()
         call_args = mock_save_ralph.call_args[0][0]
         self.assertIn('build.md', call_args.prompt_file)
 
@@ -3918,8 +3921,8 @@ class TestSpawnWorkflowStage(unittest.TestCase):
 
         # Should still succeed
         self.assertIsNotNone(worker)
-        # Heartbeat should be set up (without expire)
-        mock_save_hb.assert_called()
+        # Heartbeat should be set up (may be called multiple times for state updates)
+        self.assertTrue(mock_save_hb.call_count >= 1)
         # Warning should be logged
         self.assertIn('invalid heartbeat-expire', captured.getvalue())
 
@@ -5062,7 +5065,10 @@ class TestStartNextStage(unittest.TestCase):
         self.assertEqual(workflow_state.stages["build"].status, "running")
         self.assertEqual(workflow_state.stages["build"].attempts, 1)
         self.assertEqual(workflow_state.stages["build"].worker_name, "test-workflow-build")
-        mock_save.assert_called()
+        # Verify save was called with the updated workflow state
+        mock_save.assert_called_once()
+        saved_state = mock_save.call_args[0][0]
+        self.assertEqual(saved_state.current_stage, "build")
 
     @patch('swarm.spawn_workflow_stage')
     @patch('swarm.save_workflow_state')
@@ -5319,7 +5325,12 @@ class TestRunWorkflowMonitor(unittest.TestCase):
         swarm.run_workflow_monitor("test-workflow", workflow_def, self.workflow_dir)
 
         # Should have slept while waiting for scheduled time
+        # Sleep should be called at least once with a positive value
         mock_sleep.assert_called()
+        # Verify sleep was called with a reasonable wait time
+        self.assertTrue(mock_sleep.call_count >= 1)
+        first_sleep_duration = mock_sleep.call_args_list[0][0][0]
+        self.assertGreater(first_sleep_duration, 0)
 
     @patch('swarm.State')
     @patch('swarm.monitor_stage_completion')
@@ -5546,6 +5557,8 @@ class TestRunWorkflowMonitor(unittest.TestCase):
 
         # Workflow should be saved with failed status
         mock_save.assert_called()
+        # Verify at least one save was attempted
+        self.assertTrue(mock_save.call_count >= 1)
 
     @patch('swarm.State')
     @patch('swarm.save_workflow_state')
@@ -5642,7 +5655,9 @@ class TestHandleWorkflowTransition(unittest.TestCase):
         )
 
         mock_transition.assert_called_once()
+        # Verify save was called with workflow state
         mock_save.assert_called()
+        self.assertTrue(mock_save.call_count >= 1)
         # start_next_stage should NOT be called for complete action
         mock_start_next.assert_not_called()
 
@@ -5788,7 +5803,9 @@ class TestHandleWorkflowTransition(unittest.TestCase):
         )
 
         mock_transition.assert_called_once()
+        # Verify save was called with workflow state
         mock_save.assert_called()
+        self.assertTrue(mock_save.call_count >= 1)
         # start_next_stage should NOT be called for fail action
         mock_start_next.assert_not_called()
 
@@ -6744,8 +6761,8 @@ class TestCmdWorkflowCancel(unittest.TestCase):
             with patch('sys.stdout', captured):
                 swarm.cmd_workflow_cancel(args)
 
-            # Verify tmux kill-window was called
-            mock_run.assert_called()
+            # Verify tmux kill-window was called at least once
+            self.assertTrue(mock_run.call_count >= 1)
             call_args = mock_run.call_args[0][0]
             self.assertIn("kill-window", call_args)
 

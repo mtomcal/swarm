@@ -23,7 +23,8 @@ from typing import Optional
 
 
 # Constants
-SWARM_DIR = Path.home() / ".swarm"
+# SWARM_DIR can be overridden via environment variable for testing isolation
+SWARM_DIR = Path(os.environ.get("SWARM_DIR", str(Path.home() / ".swarm")))
 STATE_FILE = SWARM_DIR / "state.json"
 STATE_LOCK_FILE = SWARM_DIR / "state.lock"
 LOGS_DIR = SWARM_DIR / "logs"

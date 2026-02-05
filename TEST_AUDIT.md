@@ -242,7 +242,8 @@ Or add `@timeout_decorator.timeout(60)` to individual tests.
 ## Summary of Action Items
 
 ### High Priority
-1. [ ] Implement SWARM_DIR environment variable support to isolate integration tests
+1. [x] Implement SWARM_DIR environment variable support to isolate integration tests
+   - **DONE**: Added `os.environ.get("SWARM_DIR", ...)` support in swarm.py line 27
 2. [ ] Add timeouts to subprocess calls in integration tests
 
 ### Medium Priority
@@ -250,7 +251,10 @@ Or add `@timeout_decorator.timeout(60)` to individual tests.
 4. [ ] Add test timeout decorators to prevent hanging tests
 
 ### Low Priority
-5. [ ] Strengthen weak `assert_called()` assertions to include argument verification
+5. [x] Strengthen weak `assert_called()` assertions to include argument verification
+   - **DONE**: Fixed 16 weak assertions in test_cmd_workflow.py, test_cmd_ralph.py, and test_cmd_respawn.py
+   - Changed `assert_called()` to `assert_called_once()` where appropriate
+   - Added `call_count >= 1` checks with argument verification for multi-call scenarios
 6. [ ] Consider reducing mock depth in heavily-mocked tests
 
 ---

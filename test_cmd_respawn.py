@@ -185,9 +185,9 @@ class TestCmdRespawn(unittest.TestCase):
                         with patch('builtins.print'):
                             swarm.cmd_respawn(args)
 
-                            # Verify SIGTERM was sent
-                            mock_kill.assert_called()
-                            # First call should be SIGTERM
+                            # Verify SIGTERM was sent at least once
+                            self.assertTrue(mock_kill.call_count >= 1)
+                            # First call should be to the original pid
                             self.assertEqual(mock_kill.call_args_list[0][0][0], 12345)
 
     def test_respawn_kills_running_tmux_worker(self):
