@@ -5212,6 +5212,9 @@ def cmd_spawn(args) -> None:
     worktree_info = None
 
     if args.worktree:
+        # Fix core.bare misconfiguration before checking git root
+        _check_and_fix_core_bare()
+
         # Get git root
         try:
             git_root = get_git_root()
@@ -6412,6 +6415,9 @@ def cmd_ralph_spawn(args) -> None:
     try:
         # Step 1: Create worktree (if requested)
         if args.worktree:
+            # Fix core.bare misconfiguration before checking git root
+            _check_and_fix_core_bare()
+
             # Get git root
             try:
                 git_root = get_git_root()

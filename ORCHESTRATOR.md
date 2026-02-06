@@ -259,8 +259,9 @@ python3 -m memory_profiler -m unittest test_cmd_ralph -v
 | Phase 4 | Testing | 4 tasks |
 | Phase 5 | Documentation | 3 tasks |
 | Phase 6 | Verification | 2 tasks |
+| Phase 7 | Coverage & Container CI | 4 tasks |
 
-**Total: 28 tasks**
+**Total: 32 tasks**
 
 ### Bug Fixes (B1-B7)
 - B1: Ralph state cleanup on `kill --rm-worktree`
