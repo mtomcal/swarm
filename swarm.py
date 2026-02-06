@@ -406,11 +406,15 @@ Examples:
   # Kill all workers and remove all worktrees
   swarm kill --all --rm-worktree
 
+  # Kill ralph worker with full cleanup (removes worktree AND ralph state)
+  swarm kill my-ralph-worker --rm-worktree
+
 Warnings:
   - --force-dirty will DELETE UNCOMMITTED CHANGES permanently
   - Killing a worker does NOT remove it from state (use 'swarm clean')
   - Worktree removal without --force-dirty fails if changes exist
   - Empty tmux sessions are automatically destroyed after kill
+  - For ralph workers, --rm-worktree also removes ralph state (~/.swarm/ralph/<name>/)
 
 Recovery Commands:
   # If worktree removal failed, check uncommitted changes:
@@ -983,9 +987,11 @@ Prompt Design Principles:
 Quick Reference:
   swarm ralph init                    Create starter PROMPT.md
   swarm ralph spawn ... -- claude     Start autonomous loop
-  swarm ralph status <name>           Check iteration progress
+  swarm ralph status <name>           Check iteration progress (with ETA)
+  swarm ralph logs <name>             View iteration history
   swarm ralph pause <name>            Pause the loop
   swarm ralph resume <name>           Resume the loop
+  swarm ralph list                    List all ralph workers
   swarm send <name> "message"         Intervene mid-iteration
 
 See: https://github.com/ghuntley/how-to-ralph-wiggum
@@ -995,7 +1001,9 @@ RALPH_SPAWN_HELP_DESCRIPTION = """\
 Spawn a new worker with ralph loop mode enabled.
 
 By default, spawns the worker AND starts the monitoring loop (blocking).
-Use --no-run to spawn without starting the loop.
+Use --no-run to spawn without starting the loop. Use --replace to
+auto-clean an existing worker before respawning, or --clean-state to
+reset iteration count without killing the worker.
 """
 
 RALPH_SPAWN_HELP_EPILOG = """\
@@ -1006,6 +1014,14 @@ Examples:
   # With isolated git worktree
   swarm ralph spawn --name feature --prompt-file PROMPT.md --max-iterations 20 \\
     --worktree -- claude --dangerously-skip-permissions
+
+  # Replace existing worker (auto-cleans worker, worktree, and ralph state)
+  swarm ralph spawn --name dev --replace --prompt-file PROMPT.md --max-iterations 50 \\
+    -- claude --dangerously-skip-permissions
+
+  # Reset ralph state only (keep worker/worktree, start fresh iteration count)
+  swarm ralph spawn --name dev --clean-state --prompt-file PROMPT.md --max-iterations 50 \\
+    --no-run -- claude --dangerously-skip-permissions
 
   # With heartbeat for overnight work (recovers from rate limits)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 100 \\
@@ -1024,6 +1040,10 @@ Examples:
     --no-run -- claude --dangerously-skip-permissions
   swarm ralph run dev
 
+  # Longer inactivity timeout for repos with slow pre-commit hooks
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
+    --inactivity-timeout 300 -- claude --dangerously-skip-permissions
+
 Heartbeat for Rate Limit Recovery:
   # Nudge every 4 hours for overnight work (24h expiry)
   swarm ralph spawn --name agent --prompt-file PROMPT.md --max-iterations 100 \\
@@ -1039,14 +1059,28 @@ Intervention:
   swarm send dev "skip that approach, try using X instead"
 
 Monitoring:
-  swarm ralph status dev      # Check iteration progress
+  swarm ralph status dev      # Check iteration progress and ETA
+  swarm ralph logs dev        # View iteration history
   swarm attach dev            # Watch agent live (detach: Ctrl-B D)
   swarm logs dev --follow     # Stream agent output
+
+Tips:
+  - This command BLOCKS until the loop completes. Use --no-run to spawn only.
+  - The prompt file is re-read each iteration, so you can modify it mid-loop.
+  - Default inactivity timeout is 180s. Increase for repos with slow CI hooks.
+  - Use --replace to cleanly restart a worker without manual cleanup.
+  - Use --clean-state to reset iteration count without killing the worker.
 
 Security Note:
   The --dangerously-skip-permissions flag is required for autonomous operation.
   For overnight/unattended work, consider using Claude's native sandbox (/sandbox)
   or Docker Sandboxes for isolation. See README.md for sandboxing options.
+
+See Also:
+  swarm ralph status --help    Check iteration progress and ETA
+  swarm ralph logs --help      View iteration history
+  swarm ralph pause --help     Pause the loop temporarily
+  swarm ralph run --help       Start loop separately from spawn
 """
 
 RALPH_INIT_HELP_EPILOG = """\
@@ -1058,10 +1092,22 @@ The template is intentionally minimal - customize it for your project:
   - Specify which files to study
   - Include deployment instructions if needed
 
-Example:
+Examples:
+  # Create default PROMPT.md and customize
+  swarm ralph init
+  vim PROMPT.md
+
+  # Overwrite existing PROMPT.md with fresh template
+  swarm ralph init --force
+
+  # Full workflow: init, customize, start loop
   swarm ralph init
   vim PROMPT.md  # customize for your project
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude
+
+See Also:
+  swarm ralph template --help  Output template to stdout (for piping)
+  swarm ralph spawn --help     Start the autonomous loop
 """
 
 RALPH_TEMPLATE_HELP_EPILOG = """\
@@ -1071,17 +1117,30 @@ Examples:
   swarm ralph template                     # View template
   swarm ralph template > MY_PROMPT.md      # Save to custom file
   swarm ralph template | pbcopy            # Copy to clipboard (macOS)
+
+See Also:
+  swarm ralph init --help      Create PROMPT.md in current directory
 """
 
 RALPH_STATUS_HELP_EPILOG = """\
 Shows detailed ralph loop status including iteration progress, failures,
-and timing information.
+timing information, and estimated time remaining.
 
 Output includes:
   - Current status (running/paused/stopped/failed)
-  - Iteration progress (e.g., 7/100)
-  - Start times and failure counts
-  - Done pattern and timeout settings
+  - Iteration progress with ETA (e.g., "7/100 (avg 4m/iter, ~6h12m remaining)")
+  - Exit reason for completed loops (done_pattern, max_iterations, killed, failed)
+  - Start times, failure counts, and inactivity timeout settings
+  - Monitor disconnect detection (shows if monitor stopped but worker is alive)
+
+Examples:
+  swarm ralph status dev              # Show full ralph status
+  swarm ralph status feature-auth     # Check specific worker
+
+See Also:
+  swarm ralph logs --help      View iteration history
+  swarm ralph pause --help     Pause the loop
+  swarm status --help          Show general worker status
 """
 
 RALPH_PAUSE_HELP_EPILOG = """\
@@ -1089,6 +1148,14 @@ Pauses the ralph loop. The current agent continues running, but when it
 exits, the loop will not restart a new iteration.
 
 Use 'swarm ralph resume <name>' to continue the loop.
+
+Examples:
+  swarm ralph pause dev               # Pause the dev worker's loop
+  swarm ralph pause feature-auth      # Pause while you review changes
+
+See Also:
+  swarm ralph resume --help    Resume a paused loop
+  swarm ralph status --help    Check current loop state
 """
 
 RALPH_RESUME_HELP_EPILOG = """\
@@ -1096,7 +1163,16 @@ Resumes a paused ralph loop. Continues from the current iteration count
 (does not reset progress).
 
 If the worker is not currently running, spawns a fresh agent for the
-next iteration.
+next iteration. Also useful when the monitor disconnected but the worker
+is still alive.
+
+Examples:
+  swarm ralph resume dev              # Resume paused loop
+  swarm ralph resume feature-auth     # Resume after reviewing changes
+
+See Also:
+  swarm ralph pause --help     Pause the loop
+  swarm ralph status --help    Check if loop is paused or disconnected
 """
 
 RALPH_RUN_HELP_EPILOG = """\
@@ -1107,10 +1183,18 @@ Typically used after 'ralph spawn --no-run' when you want to spawn and
 run the loop separately. By default, 'ralph spawn' runs the loop
 automatically.
 
-Example:
+Examples:
+  # Spawn then run separately
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
-    --no-run -- claude
+    --no-run -- claude --dangerously-skip-permissions
   swarm ralph run dev
+
+  # Run in background
+  swarm ralph run dev &
+
+See Also:
+  swarm ralph spawn --help     Spawn with automatic loop start
+  swarm ralph status --help    Check loop progress
 """
 
 RALPH_LIST_HELP_EPILOG = """\
@@ -1120,10 +1204,15 @@ Examples:
   swarm ralph list                      # Table view
   swarm ralph list --format json        # JSON for scripting
   swarm ralph list --status running     # Only running loops
+
+See Also:
+  swarm ls --help              List all workers (not just ralph)
+  swarm ralph status --help    Detailed status for a specific worker
 """
 
 RALPH_LOGS_HELP_EPILOG = """\
-Shows the iteration history log for a ralph worker.
+Shows the iteration history log for a ralph worker. This is separate from
+'swarm logs' which shows the worker's tmux output.
 
 The log shows timestamped events for each iteration: start, end, failures,
 timeouts, and loop completion.
@@ -1133,10 +1222,14 @@ Examples:
   swarm ralph logs agent --lines 10     # Show last 10 entries
   swarm ralph logs agent --live         # Tail log in real-time
 
-Log format:
+Log Format:
   2024-01-15T10:30:00 [START] iteration 1/100
   2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s
   2024-01-15T12:00:00 [DONE] loop complete after 10 iterations reason=done_pattern
+
+See Also:
+  swarm logs --help            View worker tmux output (different from ralph logs)
+  swarm ralph status --help    Check iteration progress and ETA
 """
 
 
@@ -4602,6 +4695,7 @@ def main() -> None:
                        help="Worker name to kill. Required unless using --all.")
     kill_p.add_argument("--rm-worktree", action="store_true",
                        help="Remove the git worktree after killing. Default: false. "
+                            "For ralph workers, also removes ralph state (~/.swarm/ralph/<name>/). "
                             "Fails if worktree has uncommitted changes unless "
                             "--force-dirty is also specified.")
     kill_p.add_argument("--force-dirty", action="store_true",
@@ -4714,7 +4808,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ralph_init_p.add_argument("--force", action="store_true",
-                              help="Overwrite existing PROMPT.md")
+                              help="Overwrite existing PROMPT.md. Default: error if file exists.")
 
     # ralph template - output template to stdout
     ralph_subparsers.add_parser(
@@ -4731,7 +4825,7 @@ def main() -> None:
         epilog=RALPH_STATUS_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_status_p.add_argument("name", help="Worker name")
+    ralph_status_p.add_argument("name", help="Name of the ralph worker to check")
 
     # ralph pause - pause the ralph loop
     ralph_pause_p = ralph_subparsers.add_parser(
@@ -4740,7 +4834,7 @@ def main() -> None:
         epilog=RALPH_PAUSE_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_pause_p.add_argument("name", help="Worker name")
+    ralph_pause_p.add_argument("name", help="Name of the ralph worker to pause")
 
     # ralph resume - resume the ralph loop
     ralph_resume_p = ralph_subparsers.add_parser(
@@ -4749,7 +4843,7 @@ def main() -> None:
         epilog=RALPH_RESUME_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_resume_p.add_argument("name", help="Worker name")
+    ralph_resume_p.add_argument("name", help="Name of the ralph worker to resume")
 
     # ralph run - run the ralph loop (main outer loop execution)
     ralph_run_p = ralph_subparsers.add_parser(
@@ -4758,7 +4852,7 @@ def main() -> None:
         epilog=RALPH_RUN_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_run_p.add_argument("name", help="Worker name")
+    ralph_run_p.add_argument("name", help="Name of the ralph worker to run the loop for")
 
     # ralph list - list all ralph workers
     ralph_list_p = ralph_subparsers.add_parser(
@@ -4779,11 +4873,11 @@ def main() -> None:
         epilog=RALPH_LOGS_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_logs_p.add_argument("name", help="Worker name")
+    ralph_logs_p.add_argument("name", help="Name of the ralph worker to view logs for")
     ralph_logs_p.add_argument("--live", action="store_true",
-                              help="Tail the log file in real-time (like tail -f)")
+                              help="Tail the log file in real-time (like tail -f). Press Ctrl-C to stop.")
     ralph_logs_p.add_argument("--lines", type=int, default=None,
-                              help="Show last N entries (default: all)")
+                              help="Show last N entries. Default: show all entries.")
 
     # ralph spawn - spawn a new ralph worker
     ralph_spawn_p = ralph_subparsers.add_parser(
@@ -4793,51 +4887,65 @@ def main() -> None:
         epilog=RALPH_SPAWN_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ralph_spawn_p.add_argument("--name", required=True, help="Unique identifier for this worker")
+    ralph_spawn_p.add_argument("--name", required=True,
+                               help="Unique identifier for this worker. Used in status, logs, and kill commands.")
     ralph_spawn_p.add_argument("--prompt-file", required=True,
-                               help="Path to prompt file (required)")
+                               help="Path to prompt file read at the start of each iteration. "
+                                    "Can be modified mid-loop to change agent behavior.")
     ralph_spawn_p.add_argument("--max-iterations", type=int, required=True,
-                               help="Maximum loop iterations (required)")
+                               help="Maximum number of loop iterations before stopping.")
     ralph_spawn_p.add_argument("--inactivity-timeout", type=int, default=180,
-                               help="Screen stability timeout in seconds (default: 180). Increase for repos with slow CI/pre-commit hooks.")
+                               help="Screen stability timeout in seconds. Default: 180. "
+                                    "Agent is restarted when tmux screen is unchanged for this duration. "
+                                    "Increase for repos with slow CI/pre-commit hooks (e.g., 300).")
     ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
-                               help="Regex pattern to stop ralph loop when matched in output")
+                               help="Regex pattern to stop the loop when matched in output. "
+                                    "Default: none. Example: '/done' or 'All tasks complete'.")
     ralph_spawn_p.add_argument("--check-done-continuous", action="store_true",
-                               help="Check done pattern during monitoring, not just after exit")
+                               help="Check done pattern continuously during monitoring, not just after agent exit. "
+                                    "Use when the done signal may appear mid-iteration.")
     ralph_spawn_p.add_argument("--no-run", action="store_true",
-                               help="Spawn worker but don't start monitoring loop (default: auto-start)")
+                               help="Spawn worker only, don't start monitoring loop. Default: auto-start (blocking). "
+                                    "Use 'swarm ralph run <name>' to start the loop later.")
     ralph_spawn_p.add_argument("--replace", action="store_true",
-                               help="Auto-clean existing worker/worktree/state before spawning")
+                               help="Auto-clean existing worker, worktree, and ralph state before spawning. "
+                                    "Saves the manual kill/clean/rm dance when respawning.")
     ralph_spawn_p.add_argument("--clean-state", action="store_true",
-                               help="Clear ralph state without affecting worker/worktree")
+                               help="Clear ralph state (iteration count, status) without killing worker or worktree. "
+                                    "Useful when respawning with different config.")
     ralph_spawn_p.add_argument("--session", default=None,
-                               help="Tmux session name (default: hash-based isolation)")
+                               help="Tmux session name. Default: hash-based for isolation.")
     ralph_spawn_p.add_argument("--tmux-socket", default=None,
-                               help="Tmux socket name (for testing/isolation)")
+                               help="Tmux socket name for isolation. Used in testing.")
     ralph_spawn_p.add_argument("--worktree", action="store_true",
-                               help="Create a git worktree")
-    ralph_spawn_p.add_argument("--branch", help="Branch name for worktree (default: same as --name)")
+                               help="Create isolated git worktree for this worker. "
+                                    "Worktree created at <repo>-worktrees/<name>/.")
+    ralph_spawn_p.add_argument("--branch",
+                               help="Branch name for worktree. Default: same as --name.")
     ralph_spawn_p.add_argument("--worktree-dir", default=None,
-                               help="Parent dir for worktrees (default: <repo>-worktrees)")
+                               help="Parent directory for worktrees. Default: <repo>-worktrees/.")
     ralph_spawn_p.add_argument("--tag", action="append", default=[], dest="tags",
-                               help="Tag for filtering (repeatable)")
+                               help="Tag for filtering workers. Repeatable: --tag a --tag b.")
     ralph_spawn_p.add_argument("--env", action="append", default=[],
-                               help="Environment variable KEY=VAL (repeatable)")
-    ralph_spawn_p.add_argument("--cwd", help="Working directory")
+                               help="Environment variable in KEY=VAL format. Repeatable.")
+    ralph_spawn_p.add_argument("--cwd",
+                               help="Working directory for the worker command. Default: current directory.")
     ralph_spawn_p.add_argument("--ready-wait", action="store_true",
-                               help="Wait for agent to be ready before returning")
+                               help="Wait for agent ready pattern before returning. Default: false.")
     ralph_spawn_p.add_argument("--ready-timeout", type=int, default=120,
-                               help="Timeout in seconds for --ready-wait (default: 120)")
+                               help="Timeout in seconds for --ready-wait. Default: 120.")
     ralph_spawn_p.add_argument("--heartbeat",
-                               help='Heartbeat interval (e.g., "4h", "30m"). Sends periodic nudges to help recover from rate limits.')
+                               help='Start heartbeat after spawn. Interval format: "4h", "30m", "90s". '
+                                    'Sends periodic nudges to help recover from rate limits.')
     ralph_spawn_p.add_argument("--heartbeat-expire",
-                               help='Stop heartbeat after this duration (e.g., "24h"). Default: no expiration')
+                               help='Stop heartbeat after this duration (e.g., "24h"). Default: no expiration.')
     ralph_spawn_p.add_argument("--heartbeat-message", default="continue",
-                               help='Message to send on each heartbeat. Default: "continue"')
+                               help='Message to send on each heartbeat beat. Default: "continue".')
     ralph_spawn_p.add_argument("--tmux", action="store_true",
-                               help="Accepted for consistency with spawn (ralph always uses tmux)")
+                               help="Accepted for consistency with 'swarm spawn'. "
+                                    "Ralph workers always use tmux; this flag has no effect.")
     ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
-                               help="Command to run (after --)")
+                               help="Command to run in the worker (after --). Required.")
 
     # heartbeat - periodic nudges to workers
     heartbeat_p = subparsers.add_parser(

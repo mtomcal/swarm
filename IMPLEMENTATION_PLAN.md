@@ -194,7 +194,7 @@ Update specs BEFORE implementation to define expected behavior.
   - Update default timeout mention
   - Add troubleshooting for common issues
 
-- [ ] **5.2 Update help text**
+- [x] **5.2 Update help text**
   - Verify all new commands have comprehensive help
   - Follow `specs/cli-help-standards.md`
 
