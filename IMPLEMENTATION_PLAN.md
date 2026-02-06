@@ -204,7 +204,7 @@ Update specs BEFORE implementation to define expected behavior.
 
 ### Phase 6: Verification
 
-- [ ] **6.1 Manual verification - bug fixes**
+- [x] **6.1 Manual verification - bug fixes**
   ```bash
   # B1: Ralph state cleanup
   swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --worktree -- bash -c 'echo done'
@@ -218,7 +218,7 @@ Update specs BEFORE implementation to define expected behavior.
   swarm ralph spawn --help | grep inactivity  # Should show 180
   ```
 
-- [ ] **6.2 Manual verification - features**
+- [x] **6.2 Manual verification - features**
   ```bash
   # F1: --replace
   swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --no-run -- bash
