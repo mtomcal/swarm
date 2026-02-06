@@ -6,3 +6,11 @@ __pycache__/
 coverage.json
 *.py,cover
 htmlcov/
+
+# Sandbox loop (local-only)
+Dockerfile.sandbox
+setup-sandbox-network.sh
+teardown-sandbox-network.sh
+loop.sh
+docs/sandbox-loop-spec.md
+.loop-logs/

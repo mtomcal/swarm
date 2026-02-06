@@ -12,7 +12,7 @@ You are implementing bug fixes and features for the swarm CLI tool based on real
 6. Add tests if the task involves code changes
 7. Run tests: `python3 -m unittest test_cmd_ralph -v` (or relevant test file)
 8. Mark the task complete in `IMPLEMENTATION_PLAN.md` (change `[ ]` to `[x]`)
-9. Commit your changes with a descriptive message
+9. Commit your changes with a descriptive message and push
 
 ## Important Guidelines
 
