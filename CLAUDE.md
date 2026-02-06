@@ -186,7 +186,9 @@ Ralph mode enables autonomous agent looping with fresh context windows.
 swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 -- claude --dangerously-skip-permissions
 
 # Other commands
-swarm ralph status agent     # Check iteration progress
+swarm ralph status agent     # Check iteration progress (includes ETA)
+swarm ralph logs agent       # View iteration history
+swarm ralph logs agent --live # Tail iteration log in real-time
 swarm ralph pause agent      # Pause the loop
 swarm ralph resume agent     # Resume the loop
 swarm ralph init             # Create starter PROMPT.md
@@ -199,7 +201,46 @@ swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --
 swarm ralph run agent        # Start monitoring loop separately
 ```
 
-Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is unchanged for `--inactivity-timeout` seconds (default: 60s). State in `~/.swarm/ralph/<name>/state.json`. Iteration logs in `~/.swarm/ralph/<name>/iterations.log`.
+**Replace existing worker** (auto-cleans worker, worktree, and ralph state):
+```bash
+swarm ralph spawn --name agent --replace --prompt-file ./PROMPT.md --max-iterations 100 -- claude --dangerously-skip-permissions
+```
+
+**Clean state only** (reset ralph state without killing worker/worktree):
+```bash
+swarm ralph spawn --name agent --clean-state --prompt-file ./PROMPT.md --max-iterations 100 -- claude --dangerously-skip-permissions
+```
+
+Ralph uses **screen-stable inactivity detection**: restarts when tmux screen is unchanged for `--inactivity-timeout` seconds (default: 180s). Increase for repos with slow CI/pre-commit hooks. State in `~/.swarm/ralph/<name>/state.json`. Iteration logs in `~/.swarm/ralph/<name>/iterations.log`.
+
+### Ralph Troubleshooting
+
+**Stale state blocking respawn**: If `swarm ralph spawn` fails with "worker already exists", use `--replace` to auto-clean:
+```bash
+swarm ralph spawn --name agent --replace --prompt-file ./PROMPT.md --max-iterations 100 -- claude --dangerously-skip-permissions
+```
+
+**`git config core.bare = true` corruption**: Worktree operations can sometimes set `core.bare = true`, breaking git. Swarm detects and auto-fixes this, but if you encounter it manually:
+```bash
+git config core.bare false
+```
+
+**Monitor disconnected but worker still running**: The ralph monitoring process can crash while the tmux worker keeps running. Check with:
+```bash
+swarm ralph status agent     # Shows exit_reason: monitor_disconnected
+swarm status agent           # Shows if worker is still running
+swarm ralph resume agent     # Resume monitoring if worker alive
+```
+
+**Inactivity timeout too short**: If ralph restarts the agent prematurely (e.g., during long pre-commit hooks), increase the timeout:
+```bash
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --inactivity-timeout 300 -- claude --dangerously-skip-permissions
+```
+
+**Kill ralph worker with full cleanup**: Use `--rm-worktree` to remove worker, worktree, and ralph state:
+```bash
+swarm kill agent --rm-worktree  # Also removes ~/.swarm/ralph/agent/
+```
 
 ## Project Structure
 

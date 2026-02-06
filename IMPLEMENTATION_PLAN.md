@@ -159,7 +159,7 @@ Update specs BEFORE implementation to define expected behavior.
 
 ### Phase 4: Testing
 
-- [ ] **4.1 Add unit tests for bug fixes**
+- [x] **4.1 Add unit tests for bug fixes**
   - Test ralph state cleanup on kill
   - Test transactional spawn rollback
   - Test worktree error handling
@@ -168,27 +168,27 @@ Update specs BEFORE implementation to define expected behavior.
   - Test default timeout value
   - File: `test_cmd_ralph.py`
 
-- [ ] **4.2 Add unit tests for new features**
+- [x] **4.2 Add unit tests for new features**
   - Test `--replace` flag
   - Test `ralph logs` command
   - Test ETA calculation
   - Test `--clean-state` flag
   - File: `test_cmd_ralph.py`
 
-- [ ] **4.3 Add integration tests**
+- [x] **4.3 Add integration tests**
   - Test full ralph lifecycle with new features
   - Test replace workflow
   - Test logs during active ralph
   - File: `tests/test_integration_ralph.py`
 
-- [ ] **4.4 Run full test suite**
+- [x] **4.4 Run full test suite**
   ```bash
   python3 -m unittest discover -v
   ```
 
 ### Phase 5: Documentation
 
-- [ ] **5.1 Update CLAUDE.md**
+- [x] **5.1 Update CLAUDE.md**
   - Document new ralph flags (`--replace`, `--clean-state`)
   - Document `ralph logs` command
   - Update default timeout mention

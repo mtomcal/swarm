@@ -692,5 +692,306 @@ class TestRalphInit(TmuxIsolatedTestCase):
         )
 
 
+class TestRalphNewFeatures(TmuxIsolatedTestCase):
+    """Integration tests for new ralph features (F1, F2, F5)."""
+
+    def setUp(self):
+        """Set up temporary prompt file for ralph tests."""
+        super().setUp()
+        self.tmpdir = tempfile.mkdtemp()
+        self.prompt_file = Path(self.tmpdir) / "PROMPT.md"
+        self.prompt_file.write_text("Test prompt content\n")
+
+    def tearDown(self):
+        """Clean up temp files and ralph workers."""
+        # Kill any ralph workers
+        try:
+            workers = self.get_workers()
+            for w in workers:
+                self.run_swarm('kill', w['name'])
+            self.run_swarm('clean', '--all')
+        except Exception:
+            pass
+
+        # Clean up ralph state
+        ralph_dir = Path.home() / ".swarm" / "ralph"
+        if ralph_dir.exists():
+            for worker_dir in ralph_dir.iterdir():
+                if worker_dir.name.startswith(self.tmux_socket.replace('swarm-test-', '')):
+                    shutil.rmtree(worker_dir, ignore_errors=True)
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        super().tearDown()
+
+    @skip_if_no_tmux
+    def test_ralph_spawn_replace_cleans_existing_worker(self):
+        """Verify ralph spawn --replace cleans up existing worker and creates new one (F1)."""
+        worker_name = f"ralph-replace-{self.tmux_socket[-8:]}"
+
+        # First spawn
+        result1 = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '3',
+            '--no-run',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(
+            result1.returncode,
+            0,
+            f"Expected first spawn to succeed. Stderr: {result1.stderr!r}"
+        )
+
+        # Verify worker exists
+        workers = self.get_workers()
+        self.assertTrue(
+            any(w['name'] == worker_name for w in workers),
+            f"Expected worker '{worker_name}' to exist after first spawn"
+        )
+
+        # Try to spawn again without --replace (should fail)
+        result2 = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '5',
+            '--no-run',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertNotEqual(
+            result2.returncode,
+            0,
+            f"Expected spawn without --replace to fail when worker exists"
+        )
+        self.assertIn(
+            "already exists",
+            result2.stderr.lower(),
+            f"Expected error about worker already existing, got: {result2.stderr!r}"
+        )
+
+        # Spawn with --replace (should succeed)
+        result3 = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '5',
+            '--no-run',
+            '--replace',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(
+            result3.returncode,
+            0,
+            f"Expected spawn with --replace to succeed. Stderr: {result3.stderr!r}"
+        )
+
+        # Verify ralph state has new max_iterations
+        ralph_state_file = Path.home() / ".swarm" / "ralph" / worker_name / "state.json"
+        with open(ralph_state_file) as f:
+            ralph_state = json.load(f)
+
+        self.assertEqual(
+            ralph_state['max_iterations'],
+            5,
+            f"Expected max_iterations to be 5 after replace, got: {ralph_state['max_iterations']}"
+        )
+
+    @skip_if_no_tmux
+    def test_ralph_logs_shows_iteration_history(self):
+        """Verify ralph logs shows iteration history (F2)."""
+        worker_name = f"ralph-logs-{self.tmux_socket[-8:]}"
+
+        # Spawn a ralph worker
+        result = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '3',
+            '--no-run',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected ralph spawn to succeed. Stderr: {result.stderr!r}"
+        )
+
+        # Create a mock iteration log
+        ralph_log_file = Path.home() / ".swarm" / "ralph" / worker_name / "iterations.log"
+        ralph_log_file.parent.mkdir(parents=True, exist_ok=True)
+        ralph_log_file.write_text(
+            "2024-01-15T10:30:00 [START] iteration 1/3\n"
+            "2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s\n"
+            "2024-01-15T10:35:43 [START] iteration 2/3\n"
+        )
+
+        # Test ralph logs command
+        logs_result = self.run_swarm('ralph', 'logs', worker_name)
+
+        self.assertEqual(
+            logs_result.returncode,
+            0,
+            f"Expected ralph logs to succeed. Stderr: {logs_result.stderr!r}"
+        )
+
+        # Verify log content is shown
+        self.assertIn(
+            "[START] iteration 1/3",
+            logs_result.stdout,
+            f"Expected logs to show iteration start, got: {logs_result.stdout!r}"
+        )
+        self.assertIn(
+            "[END] iteration 1 exit=0",
+            logs_result.stdout,
+            f"Expected logs to show iteration end, got: {logs_result.stdout!r}"
+        )
+
+    @skip_if_no_tmux
+    def test_ralph_logs_lines_option(self):
+        """Verify ralph logs --lines N shows last N lines (F2)."""
+        worker_name = f"ralph-logs-lines-{self.tmux_socket[-8:]}"
+
+        # Spawn a ralph worker
+        result = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '3',
+            '--no-run',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(result.returncode, 0)
+
+        # Create a mock iteration log with multiple entries
+        ralph_log_file = Path.home() / ".swarm" / "ralph" / worker_name / "iterations.log"
+        ralph_log_file.parent.mkdir(parents=True, exist_ok=True)
+        ralph_log_file.write_text(
+            "2024-01-15T10:30:00 [START] iteration 1/3\n"
+            "2024-01-15T10:35:42 [END] iteration 1 exit=0 duration=5m42s\n"
+            "2024-01-15T10:35:43 [START] iteration 2/3\n"
+            "2024-01-15T10:40:15 [END] iteration 2 exit=0 duration=4m32s\n"
+            "2024-01-15T10:40:16 [START] iteration 3/3\n"
+        )
+
+        # Test ralph logs with --lines 2
+        logs_result = self.run_swarm('ralph', 'logs', worker_name, '--lines', '2')
+
+        self.assertEqual(logs_result.returncode, 0)
+
+        # Should only show last 2 lines
+        self.assertNotIn(
+            "[START] iteration 1/3",
+            logs_result.stdout,
+            f"Expected first iteration not in last 2 lines"
+        )
+        self.assertIn(
+            "[END] iteration 2 exit=0",
+            logs_result.stdout,
+            f"Expected second-to-last line in output"
+        )
+        self.assertIn(
+            "[START] iteration 3/3",
+            logs_result.stdout,
+            f"Expected last line in output"
+        )
+
+    @skip_if_no_tmux
+    def test_ralph_spawn_clean_state_removes_old_state(self):
+        """Verify ralph spawn --clean-state removes old ralph state (F5).
+
+        The --clean-state flag removes ralph state directory but not the worker.
+        This is useful when respawning with different ralph config after a worker
+        has been killed and cleaned from state.
+        """
+        worker_name = f"ralph-clean-{self.tmux_socket[-8:]}"
+
+        # First spawn
+        result1 = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '3',
+            '--no-run',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(result1.returncode, 0)
+
+        # Verify ralph state file exists
+        ralph_state_file = Path.home() / ".swarm" / "ralph" / worker_name / "state.json"
+        self.assertTrue(
+            ralph_state_file.exists(),
+            f"Expected ralph state file to exist after spawn"
+        )
+
+        # Kill worker and clean it from state (but ralph state directory remains)
+        self.run_swarm('kill', worker_name)
+        self.run_swarm('clean', worker_name)  # Remove worker entry from state
+
+        # Verify ralph state still exists after kill and clean
+        # (kill without --rm-worktree doesn't remove ralph state)
+        self.assertTrue(
+            ralph_state_file.exists(),
+            f"Expected ralph state file to exist after kill without --rm-worktree"
+        )
+
+        # Spawn again with --clean-state to clear old ralph state
+        result2 = self.run_swarm(
+            'ralph', 'spawn',
+            '--name', worker_name,
+            '--prompt-file', str(self.prompt_file),
+            '--max-iterations', '5',
+            '--no-run',
+            '--clean-state',
+            '--',
+            'bash', '-c', 'echo "$ ready"; sleep 30'
+        )
+
+        self.assertEqual(
+            result2.returncode,
+            0,
+            f"Expected spawn with --clean-state to succeed. Stderr: {result2.stderr!r}"
+        )
+
+        # Verify ralph state has new max_iterations (proving state was cleaned)
+        with open(ralph_state_file) as f:
+            ralph_state = json.load(f)
+
+        self.assertEqual(
+            ralph_state['max_iterations'],
+            5,
+            f"Expected max_iterations to be 5 after clean state spawn, got: {ralph_state['max_iterations']}"
+        )
+
+    @skip_if_no_tmux
+    def test_ralph_logs_no_worker_error(self):
+        """Verify ralph logs errors gracefully for non-existent worker (F2)."""
+        result = self.run_swarm('ralph', 'logs', 'nonexistent-worker-xyz')
+
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            f"Expected ralph logs for non-existent worker to fail"
+        )
+
+        self.assertIn(
+            "error",
+            result.stderr.lower(),
+            f"Expected error message in stderr, got: {result.stderr!r}"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
