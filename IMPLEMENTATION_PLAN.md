@@ -1,7 +1,7 @@
 # Implementation Plan: Ralph Bug Fixes and Improvements
 
 **Created**: 2026-02-05
-**Status**: IN PROGRESS
+**Status**: COMPLETE
 **Goal**: Fix ralph bugs from user feedback and add quality-of-life features
 
 ---
@@ -232,34 +232,6 @@ Update specs BEFORE implementation to define expected behavior.
   swarm ralph spawn --name test --prompt-file ./PROMPT.md --max-iterations 1 --clean-state --no-run -- bash
   ```
 
-### Phase 7: Coverage & Container CI
-
-Ensure pre-commit hook works inside the sandbox container and coverage standards are met.
-
-- [ ] **7.1 Install `coverage` in Dockerfile.sandbox**
-  - Add `python3-coverage` (or `pip install coverage`) to `Dockerfile.sandbox`
-  - Rebuild image: `docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) -t sandbox-loop -f Dockerfile.sandbox .`
-  - Test: `docker run --rm sandbox-loop python3 -c "import coverage; print(coverage.__version__)"`
-  - File: `Dockerfile.sandbox`
-
-- [ ] **7.2 Verify pre-commit hook works in container**
-  - Run the pre-commit hook inside the sandbox container
-  - Test: `docker run --rm -v $(pwd):/workspace -w /workspace sandbox-loop sh -c '.git/hooks/pre-commit'`
-  - Ensure all 1334 tests pass and coverage reports ≥90%
-  - Fix any missing dependencies or path issues discovered
-  - File: `Dockerfile.sandbox` (if additional deps needed)
-
-- [ ] **7.3 Verify coverage ≥90% for all new code**
-  - Run `python3 -m coverage report --skip-covered` to identify uncovered lines
-  - Add tests for any new code below 90% coverage
-  - Ensure no `--no-verify` commits remain necessary
-  - Files: `test_cmd_ralph.py`, any test files needing additions
-
-- [ ] **7.4 End-to-end: loop iteration with pre-commit**
-  - Run a single sandbox loop iteration that commits with the hook enabled
-  - Confirm the commit succeeds without `--no-verify`
-  - Test: `SANDBOX=1 ./loop.sh 1` (single iteration, should commit cleanly)
-
 ---
 
 ## Files to Modify
@@ -277,7 +249,6 @@ Ensure pre-commit hook works inside the sandbox container and coverage standards
 | `test_cmd_ralph.py` | New tests |
 | `tests/test_integration_ralph.py` | Integration tests |
 | `CLAUDE.md` | Documentation |
-| `Dockerfile.sandbox` | Add `coverage` dependency for pre-commit hook |
 
 ---
 
@@ -310,6 +281,5 @@ All changes are backwards compatible:
 | Phase 4: Testing | 4 tasks | Medium (test coverage) |
 | Phase 5: Documentation | 3 tasks | Low (docs) |
 | Phase 6: Verification | 2 tasks | Low (manual testing) |
-| Phase 7: Coverage & Container CI | 4 tasks | Medium (infra + testing) |
 
-**Total: 32 tasks**
+**Total: 28 tasks**
