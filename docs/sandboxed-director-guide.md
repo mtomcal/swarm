@@ -13,32 +13,35 @@ This creates an asymmetric trust model: a prompt injection or misbehaving direct
 Use Claude Code's **native sandbox** (bubblewrap on Linux) for the director, while workers continue to run in **Docker containers**. This gives you two independent isolation layers:
 
 ```
-┌──────────────────────────────────────────────┐
-│ Host OS                                       │
-│                                               │
-│  ┌────────────────────────────────────────┐  │
-│  │ Native Sandbox (bubblewrap)            │  │
-│  │                                        │  │
-│  │  Director (Claude session)             │  │
-│  │  ├── reads ORCHESTRATOR.md             │  │
-│  │  ├── runs: swarm, git, grep            │  │
-│  │  ├── runs: docker (excluded from bwrap)│  │
-│  │  ├── runs: tmux (excluded from bwrap)  │  │
-│  │  ├── writes: ~/.swarm/ (state)         │  │
-│  │  └── writes: repo dir (plans, prompts) │  │
-│  │                                        │  │
-│  │  CANNOT: read ~/.ssh, ~/.aws, /etc     │  │
-│  │  CANNOT: reach arbitrary network hosts │  │
-│  └────────────────────────────────────────┘  │
-│                                               │
-│  ┌──────────────┐  ┌──────────────┐          │
-│  │ Docker       │  │ Docker       │          │
-│  │ Worker 1     │  │ Worker 2     │          │
-│  │ (sandbox.sh) │  │ (sandbox.sh) │          │
-│  │ 8g mem cap   │  │ 8g mem cap   │          │
-│  │ net allowlist│  │ net allowlist│          │
-│  └──────────────┘  └──────────────┘          │
-└──────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│ Host OS                                                │
+│                                                        │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │ Native Sandbox (bubblewrap)                     │  │
+│  │                                                 │  │
+│  │  Director (Claude in ralph + heartbeat)         │  │
+│  │  ├── ralph: context refresh every iteration     │  │
+│  │  ├── heartbeat: rate limit recovery (4h nudge)  │  │
+│  │  ├── reads ORCHESTRATOR.md, IMPLEMENTATION_PLAN │  │
+│  │  ├── runs: swarm, git, grep                     │  │
+│  │  ├── runs: docker (excluded from bwrap)         │  │
+│  │  ├── runs: tmux (excluded from bwrap)           │  │
+│  │  ├── writes: ~/.swarm/ (state)                  │  │
+│  │  └── writes: repo dir (plans, prompts)          │  │
+│  │                                                 │  │
+│  │  CANNOT: read ~/.ssh, ~/.aws, /etc              │  │
+│  │  CANNOT: reach arbitrary network hosts          │  │
+│  └─────────────────────────────────────────────────┘  │
+│                                                        │
+│  ┌──────────────────┐  ┌──────────────────┐           │
+│  │ Docker           │  │ Docker           │           │
+│  │ Worker 1 (ralph) │  │ Worker 2 (ralph) │           │
+│  │ (sandbox.sh)     │  │ (sandbox.sh)     │           │
+│  │ 8g mem cap       │  │ 8g mem cap       │           │
+│  │ net allowlist    │  │ net allowlist    │           │
+│  │ heartbeat: 4h    │  │ heartbeat: 4h    │           │
+│  └──────────────────┘  └──────────────────┘           │
+└───────────────────────────────────────────────────────┘
 ```
 
 ### Why two layers instead of one?
@@ -215,73 +218,121 @@ When all tasks are [x] in IMPLEMENTATION_PLAN.md, verify and report to user.
 
 ### Step 4: Launch the sandboxed director
 
-```bash
-# Option A: Interactive director (you watch and it reports back)
-claude --dangerously-skip-permissions
+**Option A: Interactive director** (you watch, it reports back)
 
+```bash
+claude --dangerously-skip-permissions
 # Then tell it:
 # "Read ORCHESTRATOR.md and begin managing the epic. Monitor every 5 minutes."
+```
 
-# Option B: Ralph-based director (fully autonomous, loops on its own)
-# Create a DIRECTOR_PROMPT.md for the director's own loop:
-swarm ralph spawn --name director --prompt-file DIRECTOR_PROMPT.md \
-    --max-iterations 200 --inactivity-timeout 600 \
+**Option B: Fully autonomous director** (ralph + heartbeat, self-healing)
+
+The director runs as its own ralph loop with a heartbeat for rate limit recovery. This is the full autonomous stack — the director loops and self-heals, managing workers that also loop and self-heal.
+
+```bash
+swarm ralph spawn --name director \
+    --prompt-file DIRECTOR_PROMPT.md \
+    --max-iterations 200 \
+    --inactivity-timeout 14400 \
+    --heartbeat 30m \
+    --heartbeat-expire 48h \
     -- claude --dangerously-skip-permissions
 ```
 
-For Option B, the director itself runs in ralph mode. Its DIRECTOR_PROMPT.md would look like:
+| Flag | Value | Why |
+|------|-------|-----|
+| `--max-iterations 200` | High ceiling | Director iterations are cheap (monitoring, not coding) |
+| `--inactivity-timeout 14400` | 4 hours | Matches Claude's rate limit window. Prevents ralph from burning iterations restarting into the same rate limit. See [Rate limits and iteration burn](#rate-limits-and-iteration-burn) |
+| `--heartbeat 30m` | 30 minutes | Rate limits can hit anywhere in the 4h window (often at ~2h). Frequent nudges mean you're at most 30 min from a retry after the limit lifts. Nudges to a busy worker are harmlessly ignored |
+| `--heartbeat-expire 48h` | 2 days | Stop nudging after the epic should be done |
+
+Each iteration the director:
+1. Reads DIRECTOR_PROMPT.md (fresh context window)
+2. Checks if workers are already running (`swarm ls`, `swarm ralph list`)
+3. Spawns workers if none exist, monitors them if they do
+4. Intervenes if workers are stuck (edits PROMPT.md, bumps memory, etc.)
+5. Updates ORCHESTRATOR.md with progress notes
+6. Commits and exits — ralph restarts it with a clean context
+
+If Claude hits a rate limit, the heartbeat nudges it every 4 hours. If the context window fills up from verbose monitoring output, ralph restarts it fresh. The director is self-healing.
+
+#### DIRECTOR_PROMPT.md
+
+The critical detail: **each ralph iteration starts with no memory of the previous one**. The prompt must tell the director to check for existing workers before spawning duplicates.
 
 ```markdown
 Read ORCHESTRATOR.md. You are the director.
 
-Check worker status. If no workers are running, spawn them per ORCHESTRATOR.md.
-If workers are running, monitor progress (task counts, git log, ralph status).
-If a worker is stuck (same task for 2+ iterations), intervene by editing PROMPT.md.
-If all tasks are done, output /done.
+FIRST: run `swarm ralph list` and `swarm ls` to see what's already running.
+- If workers exist and are running, monitor them. Do NOT spawn duplicates.
+- If no workers exist, spawn them per ORCHESTRATOR.md.
+- If a worker is stuck (same task for 2+ iterations in ralph logs), intervene
+  by editing PROMPT.md or IMPLEMENTATION_PLAN.md to unblock it.
+- If all tasks in IMPLEMENTATION_PLAN.md are marked [x], verify and output /done.
 
-Commit any changes to ORCHESTRATOR.md (progress notes) before exiting.
+Before exiting, commit progress notes to ORCHESTRATOR.md.
 ```
+
+**Key rules for DIRECTOR_PROMPT.md:**
+- **Always check before spawning** — `swarm ls` first, spawn only if no workers exist
+- **Keep it short** — less prompt = more context for monitoring output
+- **Commit progress** — ORCHESTRATOR.md is the director's persistent memory across iterations
+- **Output `/done`** — ralph watches for this to terminate the loop
 
 ### Step 5: Monitor the director
 
-The director is itself a swarm worker, so you can monitor it the same way:
+The director is itself a swarm worker, so you monitor it the same way you'd monitor any worker:
 
 ```bash
-# Check director status
+# Director's own ralph status (iteration count, ETA)
 swarm ralph status director
 swarm logs director
 
-# Check worker status (director manages these)
+# Workers managed by the director
 swarm ralph status dev
 swarm logs dev
 
-# Attach to director for interactive inspection
+# Heartbeat status (is the director recovering from rate limits?)
+swarm heartbeat status director
+
+# Attach to the director's tmux pane for live inspection
 swarm attach director
 ```
+
+The human's role with a fully autonomous director is minimal: check in occasionally, review commits, and intervene only if the director itself gets stuck (which ralph + heartbeat should prevent in most cases).
 
 ## Security Model
 
 ### Trust boundaries
 
 ```
-Human
+Human (minimal oversight)
  │
  │  trusts
  ▼
-Director (native sandbox)
+Director (native sandbox + ralph + heartbeat)
+ │  isolation: bubblewrap (filesystem + network)
  │  filesystem: repo + ~/.swarm/ only
  │  network: API + github only
  │  excluded: docker, tmux (host access)
+ │  self-healing: ralph restarts on context fill / crash
+ │  rate-limit recovery: heartbeat nudges every 4h
  │
  │  manages (via swarm commands)
  ▼
-Workers (Docker containers)
+Workers (Docker containers + ralph + heartbeat)
+   isolation: Docker (container boundary)
    filesystem: /workspace bind mount only
    network: iptables allowlist only
    memory: cgroup capped (8g default)
    CPU: cgroup capped (4 cores default)
    PIDs: cgroup capped (512 default)
+   self-healing: ralph restarts on context fill / crash
+   rate-limit recovery: heartbeat nudges every 4h
 ```
+
+The entire stack is self-healing. If a worker hits a rate limit, its heartbeat recovers it. If a worker's context fills up, ralph restarts it. If the director hits a rate limit, its heartbeat recovers it. If the director's context fills up, ralph restarts it. The human only needs to intervene if something is fundamentally broken (wrong plan, missing prerequisites, etc.).
 
 ### What each layer prevents
 
@@ -309,6 +360,69 @@ Workers (Docker containers)
 4. **Network domain allowlist is DNS-based**. Domain fronting on allowed domains (e.g., exfiltrating data through `github.com`) is theoretically possible. Keep the allowlist minimal.
 
 5. **bubblewrap does not restrict CPU/memory**. Unlike Docker's cgroups, bwrap only provides namespace isolation. The director can use unlimited CPU and memory. This is fine for monitoring workloads.
+
+6. **Rate limits can burn ralph iterations**. This is an important interaction between ralph and heartbeat that needs careful tuning. See the section below.
+
+### Rate limits and iteration burn
+
+When Claude hits a rate limit, the screen freezes (rate limit message displayed, no further output). Ralph's inactivity detector sees a stable screen and, after `inactivity_timeout` seconds, kills and restarts the worker. The new worker immediately hits the same rate limit. This cycle repeats, burning iterations without doing useful work, until `max_iterations` is exhausted.
+
+**Why heartbeat alone doesn't fix this**: Heartbeat sends a nudge to the worker inside the current ralph iteration. If the heartbeat fires while the worker is rate-limited, the nudge may prompt Claude to retry the API call. But if `inactivity_timeout` (e.g., 180s) is much shorter than the heartbeat interval (e.g., 4h), ralph will have already killed and restarted the worker many times before the first heartbeat fires.
+
+**Why consecutive_failures doesn't help**: Ralph's failure counter only increments on spawn failures (exceptions during worker creation), not on rate-limit-induced inactivity timeouts. Inactivity restarts are treated as normal iteration boundaries.
+
+```
+Rate limit hit
+  └── Screen freezes
+       └── 180s passes (inactivity_timeout)
+            └── Ralph kills worker, starts iteration N+1
+                 └── New worker hits same rate limit
+                      └── 180s passes
+                           └── Ralph kills worker, starts iteration N+2
+                                └── ... burns through max_iterations
+```
+
+**Mitigations (pick one or combine):**
+
+1. **Match inactivity timeout to rate limit window**: Set `--inactivity-timeout 14400` (4 hours) so ralph waits long enough for the rate limit to expire. Downside: ralph can't detect legitimately stuck workers quickly.
+
+2. **Use heartbeat with a shorter interval than the rate limit window**: Set `--heartbeat 30m` so the nudge arrives while the worker is still alive and rate-limited, prompting a retry. Combined with a longer inactivity timeout (e.g., 3600s), this gives heartbeat time to work before ralph restarts.
+
+3. **Set a high max_iterations ceiling**: If iterations are cheap (director monitoring loops), burning a few on rate limits is acceptable. Set `--max-iterations 500` and accept that some will be wasted.
+
+4. **Director monitors for rate limit burn**: If the director is autonomous, DIRECTOR_PROMPT.md can instruct it to check `swarm ralph logs dev` for rapid TIMEOUT entries and pause the worker (`swarm ralph pause dev`) until the rate limit window passes.
+
+**Recommended configuration for Claude rate limits (4-hour window):**
+
+Claude's rate limits reset on a 4-hour window, but you can exhaust your token budget anywhere within that window — sometimes as early as 2 hours in. The inactivity timeout must cover the full window, and heartbeat should nudge frequently so recovery happens promptly whenever the limit lifts.
+
+```bash
+# Director: wait out the full 4h rate limit window, nudge every 30m
+swarm ralph spawn --name director \
+    --prompt-file DIRECTOR_PROMPT.md \
+    --max-iterations 200 \
+    --inactivity-timeout 14400 \
+    --heartbeat 30m \
+    --heartbeat-expire 48h \
+    -- claude --dangerously-skip-permissions
+
+# Workers: same pattern
+swarm ralph spawn --name dev \
+    --prompt-file PROMPT.md \
+    --max-iterations 100 \
+    --inactivity-timeout 14400 \
+    --heartbeat 30m \
+    --heartbeat-expire 24h \
+    -- ./sandbox.sh --dangerously-skip-permissions
+```
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `--inactivity-timeout 14400` | 4 hours | Matches the rate limit window. Ralph won't kill a rate-limited worker prematurely |
+| `--heartbeat 30m` | 30 minutes | Token budget can be exhausted at any point in the 4h window. Frequent nudges mean at most 30 min of dead time after the limit lifts. Nudges to a working agent are ignored |
+| `--heartbeat-expire 48h` | 2 days | Director runs for the duration of an epic |
+
+**Tradeoff**: With a 4-hour inactivity timeout, ralph can't detect a legitimately stuck worker (infinite loop, hung process) for 4 hours either. This is acceptable for most workloads — a stuck worker just wastes one rate-limit-window of time before ralph restarts it. If faster stuck detection matters, use mitigation #4 above (director monitors ralph logs for rapid timeouts).
 
 ## Comparison of Sandboxing Approaches
 
