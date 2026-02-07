@@ -12,7 +12,7 @@ Usage:
     python3 memory_safe_runner.py [--memory-limit MB] [--gc-between-classes] [test_pattern ...]
 
     # Or use as a module
-    python3 -m memory_safe_runner --memory-limit 500 test_cmd_workflow
+    python3 -m memory_safe_runner --memory-limit 500 test_cmd_ralph
 
     # In code
     from memory_safe_runner import MemorySafeTestRunner, GCBetweenClassesSuite
@@ -538,7 +538,7 @@ Examples:
     python3 memory_safe_runner.py
 
     # Run specific test file with 200 MB limit
-    python3 memory_safe_runner.py --memory-limit 200 test_cmd_workflow
+    python3 memory_safe_runner.py --memory-limit 200 test_cmd_ralph
 
     # Run with strict mode (fail if limit exceeded)
     python3 memory_safe_runner.py --strict --memory-limit 300

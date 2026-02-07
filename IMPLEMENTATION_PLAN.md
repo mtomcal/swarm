@@ -1,7 +1,7 @@
 # Implementation Plan: Remove Workflow Subcommand
 
 **Created**: 2026-02-07
-**Status**: IN PROGRESS
+**Status**: COMPLETE
 **Goal**: Remove `swarm workflow` subcommand entirely. Orchestration belongs in ORCHESTRATOR.md (a markdown file), not in code.
 
 ---
@@ -83,18 +83,18 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 ### Phase 5: Update Remaining References
 
-- [ ] **5.1 Clean up SWARM_INSTRUCTIONS constant**
+- [x] **5.1 Clean up SWARM_INSTRUCTIONS constant**
   - The `SWARM_INSTRUCTIONS` template (injected by `swarm init`) likely mentions workflow
   - Remove workflow section from it
   - File: `swarm.py`
 
-- [ ] **5.2 Update cli-help-standards spec**
+- [x] **5.2 Update cli-help-standards spec**
   - Remove workflow-specific help text examples
   - File: `specs/cli-help-standards.md`
 
 ### Phase 6: Verify
 
-- [ ] **6.1 Run tests to verify nothing is broken**
+- [x] **6.1 Run tests to verify nothing is broken**
   - Run: `python3 -m unittest test_cmd_ralph -v`
   - Run: `python3 -m unittest test_cmd_spawn -v`
   - Run: `python3 -m unittest test_cmd_kill -v`
@@ -103,11 +103,11 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
   - Run any other non-workflow test files
   - Verify no import errors or missing references
 
-- [ ] **6.2 Verify clean CLI**
+- [x] **6.2 Verify clean CLI**
   - Run: `python3 swarm.py --help` -- workflow should not appear
   - Run: `python3 swarm.py workflow` -- should error cleanly (unknown command)
 
-- [ ] **6.3 Grep for stale references**
+- [x] **6.3 Grep for stale references**
   - `grep -rn 'workflow' swarm.py` -- should only find incidental uses (e.g. "workflow" in generic help text about agent workflows), not `cmd_workflow` or `WorkflowState`
   - `grep -rn 'cmd_workflow\|WorkflowState\|StageState\|WorkflowDefinition' swarm.py` -- should return 0 results
 
