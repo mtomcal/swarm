@@ -70,7 +70,7 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
   - Add/promote ORCHESTRATOR.md pattern in its place (link to `docs/autonomous-loop-guide.md`)
   - Keep it brief: the guide doc has the details
 
-- [ ] **4.2 Update CLAUDE.md**
+- [x] **4.2 Update CLAUDE.md**
   - Remove workflow references from Quick Reference, Architecture Notes, Testing Guidelines
   - Remove WorkflowState/StageState from Key Data Classes
   - Remove `test_cmd_workflow.py` and `tests/test_integration_workflow.py` from Test Files

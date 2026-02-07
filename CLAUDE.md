@@ -114,70 +114,6 @@ swarm ralph spawn --name agent --prompt-file ./PROMPT.md --heartbeat 4h -- claud
 
 State stored in `~/.swarm/heartbeats/<worker>.json`.
 
-### Workflow (Multi-Stage Pipelines)
-Workflow orchestrates sequential agent stages (plan → build → validate) defined in YAML.
-
-```bash
-# Run workflow
-swarm workflow run workflow.yaml                    # Start immediately
-swarm workflow run workflow.yaml --at "02:00"       # Schedule for 2am
-swarm workflow run workflow.yaml --in 4h            # Start in 4 hours
-
-# Monitor and control
-swarm workflow list                        # List all workflows
-swarm workflow status my-workflow          # Check progress
-swarm workflow logs my-workflow            # View logs
-swarm workflow cancel my-workflow          # Stop workflow
-swarm workflow resume my-workflow          # Resume failed workflow
-swarm workflow validate workflow.yaml      # Check YAML syntax
-```
-
-**Minimal workflow.yaml**:
-```yaml
-name: simple-task
-stages:
-  - name: work
-    type: worker
-    prompt: |
-      Complete the task in TASK.md.
-      Say /done when finished.
-    done-pattern: "/done"
-    timeout: 1h
-```
-
-**Full workflow with heartbeat**:
-```yaml
-name: feature-build
-heartbeat: 4h
-heartbeat-expire: 24h
-worktree: true
-stages:
-  - name: plan
-    type: worker
-    prompt: |
-      Read TASK.md. Create plan in PLAN.md.
-      Say /done when complete.
-    done-pattern: "/done"
-    timeout: 1h
-  - name: build
-    type: ralph
-    prompt-file: ./prompts/build.md
-    max-iterations: 50
-    on-failure: retry
-    max-retries: 2
-  - name: validate
-    type: ralph
-    prompt: |
-      Run tests and fix any failures.
-      Say /done when all tests pass.
-    max-iterations: 20
-    done-pattern: "/done"
-```
-
-**Stage types**: `worker` (single-run) or `ralph` (looping). **Failure handling**: `on-failure: stop|retry|skip`.
-
-State stored in `~/.swarm/workflows/<name>/`. Repo-local definitions in `.swarm/workflows/` are searched first.
-
 ### Ralph Mode (Autonomous Looping)
 Ralph mode enables autonomous agent looping with fresh context windows.
 
@@ -252,7 +188,7 @@ swarm kill agent --rm-worktree  # Also removes ~/.swarm/ralph/agent/
 ### Specifications (`specs/`)
 Behavioral specs in priority order (P0 = critical):
 - **P0**: `worktree-isolation.md`, `ready-detection.md`, `state-management.md`
-- **P1**: `spawn.md`, `ralph-loop.md`, `kill.md`, `send.md`, `tmux-integration.md`, `heartbeat.md`, `workflow.md`
+- **P1**: `spawn.md`, `ralph-loop.md`, `kill.md`, `send.md`, `tmux-integration.md`, `heartbeat.md`
 - **P2**: `ls.md`, `status.md`, `logs.md`, `wait.md`, `clean.md`, `respawn.md`, `interrupt-eof.md`, `attach.md`, `init.md`
 - **Supporting**: `data-structures.md`, `environment.md`, `cli-interface.md`, `cli-help-standards.md`
 
@@ -261,14 +197,12 @@ Unit tests in root directory (`test_*.py`):
 - `test_cmd_ralph.py` - Ralph mode unit tests
 - `test_cmd_spawn.py`, `test_cmd_kill.py`, `test_cmd_ls.py`, etc. - Command-specific tests
 - `test_cmd_heartbeat.py` - Heartbeat unit tests
-- `test_cmd_workflow.py` - Workflow unit tests
 - `test_state_file_locking.py` - State management tests
 - `test_ready_patterns.py` - Agent readiness detection tests
 - `test_worktree_protection.py` - Git worktree safety tests
 
 Integration tests in `tests/`:
 - `tests/test_integration_ralph.py` - Ralph integration tests (requires tmux)
-- `tests/test_integration_workflow.py` - Workflow integration tests (requires tmux)
 - `tests/test_tmux_isolation.py` - `TmuxIsolatedTestCase` base class for tmux tests
 
 ## Testing Guidelines
@@ -277,9 +211,7 @@ Integration tests in `tests/`:
 ```bash
 python3 -m unittest test_cmd_ralph -v           # Ralph unit tests
 python3 -m unittest test_cmd_heartbeat -v       # Heartbeat unit tests
-python3 -m unittest test_cmd_workflow -v        # Workflow unit tests
 python3 -m unittest tests.test_integration_ralph -v     # Ralph integration tests (requires tmux)
-python3 -m unittest tests.test_integration_workflow -v  # Workflow integration tests (requires tmux)
 python3 -m unittest test_cmd_spawn -v           # Spawn command tests
 ```
 
@@ -302,7 +234,6 @@ python3 -m unittest test_cmd_spawn -v           # Spawn command tests
 - Ralph state: `~/.swarm/ralph/<name>/state.json`
 - Ralph iteration logs: `~/.swarm/ralph/<name>/iterations.log`
 - Heartbeat state: `~/.swarm/heartbeats/<worker>.json`
-- Workflow state: `~/.swarm/workflows/<name>/state.json`
 - Worker logs: `~/.swarm/logs/`
 
 ### Key Data Classes (swarm.py)
@@ -311,11 +242,8 @@ python3 -m unittest test_cmd_spawn -v           # Spawn command tests
 - `WorktreeInfo` - Git worktree path/branch/base_repo
 - `RalphState` - Ralph loop state (iteration, status, failures, timeouts)
 - `HeartbeatState` - Heartbeat state (interval, expire_at, message, beat_count, status)
-- `WorkflowState` - Workflow state (name, status, current_stage, stages dict, timestamps)
-- `StageState` - Stage state (status, worker_name, attempts, timestamps, exit_reason)
 
 ### CLI Structure
 Commands defined in `main()` via argparse subparsers. Each command has a `cmd_<name>(args)` handler function. Nested subparsers for:
 - `swarm ralph <subcommand>` - Autonomous looping
 - `swarm heartbeat <subcommand>` - Rate limit recovery nudges
-- `swarm workflow <subcommand>` - Multi-stage pipelines
