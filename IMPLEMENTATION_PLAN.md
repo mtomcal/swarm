@@ -56,10 +56,10 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 ### Phase 3: Remove Workflow Spec
 
-- [ ] **3.1 Delete workflow spec**
+- [x] **3.1 Delete workflow spec**
   - Delete file: `specs/workflow.md`
 
-- [ ] **3.2 Update specs/README.md**
+- [x] **3.2 Update specs/README.md**
   - Remove `workflow.md` from the P1 table
   - Update any cross-references
 
