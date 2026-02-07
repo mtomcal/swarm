@@ -21,26 +21,26 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 ### Phase 1: Remove Workflow Code from swarm.py
 
-- [ ] **1.1 Remove workflow data classes**
+- [x] **1.1 Remove workflow data classes**
   - Delete: `StageState` (line ~2660), `WorkflowState` (~2698), `StageDefinition` (~2754), `WorkflowDefinition` (~2835), `WorkflowValidationError` (~2891)
   - Delete: `StageCompletionResult` (~8514), `StageTransitionResult` (~8764)
   - File: `swarm.py`
 
-- [ ] **1.2 Remove workflow helper functions**
+- [x] **1.2 Remove workflow helper functions**
   - Delete all functions between the data classes and `cmd_workflow` that are workflow-specific
   - This includes: `load_workflow_state`, `save_workflow_state`, `run_workflow_monitor`, `parse_workflow_yaml`, `validate_workflow_definition`, and any other workflow-only helpers
   - File: `swarm.py`
 
-- [ ] **1.3 Remove workflow command handlers**
+- [x] **1.3 Remove workflow command handlers**
   - Delete: `cmd_workflow`, `cmd_workflow_validate`, `cmd_workflow_status`, `cmd_workflow_list`, `cmd_workflow_cancel`, `cmd_workflow_resume`, `cmd_workflow_resume_all`, `cmd_workflow_logs`, `cmd_workflow_run`
   - File: `swarm.py`
 
-- [ ] **1.4 Remove workflow argparse subparsers**
+- [x] **1.4 Remove workflow argparse subparsers**
   - Remove the `workflow` subparser from `main()` argparse setup
   - Remove any workflow-related help text constants (e.g. `WORKFLOW_HELP_*`)
   - File: `swarm.py`
 
-- [ ] **1.5 Remove WORKFLOWS_DIR constant and any workflow imports**
+- [x] **1.5 Remove WORKFLOWS_DIR constant and any workflow imports**
   - Delete `WORKFLOWS_DIR = SWARM_DIR / "workflows"` near top of file
   - Remove any `import yaml` or yaml-related imports that are only used by workflow
   - Check if `yaml` is used elsewhere (ralph uses it too?) -- only remove if workflow-only
