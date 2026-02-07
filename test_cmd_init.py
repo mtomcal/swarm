@@ -505,6 +505,7 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         self.assertTrue(Path('setup-sandbox-network.sh').exists())
         self.assertTrue(Path('teardown-sandbox-network.sh').exists())
         self.assertTrue(Path('ORCHESTRATOR.md').exists())
+        self.assertTrue(Path('PROMPT.md').exists())
 
     def test_with_sandbox_shell_scripts_executable(self):
         """Test shell scripts are created with executable permission."""
@@ -630,7 +631,7 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         self.assertNotIn('openssh', content)
 
     def test_with_sandbox_orchestrator_content(self):
-        """Test ORCHESTRATOR.md contains monitoring commands."""
+        """Test ORCHESTRATOR.md contains monitoring commands and operational learnings."""
         args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
 
         with patch('builtins.print'):
@@ -639,6 +640,16 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         content = Path('ORCHESTRATOR.md').read_text()
         self.assertIn('swarm ralph', content)
         self.assertIn('sandbox.sh', content)
+        # Orchestrator Responsibilities section
+        self.assertIn('Orchestrator Responsibilities', content)
+        self.assertIn('Monitor progress every ~5 minutes', content)
+        # Operational Learnings section
+        self.assertIn('Operational Learnings', content)
+        self.assertIn('Docker Monitoring', content)
+        self.assertIn('Task Granularity', content)
+        self.assertIn('Done Signal', content)
+        self.assertIn('Timing Expectations', content)
+        self.assertIn('/done', content)
 
     def test_without_sandbox_no_sandbox_files(self):
         """Test regular init (without --with-sandbox) does not create sandbox files."""
@@ -651,6 +662,48 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         self.assertFalse(Path('sandbox.sh').exists())
         self.assertFalse(Path('Dockerfile.sandbox').exists())
         self.assertFalse(Path('ORCHESTRATOR.md').exists())
+
+    def test_with_sandbox_prompt_md_content(self):
+        """Test PROMPT.md contains key sandbox worker instructions."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        content = Path('PROMPT.md').read_text()
+        self.assertIn('/done', content)
+        self.assertIn('ONE', content)
+        self.assertIn('Commit and push', content)
+        self.assertIn('IMPLEMENTATION_PLAN.md', content)
+        self.assertIn('CLAUDE.md', content)
+
+    def test_with_sandbox_skips_existing_prompt_md(self):
+        """Test --with-sandbox does not overwrite existing PROMPT.md."""
+        Path('PROMPT.md').write_text('# My custom prompt\nDo something specific\n')
+
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_init(args)
+
+        # PROMPT.md should not be overwritten
+        content = Path('PROMPT.md').read_text()
+        self.assertIn('My custom prompt', content)
+        self.assertNotIn('/done', content)
+
+        # Should print skip message
+        output = ' '.join(str(call) for call in mock_print.call_args_list)
+        self.assertIn('PROMPT.md already exists', output)
+
+    def test_with_sandbox_prompt_md_not_executable(self):
+        """Test PROMPT.md is NOT executable."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        mode = Path('PROMPT.md').stat().st_mode
+        self.assertFalse(mode & 0o111, "PROMPT.md should not be executable")
 
     def test_with_sandbox_subparser_flag(self):
         """Test --with-sandbox flag is accepted by CLI parser."""

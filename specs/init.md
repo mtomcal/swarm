@@ -34,7 +34,7 @@ The `init` command initializes a project for use with swarm by adding agent inst
 **Side Effects**:
 - Creates or modifies AGENTS.md or CLAUDE.md in current directory
 - File content includes SWARM_INSTRUCTIONS constant with marker
-- With `--with-sandbox`: creates sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh, teardown-sandbox-network.sh, ORCHESTRATOR.md
+- With `--with-sandbox`: creates sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh, teardown-sandbox-network.sh, ORCHESTRATOR.md, PROMPT.md
 - Shell scripts (sandbox.sh, setup/teardown) are created with executable permission (chmod +x)
 
 **Error Conditions**:
@@ -173,6 +173,7 @@ The `SWARM_INSTRUCTIONS` constant is added, which includes:
   - setup-sandbox-network.sh created with executable permission
   - teardown-sandbox-network.sh created with executable permission
   - ORCHESTRATOR.md created
+  - PROMPT.md created
 
 ### Scenario: Init --with-sandbox skips existing sandbox files
 - **Given**: sandbox.sh already exists in current directory
@@ -206,6 +207,22 @@ The `SWARM_INSTRUCTIONS` constant is added, which includes:
   - sandbox.sh contains `exec` (replaces shell process)
   - sandbox.sh has auto-build logic for missing image
 
+### Scenario: Init --with-sandbox PROMPT.md content
+- **Given**: Current directory has no PROMPT.md
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - PROMPT.md contains `/done` signal instruction
+  - PROMPT.md contains `ONE task` instruction (one task per iteration)
+  - PROMPT.md contains `commit and push` instruction
+  - PROMPT.md references `IMPLEMENTATION_PLAN.md` and `CLAUDE.md`
+
+### Scenario: Init --with-sandbox skips existing PROMPT.md
+- **Given**: PROMPT.md already exists with custom content
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - PROMPT.md not modified
+  - Output includes: `swarm: PROMPT.md already exists, skipping`
+
 ## Sandbox Files
 
 With `--with-sandbox`, the following files are scaffolded from module-level template constants:
@@ -217,6 +234,7 @@ With `--with-sandbox`, the following files are scaffolded from module-level temp
 | setup-sandbox-network.sh | `SETUP_SANDBOX_NETWORK_TEMPLATE` | Yes | Network lockdown |
 | teardown-sandbox-network.sh | `TEARDOWN_SANDBOX_NETWORK_TEMPLATE` | Yes | Network teardown |
 | ORCHESTRATOR.md | `ORCHESTRATOR_TEMPLATE` | No | Loop monitoring template |
+| PROMPT.md | `SANDBOX_PROMPT_TEMPLATE` | No | Worker prompt for each iteration |
 
 Each file is created only if it doesn't already exist (never overwritten). This allows users to customize files without risk of `swarm init` clobbering changes.
 

@@ -79,6 +79,17 @@ IMPORTANT:
 - commit and push when you are done
 """.strip()
 
+SANDBOX_PROMPT_TEMPLATE = """Read CLAUDE.md, then read IMPLEMENTATION_PLAN.md and pick ONE incomplete task (marked with `[ ]`).
+
+IMPORTANT:
+- Do ONE task per iteration — keep changes small and focused
+- Do NOT assume anything is already done — verify by reading actual code/files
+- Run tests after changes (do NOT run `make test` if CLAUDE.md warns against it)
+- Mark the task `[x]` in IMPLEMENTATION_PLAN.md when done
+- Commit and push when done
+- If ALL tasks are already marked `[x]`, output exactly `/done` on its own line and stop
+""".lstrip()
+
 # Sandbox template files for `swarm init --with-sandbox`
 # These are generic starting points; users customize per project.
 
@@ -319,6 +330,17 @@ grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Tasks done
 grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Tasks remaining
 ```
 
+## Orchestrator Responsibilities
+
+As the orchestrator (human or Claude), you should:
+
+1. **Start the loop** with the spawn command below
+2. **Monitor progress every ~5 minutes** — check task counts, commits, and container memory
+3. **Intervene on stuck iterations** — if the same task fails across multiple iterations, investigate logs and update PROMPT.md or IMPLEMENTATION_PLAN.md to unblock the worker
+4. **Adjust resources** if OOM or timeout errors are frequent
+5. **Verify completion** — when all tasks are `[x]`, confirm tests pass and no stale references remain
+6. **Report to the user proactively** — don't wait to be asked. Summarize what changed, what's stuck, and what you're doing about it
+
 ## Start
 ```bash
 swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
@@ -326,10 +348,26 @@ swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
 ```
 
 ## Monitor
+
+Run these checks every ~5 minutes. Use `sleep 300` between checks — don't rely on background scripts.
+
 ```bash
-swarm ralph status dev
-docker stats --filter "name=sandbox-loop" --no-stream
-swarm logs dev --follow
+# Task progress
+grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Done
+grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Remaining
+
+# Recent commits
+git log --oneline -5
+
+# Container resource usage (use exact name from docker ps)
+docker ps --filter "ancestor=sandbox-loop" --format '{{.Names}}'
+docker stats <exact-container-name> --no-stream
+
+# Loop process alive?
+pgrep -f "loop.sh" || echo "loop.sh not running!"
+
+# Latest iteration log
+ls -t .loop-logs/iteration-*.log 2>/dev/null | head -1 | xargs tail -3
 ```
 
 ## Stop / Restart
@@ -351,6 +389,28 @@ MEMORY_LIMIT=12g swarm ralph spawn --name dev --replace \\
 ```bash
 swarm heartbeat start dev --interval 4h --expire 24h
 ```
+
+## Operational Learnings
+
+### Docker Monitoring
+- Use `docker ps --filter "ancestor=sandbox-loop"` to find running containers, then pass the exact name to `docker stats`
+- The `--filter` flag on `docker stats` can miss containers — use the exact container name instead
+- Typical worker memory: ~300 MiB / 8 GiB (3-4%) — well within the default limit
+- No container visible = between iterations (normal, container exited before next spawns)
+
+### Task Granularity
+- If tightly-coupled tasks cause workers to deliberate endlessly, **consolidate them** or add guidance to PROMPT.md allowing the worker to combine related tasks
+- Example: removing a class (task A) without removing functions that reference it (task B) breaks imports — the worker correctly identifies this but stalls trying to follow the plan exactly
+
+### Done Signal
+- PROMPT.md **must** instruct workers to output `/done` when all tasks are complete
+- Without this, workers keep verifying completion each iteration but never emit the stop signal, wasting iterations
+
+### Timing Expectations
+- Workers spend 5-10 min reading and reasoning before making changes — this is normal
+- Complex iterations (removing thousands of lines): 20-30 min including pre-commit hooks
+- Simple iterations (doc updates, file deletions): ~10 min
+- Budget accordingly and don't intervene too early
 
 ## Progress
 
@@ -4894,7 +4954,7 @@ def _init_sandbox_files(dry_run: bool) -> None:
     """Scaffold sandbox files for Docker-isolated autonomous loops.
 
     Creates sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh,
-    teardown-sandbox-network.sh, and ORCHESTRATOR.md if they don't exist.
+    teardown-sandbox-network.sh, ORCHESTRATOR.md, and PROMPT.md if they don't exist.
 
     Args:
         dry_run: If True, only print what would be done.
@@ -4905,6 +4965,7 @@ def _init_sandbox_files(dry_run: bool) -> None:
         ("setup-sandbox-network.sh", SETUP_SANDBOX_NETWORK_TEMPLATE, True),
         ("teardown-sandbox-network.sh", TEARDOWN_SANDBOX_NETWORK_TEMPLATE, True),
         ("ORCHESTRATOR.md", ORCHESTRATOR_TEMPLATE, False),
+        ("PROMPT.md", SANDBOX_PROMPT_TEMPLATE, False),
     ]
 
     for filename, template, make_executable in sandbox_files:
