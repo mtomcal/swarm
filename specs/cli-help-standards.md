@@ -96,7 +96,7 @@ See Also:
   swarm <related> --help
 ```
 
-### Complex Commands (ralph, workflow, heartbeat)
+### Complex Commands (ralph, heartbeat)
 
 ```
 usage: swarm <cmd> {subcommand,...} [options]
@@ -129,7 +129,7 @@ See Also:
   swarm <cmd> <sub> --help   # Detailed help for subcommand
 ```
 
-### Subcommand Help (ralph spawn, workflow run)
+### Subcommand Help (ralph spawn, heartbeat start)
 
 ```
 usage: swarm <cmd> <sub> [options] <args>
@@ -198,14 +198,6 @@ Debugging:
 | heartbeat stop | Yes | 2+ | - | - | - |
 | heartbeat list | Yes | 1+ | - | - | - |
 | heartbeat status | Yes | 2+ | - | - | - |
-| workflow | Yes | Quick Ref | - | - | - |
-| workflow run | Yes | 3+ | **Full YAML** | - | Yes |
-| workflow status | Yes | 2+ | - | - | - |
-| workflow list | Yes | 1+ | - | - | - |
-| workflow cancel | Yes | 2+ | - | **Yes** | - |
-| workflow resume | Yes | 2+ | - | - | - |
-| workflow logs | Yes | 2+ | - | - | - |
-| workflow validate | Yes | 2+ | - | - | - |
 
 ## Flag Help Text Standards
 
@@ -309,26 +301,6 @@ Pattern Format:
     "Task \d+ done"      - With regex
 ```
 
-### YAML Schema
-
-For workflow YAML, include complete schema documentation:
-
-```
-Workflow YAML Format:
-  Required Fields:
-    name: string              # Unique workflow identifier
-
-  Optional Fields:
-    description: string       # Human description
-    schedule: "HH:MM"         # Start time
-    ...
-
-  Stage Fields:
-    name: string              # Required: stage identifier
-    type: worker|ralph        # Required: stage type
-    ...
-```
-
 ## Implementation Checklist
 
 When adding or updating a command:
@@ -351,16 +323,6 @@ When adding or updating a command:
   - Agent can construct correct command from examples
   - Agent knows about worktree isolation option
   - Agent knows about ready-wait option
-
-### Scenario: Agent reads help to create workflow
-- **Given**: An AI agent needs to create a multi-stage workflow
-- **When**: Agent runs `swarm workflow run --help`
-- **Then**:
-  - Agent understands complete YAML schema
-  - Agent can write valid workflow.yaml
-  - Agent knows about scheduling options
-  - Agent knows about heartbeat configuration
-  - Agent understands stage types and options
 
 ### Scenario: Agent troubleshoots failed command
 - **Given**: An AI agent's command failed

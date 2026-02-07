@@ -75,7 +75,7 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
   - Remove WorkflowState/StageState from Key Data Classes
   - Remove `test_cmd_workflow.py` and `tests/test_integration_workflow.py` from Test Files
 
-- [ ] **4.3 Update specs that cross-reference workflow**
+- [x] **4.3 Update specs that cross-reference workflow**
   - `specs/cli-help-standards.md` - remove workflow help text examples (16 references)
   - `specs/heartbeat.md` - update cross-reference (~1 reference)
   - `specs/ralph-loop.md` - update cross-reference (~2 references)

@@ -7,7 +7,7 @@ Swarm workers require special permission handling to operate autonomously. By de
 ## Dependencies
 
 - External: Claude Code CLI (`claude`), Docker (optional for container sandboxing)
-- Internal: `spawn.md`, `ralph-loop.md`, `workflow.md`
+- Internal: `spawn.md`, `ralph-loop.md`
 
 ## Behavior
 
