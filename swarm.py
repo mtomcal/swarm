@@ -81,6 +81,286 @@ IMPORTANT:
 - commit and push when you are done
 """.strip()
 
+# Sandbox template files for `swarm init --with-sandbox`
+# These are generic starting points; users customize per project.
+
+SANDBOX_SH_TEMPLATE = r"""#!/bin/bash
+# sandbox.sh — Run Claude Code inside a sandboxed Docker container.
+# Usage: ./sandbox.sh [claude args...]
+# Example: ./sandbox.sh --dangerously-skip-permissions
+#
+# Swarm integration:
+#   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \
+#       -- ./sandbox.sh --dangerously-skip-permissions
+#
+# Git auth: Uses GH_TOKEN (GitHub CLI token) over HTTPS. No SSH keys mounted.
+#   Requires: gh auth login (once on host), repo cloned via HTTPS or remote
+#   set to HTTPS (git remote set-url origin https://github.com/user/repo.git).
+#
+# Environment overrides:
+#   SANDBOX_IMAGE=sandbox-loop    Docker image name
+#   SANDBOX_NETWORK=sandbox-net   Docker network name
+#   MEMORY_LIMIT=8g               Container memory cap
+#   CPU_LIMIT=4                   Container CPU cap
+#   PIDS_LIMIT=512                Container PID cap
+
+set -euo pipefail
+
+IMAGE="${SANDBOX_IMAGE:-sandbox-loop}"
+NETWORK="${SANDBOX_NETWORK:-sandbox-net}"
+MEMORY="${MEMORY_LIMIT:-8g}"
+CPUS="${CPU_LIMIT:-4}"
+PIDS="${PIDS_LIMIT:-512}"
+
+# Auto-build image if missing
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+    echo "Image '$IMAGE' not found — building..." >&2
+    docker build \
+        --build-arg USER_ID="$(id -u)" \
+        --build-arg GROUP_ID="$(id -g)" \
+        -t "$IMAGE" \
+        -f Dockerfile.sandbox . >&2
+fi
+
+# Resolve symlinked settings (Claude often symlinks settings.json)
+CLAUDE_SETTINGS=$(readlink -f "$HOME/.claude/settings.json" 2>/dev/null || echo "$HOME/.claude/settings.json")
+
+# Git auth via short-lived GitHub token (no SSH keys in the container).
+# Falls back to gh auth token, then GITHUB_TOKEN env var, then warns.
+GH_TOKEN="${GH_TOKEN:-}"
+if [ -z "$GH_TOKEN" ] && command -v gh &>/dev/null; then
+    GH_TOKEN=$(gh auth token 2>/dev/null || true)
+fi
+if [ -z "$GH_TOKEN" ]; then
+    echo "warning: no GH_TOKEN found. git push will fail inside the container." >&2
+    echo "  fix: run 'gh auth login' or export GH_TOKEN=ghp_..." >&2
+fi
+
+exec docker run --rm \
+    --memory="$MEMORY" \
+    --memory-swap="$MEMORY" \
+    --cpus="$CPUS" \
+    --pids-limit="$PIDS" \
+    --network="$NETWORK" \
+    -v "$(pwd):/workspace" \
+    -v "$HOME/.claude/.credentials.json:/home/loopuser/.claude/.credentials.json:ro" \
+    -v "$CLAUDE_SETTINGS:/home/loopuser/.claude/settings.json:ro" \
+    -v "$HOME/.claude/projects:/home/loopuser/.claude/projects" \
+    -e ANTHROPIC_API_KEY \
+    -e DISABLE_AUTOUPDATER=1 \
+    -e "GH_TOKEN=$GH_TOKEN" \
+    -w /workspace \
+    "$IMAGE" \
+    claude "$@"
+""".lstrip()
+
+DOCKERFILE_SANDBOX_TEMPLATE = """\
+FROM node:22-slim
+
+# Base tools required by Claude Code and git operations.
+# Add your project's toolchain below (e.g., python3, ruby, golang).
+RUN apt-get update && \\
+    apt-get install -y --no-install-recommends \\
+        git jq curl ca-certificates \\
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+# Run as non-root user matching host UID (avoids permission issues on bind mounts)
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+RUN if getent passwd $USER_ID >/dev/null; then userdel -r $(getent passwd $USER_ID | cut -d: -f1); fi && \\
+    if getent group $GROUP_ID >/dev/null; then groupdel $(getent group $GROUP_ID | cut -d: -f1) 2>/dev/null || true; fi && \\
+    groupadd -g $GROUP_ID loopuser && \\
+    useradd -m -u $USER_ID -g $GROUP_ID loopuser
+
+USER loopuser
+
+# Git auth: use GH_TOKEN env var for HTTPS pushes (no SSH keys needed).
+# This credential helper makes git use $GH_TOKEN for any github.com HTTPS request.
+RUN git config --global credential.https://github.com.helper \\
+    '!f() { echo "protocol=https"; echo "host=github.com"; echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f'
+
+WORKDIR /workspace
+ENTRYPOINT []
+CMD ["bash"]
+"""
+
+SETUP_SANDBOX_NETWORK_TEMPLATE = r"""#!/bin/bash
+# setup-sandbox-network.sh — Create Docker network with iptables allowlist.
+# Run with: sudo ./setup-sandbox-network.sh
+#
+# Allowlist: Claude API, Statsig, Sentry, GitHub, DNS.
+# Everything else from the sandbox subnet is REJECTED.
+#
+# Re-run to refresh IPs (domain IPs rotate). Rules don't survive reboot.
+
+set -euo pipefail
+
+# --- Require root ---
+if [ "$(id -u)" -ne 0 ]; then
+    echo "error: this script must be run as root (sudo ./setup-sandbox-network.sh)" >&2
+    exit 1
+fi
+
+# --- Check dependencies ---
+for cmd in docker dig curl jq iptables; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "error: '$cmd' is required but not found" >&2
+        exit 1
+    fi
+done
+
+NETWORK_NAME="sandbox-net"
+SUBNET="172.30.0.0/24"
+
+# --- Create network (idempotent) ---
+if ! docker network inspect "$NETWORK_NAME" &>/dev/null; then
+    docker network create --driver bridge --subnet "$SUBNET" "$NETWORK_NAME"
+    echo "Created network: $NETWORK_NAME ($SUBNET)"
+else
+    echo "Network $NETWORK_NAME already exists"
+fi
+
+# --- Resolve required domains ---
+resolve() {
+    local ips
+    ips=$(dig +short "$1" | grep -E '^[0-9]' | head -5)
+    if [ -z "$ips" ]; then
+        echo "warning: could not resolve $1" >&2
+    fi
+    echo "$ips"
+}
+
+ANTHROPIC_IPS=$(resolve api.anthropic.com)
+STATSIG_ANTHROPIC_IPS=$(resolve statsig.anthropic.com)
+STATSIG_IPS=$(resolve statsig.com)
+SENTRY_IPS=$(resolve sentry.io)
+
+# GitHub IP ranges from their meta API (HTTPS only — git uses GH_TOKEN, no SSH)
+GITHUB_META=$(curl -sf https://api.github.com/meta) || { echo "warning: could not fetch GitHub meta API" >&2; GITHUB_META="{}"; }
+GITHUB_WEB_CIDRS=$(echo "$GITHUB_META" | jq -r '.web[]' 2>/dev/null || true)
+GITHUB_API_CIDRS=$(echo "$GITHUB_META" | jq -r '.api[]' 2>/dev/null || true)
+
+# --- Flush existing sandbox rules ---
+iptables -S DOCKER-USER 2>/dev/null | grep "172.30.0.0/24" | while read -r rule; do
+    iptables $(echo "$rule" | sed 's/^-A/-D/')
+done
+
+# --- Default deny for sandbox subnet ---
+iptables -A DOCKER-USER -s "$SUBNET" -j REJECT --reject-with icmp-port-unreachable
+
+# --- Allow DNS (udp/53, tcp/53) ---
+iptables -I DOCKER-USER -s "$SUBNET" -p udp --dport 53 -j ACCEPT
+iptables -I DOCKER-USER -s "$SUBNET" -p tcp --dport 53 -j ACCEPT
+
+# --- Allow established/related connections ---
+iptables -I DOCKER-USER -s "$SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# --- Allow Anthropic API (HTTPS) ---
+for ip in $ANTHROPIC_IPS; do
+    iptables -I DOCKER-USER -s "$SUBNET" -d "$ip" -p tcp --dport 443 -j ACCEPT
+done
+
+# --- Allow Statsig (telemetry) ---
+for ip in $STATSIG_ANTHROPIC_IPS $STATSIG_IPS; do
+    iptables -I DOCKER-USER -s "$SUBNET" -d "$ip" -p tcp --dport 443 -j ACCEPT
+done
+
+# --- Allow Sentry (error reporting) ---
+for ip in $SENTRY_IPS; do
+    iptables -I DOCKER-USER -s "$SUBNET" -d "$ip" -p tcp --dport 443 -j ACCEPT
+done
+
+# --- Allow GitHub (HTTPS only — git auth via GH_TOKEN, no SSH needed) ---
+for cidr in $GITHUB_WEB_CIDRS $GITHUB_API_CIDRS; do
+    iptables -I DOCKER-USER -s "$SUBNET" -d "$cidr" -p tcp --dport 443 -j ACCEPT
+done
+
+echo ""
+echo "Sandbox network rules applied for $SUBNET"
+echo "Allowed: api.anthropic.com, statsig, sentry.io, github.com:443, DNS"
+echo "Everything else from $SUBNET is REJECTED"
+""".lstrip()
+
+TEARDOWN_SANDBOX_NETWORK_TEMPLATE = r"""#!/bin/bash
+# teardown-sandbox-network.sh — Remove sandbox iptables rules and Docker network.
+# Run with: sudo ./teardown-sandbox-network.sh
+
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "error: this script must be run as root (sudo ./teardown-sandbox-network.sh)" >&2
+    exit 1
+fi
+
+SUBNET="172.30.0.0/24"
+NETWORK_NAME="sandbox-net"
+
+# Remove iptables rules
+iptables -S DOCKER-USER 2>/dev/null | grep "172.30.0.0/24" | while read -r rule; do
+    iptables $(echo "$rule" | sed 's/^-A/-D/')
+done
+echo "Removed iptables rules for $SUBNET"
+
+# Remove network
+if docker network inspect "$NETWORK_NAME" &>/dev/null; then
+    docker network rm "$NETWORK_NAME"
+    echo "Removed network: $NETWORK_NAME"
+fi
+""".lstrip()
+
+ORCHESTRATOR_TEMPLATE = """\
+# Orchestrator
+
+## Quick Status
+```bash
+swarm ralph status dev
+git log --oneline -5
+grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Tasks done
+grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Tasks remaining
+```
+
+## Start
+```bash
+swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
+    -- ./sandbox.sh --dangerously-skip-permissions
+```
+
+## Monitor
+```bash
+swarm ralph status dev
+docker stats --filter "name=sandbox-loop" --no-stream
+swarm logs dev --follow
+```
+
+## Stop / Restart
+```bash
+swarm kill dev --rm-worktree
+swarm ralph spawn --name dev --replace --prompt-file PROMPT.md --max-iterations 50 \\
+    -- ./sandbox.sh --dangerously-skip-permissions
+```
+
+## OOM Recovery
+Exit 137 = container hit memory limit. Loop auto-continues.
+```bash
+MEMORY_LIMIT=12g swarm ralph spawn --name dev --replace \\
+    --prompt-file PROMPT.md --max-iterations 50 \\
+    -- ./sandbox.sh --dangerously-skip-permissions
+```
+
+## Rate Limit Recovery
+```bash
+swarm heartbeat start dev --interval 4h --expire 24h
+```
+
+## Progress
+
+| Phase | Description | Tasks |
+|-------|-------------|-------|
+| Phase 1 | TODO | 0 tasks |
+"""
+
 # CLI Help Text Constants
 # Defined at module level for testability and coverage
 
@@ -919,8 +1199,12 @@ Examples:
   # Auto-discover and initialize (recommended)
   swarm init
 
+  # Initialize with sandbox scaffolding for Docker isolation
+  swarm init --with-sandbox
+
   # Preview what would be done without making changes
   swarm init --dry-run
+  swarm init --with-sandbox --dry-run
 
   # Explicitly target CLAUDE.md
   swarm init --file CLAUDE.md
@@ -935,6 +1219,13 @@ What Gets Added:
   - Ralph mode (autonomous looping) documentation
   - Power user tips and environment variable options
 
+  With --with-sandbox, also creates:
+  - sandbox.sh              Docker wrapper for Claude (chmod +x)
+  - Dockerfile.sandbox      Container image definition
+  - setup-sandbox-network.sh    Network lockdown (chmod +x, run with sudo)
+  - teardown-sandbox-network.sh Network teardown (chmod +x, run with sudo)
+  - ORCHESTRATOR.md         Template for monitoring autonomous loops
+
 Auto-Discovery Order:
   1. If --file specified, use that file
   2. If AGENTS.md exists, append to it
@@ -945,17 +1236,25 @@ Idempotent Behavior:
   - If the marker "Process Management (swarm)" already exists in the target
     file, init reports this and exits without changes
   - Use --force to replace the existing section with the latest version
+  - Sandbox files are skipped if they already exist (never overwritten)
 
 Common Workflow:
   1. Clone a project:     git clone <repo>
-  2. Initialize swarm:    cd <repo> && swarm init
-  3. Spawn a worker:      swarm spawn --name dev --tmux --worktree -- claude
-  4. Send instructions:   swarm send dev "read AGENTS.md and start working"
+  2. Initialize swarm:    cd <repo> && swarm init --with-sandbox
+  3. Build sandbox:       docker build --build-arg USER_ID=$(id -u) \\
+                            --build-arg GROUP_ID=$(id -g) \\
+                            -t sandbox-loop -f Dockerfile.sandbox .
+  4. Network lockdown:    sudo ./setup-sandbox-network.sh
+  5. Create prompt:       swarm ralph init
+  6. Start loop:          swarm ralph spawn --name dev \\
+                            --prompt-file PROMPT.md --max-iterations 50 \\
+                            -- ./sandbox.sh --dangerously-skip-permissions
 
 See Also:
   swarm spawn --help      Create new workers
   swarm ralph --help      Autonomous agent looping
   swarm --help            Overview of all commands
+  docs/autonomous-loop-guide.md   Full guide for sandbox setup
 """
 
 RALPH_HELP_DESCRIPTION = """\
@@ -4789,6 +5088,11 @@ def main() -> None:
     init_p.add_argument("--force", action="store_true",
                         help="Replace existing swarm instructions section with latest version. "
                              "Without --force, init is idempotent and skips if marker exists.")
+    init_p.add_argument("--with-sandbox", action="store_true",
+                        help="Scaffold sandbox files for Docker-isolated autonomous loops. "
+                             "Creates: sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh, "
+                             "teardown-sandbox-network.sh, ORCHESTRATOR.md. "
+                             "See: docs/autonomous-loop-guide.md")
 
     # ralph - autonomous agent looping (Ralph Wiggum pattern)
     ralph_p = subparsers.add_parser(
@@ -6154,54 +6458,97 @@ def cmd_init(args) -> None:
             file_exists = False
 
     # Check for existing marker in the target file (or in both files for auto-discovery)
+    skip_instructions = False
     if not args.force:
         # Check target file
         if file_exists:
             existing_content = target_file.read_text()
             if marker in existing_content:
                 print(f"swarm: {target_file} already contains swarm instructions")
-                return
+                skip_instructions = True
 
         # For auto-discovery, also check CLAUDE.md even if AGENTS.md was selected
-        if not args.file:
+        if not skip_instructions and not args.file:
             for check_path in [Path("AGENTS.md"), Path("CLAUDE.md")]:
                 if check_path.exists() and check_path != target_file:
                     check_content = check_path.read_text()
                     if marker in check_content:
                         print(f"swarm: {check_path} already contains swarm instructions")
-                        return
+                        skip_instructions = True
+                        break
 
     # Handle --dry-run
     if args.dry_run:
-        if file_exists:
-            print(f"Would append swarm instructions to {target_file}")
-        else:
-            print(f"Would create {target_file} with swarm agent instructions")
+        if not skip_instructions:
+            if file_exists:
+                print(f"Would append swarm instructions to {target_file}")
+            else:
+                print(f"Would create {target_file} with swarm agent instructions")
+        if getattr(args, 'with_sandbox', False):
+            _init_sandbox_files(dry_run=True)
         return
 
     # Prepare content with SWARM_INSTRUCTIONS
-    if file_exists:
-        existing_content = target_file.read_text()
+    if not skip_instructions:
+        if file_exists:
+            existing_content = target_file.read_text()
 
-        if args.force and marker in existing_content:
-            # Replace existing section with new SWARM_INSTRUCTIONS
-            # Find the marker and remove everything after it until the next ## heading or EOF
-            import re
-            pattern = r'(## Process Management \(swarm\).*?)(?=\n## |\Z)'
-            new_content = re.sub(pattern, SWARM_INSTRUCTIONS, existing_content, flags=re.DOTALL)
-            target_file.write_text(new_content)
-            print(f"Updated swarm instructions in {target_file}")
+            if args.force and marker in existing_content:
+                # Replace existing section with new SWARM_INSTRUCTIONS
+                # Find the marker and remove everything after it until the next ## heading or EOF
+                import re
+                pattern = r'(## Process Management \(swarm\).*?)(?=\n## |\Z)'
+                new_content = re.sub(pattern, SWARM_INSTRUCTIONS, existing_content, flags=re.DOTALL)
+                target_file.write_text(new_content)
+                print(f"Updated swarm instructions in {target_file}")
+            else:
+                # Append to existing file
+                # Normalize trailing newlines: strip and add exactly two newlines
+                normalized = existing_content.rstrip('\n')
+                new_content = normalized + "\n\n" + SWARM_INSTRUCTIONS + "\n"
+                target_file.write_text(new_content)
+                print(f"Added swarm instructions to {target_file}")
         else:
-            # Append to existing file
-            # Normalize trailing newlines: strip and add exactly two newlines
-            normalized = existing_content.rstrip('\n')
-            new_content = normalized + "\n\n" + SWARM_INSTRUCTIONS + "\n"
-            target_file.write_text(new_content)
-            print(f"Added swarm instructions to {target_file}")
-    else:
-        # Create new file
-        target_file.write_text(SWARM_INSTRUCTIONS + "\n")
-        print(f"Created {target_file}")
+            # Create new file
+            target_file.write_text(SWARM_INSTRUCTIONS + "\n")
+            print(f"Created {target_file}")
+
+    # Handle --with-sandbox: scaffold sandbox files
+    if getattr(args, 'with_sandbox', False):
+        _init_sandbox_files(args.dry_run)
+
+
+def _init_sandbox_files(dry_run: bool) -> None:
+    """Scaffold sandbox files for Docker-isolated autonomous loops.
+
+    Creates sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh,
+    teardown-sandbox-network.sh, and ORCHESTRATOR.md if they don't exist.
+
+    Args:
+        dry_run: If True, only print what would be done.
+    """
+    sandbox_files = [
+        ("sandbox.sh", SANDBOX_SH_TEMPLATE, True),
+        ("Dockerfile.sandbox", DOCKERFILE_SANDBOX_TEMPLATE, False),
+        ("setup-sandbox-network.sh", SETUP_SANDBOX_NETWORK_TEMPLATE, True),
+        ("teardown-sandbox-network.sh", TEARDOWN_SANDBOX_NETWORK_TEMPLATE, True),
+        ("ORCHESTRATOR.md", ORCHESTRATOR_TEMPLATE, False),
+    ]
+
+    for filename, template, make_executable in sandbox_files:
+        path = Path(filename)
+        if path.exists():
+            print(f"swarm: {filename} already exists, skipping")
+            continue
+
+        if dry_run:
+            print(f"Would create {filename}")
+            continue
+
+        path.write_text(template)
+        if make_executable:
+            path.chmod(path.stat().st_mode | 0o755)
+        print(f"Created {filename}")
 
 
 def cmd_ralph(args) -> None:

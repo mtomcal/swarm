@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `init` command initializes a project for use with swarm by adding agent instructions to a documentation file. It supports auto-discovery of existing files (AGENTS.md or CLAUDE.md) and is idempotent (won't duplicate instructions).
+The `init` command initializes a project for use with swarm by adding agent instructions to a documentation file. It supports auto-discovery of existing files (AGENTS.md or CLAUDE.md) and is idempotent (won't duplicate instructions). With `--with-sandbox`, it also scaffolds files for Docker-isolated autonomous loops.
 
 ## Dependencies
 
@@ -19,6 +19,7 @@ The `init` command initializes a project for use with swarm by adding agent inst
 - `--dry-run` (flag, optional): Show what would be done without making changes
 - `--file` (string, optional): Target file, choices: "AGENTS.md" or "CLAUDE.md" (default: auto-detect)
 - `--force` (flag, optional): Replace existing swarm section if present
+- `--with-sandbox` (flag, optional): Also scaffold sandbox files for Docker-isolated loops
 
 **Outputs**:
 - Success (new file): `Created <filename>`
@@ -26,10 +27,15 @@ The `init` command initializes a project for use with swarm by adding agent inst
 - Success (force update): `Updated swarm instructions in <filename>`
 - Idempotent (already exists): `swarm: <filename> already contains swarm instructions`
 - Dry run: `Would create <filename>` or `Would append swarm instructions to <filename>`
+- Sandbox file created: `Created sandbox.sh` (etc.)
+- Sandbox file exists: `swarm: sandbox.sh already exists, skipping`
+- Sandbox dry run: `Would create sandbox.sh`
 
 **Side Effects**:
 - Creates or modifies AGENTS.md or CLAUDE.md in current directory
 - File content includes SWARM_INSTRUCTIONS constant with marker
+- With `--with-sandbox`: creates sandbox.sh, Dockerfile.sandbox, setup-sandbox-network.sh, teardown-sandbox-network.sh, ORCHESTRATOR.md
+- Shell scripts (sandbox.sh, setup/teardown) are created with executable permission (chmod +x)
 
 **Error Conditions**:
 
@@ -156,6 +162,63 @@ The `SWARM_INSTRUCTIONS` constant is added, which includes:
 - **Then**:
   - Trailing newlines normalized
   - Single blank line before swarm instructions
+
+### Scenario: Init --with-sandbox creates all sandbox files
+- **Given**: Current directory has no sandbox files
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - AGENTS.md created with swarm instructions
+  - sandbox.sh created with executable permission
+  - Dockerfile.sandbox created
+  - setup-sandbox-network.sh created with executable permission
+  - teardown-sandbox-network.sh created with executable permission
+  - ORCHESTRATOR.md created
+
+### Scenario: Init --with-sandbox skips existing sandbox files
+- **Given**: sandbox.sh already exists in current directory
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - sandbox.sh not modified
+  - Output includes: `swarm: sandbox.sh already exists, skipping`
+  - Other missing sandbox files still created
+
+### Scenario: Init --with-sandbox works when instructions already exist
+- **Given**: AGENTS.md already contains swarm instructions marker
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - AGENTS.md not modified (marker detected)
+  - Output: `swarm: AGENTS.md already contains swarm instructions`
+  - Sandbox files still created (sandbox scaffolding is independent)
+
+### Scenario: Init --with-sandbox --dry-run previews sandbox files
+- **Given**: Current directory has no files
+- **When**: `swarm init --with-sandbox --dry-run` is executed
+- **Then**:
+  - No files created
+  - Output includes: `Would create sandbox.sh`, `Would create Dockerfile.sandbox`, etc.
+
+### Scenario: Init --with-sandbox sandbox.sh content
+- **Given**: Current directory has no sandbox.sh
+- **When**: `swarm init --with-sandbox` is executed
+- **Then**:
+  - sandbox.sh contains `docker run` command
+  - sandbox.sh contains `--memory` and `--network` flags
+  - sandbox.sh contains `exec` (replaces shell process)
+  - sandbox.sh has auto-build logic for missing image
+
+## Sandbox Files
+
+With `--with-sandbox`, the following files are scaffolded from module-level template constants:
+
+| File | Template Constant | Executable | Purpose |
+|------|-------------------|------------|---------|
+| sandbox.sh | `SANDBOX_SH_TEMPLATE` | Yes | Docker wrapper for Claude |
+| Dockerfile.sandbox | `DOCKERFILE_SANDBOX_TEMPLATE` | No | Container image |
+| setup-sandbox-network.sh | `SETUP_SANDBOX_NETWORK_TEMPLATE` | Yes | Network lockdown |
+| teardown-sandbox-network.sh | `TEARDOWN_SANDBOX_NETWORK_TEMPLATE` | Yes | Network teardown |
+| ORCHESTRATOR.md | `ORCHESTRATOR_TEMPLATE` | No | Loop monitoring template |
+
+Each file is created only if it doesn't already exist (never overwritten). This allows users to customize files without risk of `swarm init` clobbering changes.
 
 ## Edge Cases
 

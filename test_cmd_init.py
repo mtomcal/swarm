@@ -477,5 +477,192 @@ swarm.cmd_init(args)
         self.assertFalse(Path('AGENTS.md').exists())
 
 
+class TestCmdInitWithSandbox(unittest.TestCase):
+    """Test --with-sandbox flag for sandbox file scaffolding."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_with_sandbox_creates_all_files(self):
+        """Test --with-sandbox creates all sandbox files."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        self.assertTrue(Path('AGENTS.md').exists())
+        self.assertTrue(Path('sandbox.sh').exists())
+        self.assertTrue(Path('Dockerfile.sandbox').exists())
+        self.assertTrue(Path('setup-sandbox-network.sh').exists())
+        self.assertTrue(Path('teardown-sandbox-network.sh').exists())
+        self.assertTrue(Path('ORCHESTRATOR.md').exists())
+
+    def test_with_sandbox_shell_scripts_executable(self):
+        """Test shell scripts are created with executable permission."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        for script in ['sandbox.sh', 'setup-sandbox-network.sh', 'teardown-sandbox-network.sh']:
+            mode = Path(script).stat().st_mode
+            self.assertTrue(mode & 0o111, f"{script} should be executable")
+
+    def test_with_sandbox_dockerfile_not_executable(self):
+        """Test Dockerfile.sandbox is NOT executable."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        mode = Path('Dockerfile.sandbox').stat().st_mode
+        self.assertFalse(mode & 0o111, "Dockerfile.sandbox should not be executable")
+
+    def test_with_sandbox_skips_existing_files(self):
+        """Test --with-sandbox skips files that already exist."""
+        Path('sandbox.sh').write_text('#!/bin/bash\n# custom sandbox\n')
+
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_init(args)
+
+        # sandbox.sh should not be overwritten
+        content = Path('sandbox.sh').read_text()
+        self.assertIn('# custom sandbox', content)
+
+        # Other files should still be created
+        self.assertTrue(Path('Dockerfile.sandbox').exists())
+        self.assertTrue(Path('ORCHESTRATOR.md').exists())
+
+        # Should print skip message
+        output = ' '.join(str(call) for call in mock_print.call_args_list)
+        self.assertIn('sandbox.sh already exists', output)
+
+    def test_with_sandbox_works_when_instructions_exist(self):
+        """Test --with-sandbox creates sandbox files even when swarm instructions already exist."""
+        Path('AGENTS.md').write_text('# Project\n\n## Process Management (swarm)\nExisting')
+
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_init(args)
+
+        # AGENTS.md should not be modified
+        content = Path('AGENTS.md').read_text()
+        self.assertIn('Existing', content)
+
+        # But sandbox files should be created
+        self.assertTrue(Path('sandbox.sh').exists())
+        self.assertTrue(Path('Dockerfile.sandbox').exists())
+
+        # Should see both messages
+        output = ' '.join(str(call) for call in mock_print.call_args_list)
+        self.assertIn('already contains swarm instructions', output)
+        self.assertIn('Created sandbox.sh', output)
+
+    def test_with_sandbox_dry_run(self):
+        """Test --with-sandbox --dry-run previews sandbox files without creating them."""
+        args = Namespace(dry_run=True, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_init(args)
+
+        # No files should be created
+        self.assertFalse(Path('sandbox.sh').exists())
+        self.assertFalse(Path('Dockerfile.sandbox').exists())
+        self.assertFalse(Path('AGENTS.md').exists())
+
+        # Should print "Would create" messages
+        output = ' '.join(str(call) for call in mock_print.call_args_list)
+        self.assertIn('Would create sandbox.sh', output)
+        self.assertIn('Would create Dockerfile.sandbox', output)
+
+    def test_with_sandbox_sandbox_sh_content(self):
+        """Test sandbox.sh contains expected Docker run command."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        content = Path('sandbox.sh').read_text()
+        self.assertIn('docker run --rm', content)
+        self.assertIn('--memory=', content)
+        self.assertIn('--network=', content)
+        self.assertIn('exec docker run', content)
+        self.assertIn('claude "$@"', content)
+        # Verify granular mounts (not whole .claude directory)
+        self.assertIn('.credentials.json', content)
+        self.assertIn('settings.json', content)
+        self.assertIn(':ro', content)
+        self.assertNotIn('-v "$HOME/.claude:/home/loopuser/.claude"', content)
+        # Verify GH_TOKEN auth (no SSH keys)
+        self.assertIn('GH_TOKEN', content)
+        self.assertIn('gh auth token', content)
+        self.assertNotIn('.ssh', content)
+        self.assertNotIn('SSH_MOUNTS', content)
+        self.assertNotIn('gitconfig', content)
+
+    def test_with_sandbox_dockerfile_content(self):
+        """Test Dockerfile.sandbox contains expected base image and tools."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        content = Path('Dockerfile.sandbox').read_text()
+        self.assertIn('FROM node:22-slim', content)
+        self.assertIn('claude-code', content)
+        self.assertIn('git', content)
+        self.assertIn('loopuser', content)
+        # Verify git credential helper for GH_TOKEN (no SSH)
+        self.assertIn('credential', content)
+        self.assertIn('GH_TOKEN', content)
+        self.assertNotIn('openssh', content)
+
+    def test_with_sandbox_orchestrator_content(self):
+        """Test ORCHESTRATOR.md contains monitoring commands."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=True)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        content = Path('ORCHESTRATOR.md').read_text()
+        self.assertIn('swarm ralph', content)
+        self.assertIn('sandbox.sh', content)
+
+    def test_without_sandbox_no_sandbox_files(self):
+        """Test regular init (without --with-sandbox) does not create sandbox files."""
+        args = Namespace(dry_run=False, file=None, force=False, with_sandbox=False)
+
+        with patch('builtins.print'):
+            swarm.cmd_init(args)
+
+        self.assertTrue(Path('AGENTS.md').exists())
+        self.assertFalse(Path('sandbox.sh').exists())
+        self.assertFalse(Path('Dockerfile.sandbox').exists())
+        self.assertFalse(Path('ORCHESTRATOR.md').exists())
+
+    def test_with_sandbox_subparser_flag(self):
+        """Test --with-sandbox flag is accepted by CLI parser."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'init', '--with-sandbox', '--help'],
+            capture_output=True,
+            text=True,
+            cwd=self.original_cwd
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--with-sandbox', result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
