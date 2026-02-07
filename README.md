@@ -19,7 +19,7 @@ When working with AI coding agents like Claude Code, you're limited to one conve
 1. **Batch processing issues** — Spawn one agent per bug/feature from your issue tracker
 2. **Parallel code review** — Multiple agents review the same PR for security, performance, style
 3. **Long-running tasks** — Let agents work overnight with Ralph's autonomous looping
-4. **CI/CD integration** — Trigger agent workflows from pipelines
+4. **CI/CD integration** — Trigger agent pipelines from scripts
 
 ## Quick Start
 
@@ -103,7 +103,7 @@ swarm logs -f agent1         # Follow output in real-time
 
 Workers persist across SSH disconnects. Reattach anytime with `swarm attach`.
 
-## Workflows
+## Usage Patterns
 
 ### Parallel Task Processing
 
@@ -172,7 +172,6 @@ swarm ls --tag team-a            # List only team-a workers
 |-------|-------------|-------------|
 | `ralph` | Autonomous looping | `spawn` `run` `init` `status` `pause` `resume` `list` |
 | `heartbeat` | Rate limit recovery | `start` `stop` `list` `status` `pause` `resume` |
-| `workflow` | Multi-stage pipelines | `run` `status` `list` `cancel` `resume` `logs` `validate` |
 
 ## Ralph Mode (Autonomous Looping)
 
@@ -272,117 +271,11 @@ swarm heartbeat resume agent   # Resume
 swarm heartbeat stop agent     # Stop permanently
 ```
 
-## Workflow (Multi-Stage Pipelines)
+## Orchestration via ORCHESTRATOR.md
 
-Workflow orchestrates sequential agent stages defined in YAML. Perfect for complex tasks like "plan → build → validate" that need to run unattended overnight.
+For multi-stage tasks (plan → build → validate), use an **ORCHESTRATOR.md** document instead of code-level pipeline orchestration. A human or director agent reads the document and composes existing swarm primitives (`ralph`, `spawn`, `send`, `heartbeat`) in real-time.
 
-### Minimal Example
-
-```yaml
-# simple-task.yaml
-name: simple-task
-stages:
-  - name: work
-    type: worker
-    prompt: |
-      Complete the task in TASK.md.
-      Say /done when finished.
-    done-pattern: "/done"
-    timeout: 1h
-```
-
-```bash
-swarm workflow run simple-task.yaml
-swarm workflow status simple-task
-```
-
-### Full Example with Multiple Stages
-
-```yaml
-# build-feature.yaml
-name: feature-build
-description: Plan, build, and validate a feature
-heartbeat: 4h              # Nudge agents every 4h for rate limits
-heartbeat-expire: 24h
-worktree: true             # Each stage in isolated worktree
-
-stages:
-  - name: plan
-    type: worker           # Single-run agent
-    prompt: |
-      Read TASK.md. Create implementation plan in PLAN.md.
-      Say /done when the plan is complete.
-    done-pattern: "/done"
-    timeout: 1h
-
-  - name: build
-    type: ralph            # Looping agent (for longer work)
-    prompt-file: ./prompts/build.md
-    max-iterations: 50
-    done-pattern: "ALL TASKS COMPLETE"
-    on-failure: retry
-    max-retries: 2
-
-  - name: validate
-    type: ralph
-    prompt: |
-      Run tests: python -m pytest
-      Fix any failures. Say /done when all tests pass.
-    max-iterations: 20
-    done-pattern: "/done"
-```
-
-### Running Workflows
-
-```bash
-# Run immediately
-swarm workflow run build-feature.yaml
-
-# Schedule for 2am tonight
-swarm workflow run build-feature.yaml --at "02:00"
-
-# Run in 4 hours
-swarm workflow run build-feature.yaml --in 4h
-
-# Monitor progress
-swarm workflow status feature-build
-swarm workflow logs feature-build
-
-# Control
-swarm workflow cancel feature-build   # Stop the workflow
-swarm workflow resume feature-build   # Resume failed workflow
-```
-
-### Stage Types
-
-| Type | Description | Use Case |
-|------|-------------|----------|
-| `worker` | Single-run agent | Planning, review, one-shot tasks |
-| `ralph` | Looping agent | Implementation, multi-step work |
-
-### Failure Handling
-
-```yaml
-on-failure: stop     # Stop workflow (default)
-on-failure: retry    # Retry up to max-retries times
-on-failure: skip     # Skip stage, continue to next
-```
-
-### Director Pattern (Agent-in-the-Loop)
-
-For workflows that need monitoring, spawn a separate "director" agent instead of building orchestration into the workflow:
-
-```bash
-# Start workflow in background
-swarm workflow run build.yaml &
-
-# Spawn director to monitor and intervene
-swarm spawn --name director --tmux -- claude --dangerously-skip-permissions
-swarm send director "Monitor workflow 'feature-build'. Check status every 10 min.
-If a stage is stuck, intervene with 'swarm send feature-build-<stage> guidance'."
-```
-
-The director uses existing commands (`workflow status`, `send`, `attach`) to observe and control the workflow. This keeps the workflow system simple while enabling sophisticated orchestration through agent prompts.
+This approach is simpler, more flexible, and follows Unix philosophy: keep primitives simple, compose via documents. See [`docs/autonomous-loop-guide.md`](docs/autonomous-loop-guide.md) for a full guide.
 
 ## Integration Examples
 
@@ -451,12 +344,8 @@ All state is stored in `~/.swarm/`:
 │   └── <worker>/
 │       ├── state.json                # Loop state (iteration, status)
 │       └── iterations.log            # Timestamped iteration history
-├── heartbeats/
-│   └── <worker>.json                 # Heartbeat state (interval, beats sent)
-└── workflows/
-    └── <workflow>/
-        ├── state.json                # Workflow state (stages, progress)
-        └── logs/                     # Per-stage logs
+└── heartbeats/
+    └── <worker>.json                 # Heartbeat state (interval, beats sent)
 ```
 
 Useful debugging commands:
@@ -466,7 +355,6 @@ cat ~/.swarm/state.json | jq .                     # View all workers
 swarm logs worker1                                  # Tmux scrollback
 tail -f ~/.swarm/ralph/agent/iterations.log         # Watch Ralph progress
 swarm heartbeat list                                # Check heartbeat status
-swarm workflow status my-workflow                   # Check workflow progress
 ```
 
 ## Security Considerations
@@ -572,11 +460,6 @@ sudo dnf install -y tmux git python3
 - Check `~/.swarm/ralph/<name>/state.json` for failure count
 - View iteration history: `cat ~/.swarm/ralph/<name>/iterations.log`
 - 5 consecutive failures trigger automatic stop
-
-**Workflow stage stuck**
-- Check status: `swarm workflow status <name>`
-- Attach to stage: `swarm attach <workflow>-<stage>`
-- Intervene: `swarm send <workflow>-<stage> "guidance message"`
 
 **Heartbeat not sending**
 - Check status: `swarm heartbeat status <worker>`

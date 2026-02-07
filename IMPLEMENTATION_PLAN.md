@@ -65,7 +65,7 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 ### Phase 4: Update Documentation
 
-- [ ] **4.1 Update README.md**
+- [x] **4.1 Update README.md**
   - Remove workflow section and all `swarm workflow` examples
   - Add/promote ORCHESTRATOR.md pattern in its place (link to `docs/autonomous-loop-guide.md`)
   - Keep it brief: the guide doc has the details
