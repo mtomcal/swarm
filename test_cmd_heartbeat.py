@@ -1173,6 +1173,112 @@ class TestRunHeartbeatMonitor(unittest.TestCase):
 
         mock_tmux_send.assert_called_once()
 
+    @patch('swarm.tmux_capture_pane')
+    @patch('swarm.tmux_send')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.State')
+    @patch('swarm.time.monotonic')
+    @patch('swarm.time.sleep')
+    def test_monitor_skips_beat_when_message_pending(self, mock_sleep, mock_monotonic, mock_state_cls, mock_refresh, mock_tmux_send, mock_capture):
+        """Test monitor skips beat when previous message is still in tmux pane."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            beat_count=0,
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_worker = MagicMock()
+        mock_worker.tmux.session = 'session'
+        mock_worker.tmux.window = 'window'
+        mock_worker.tmux.socket = None
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+
+        # Pane shows the heartbeat message still pending on last line
+        mock_capture.return_value = "some output\n$ continue\n"
+
+        # Simulate time progression past interval, then time for reset after skip
+        mock_monotonic.side_effect = [0, 100, 100]
+
+        call_count = [0]
+        def sleep_and_stop(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                loaded = swarm.load_heartbeat_state('builder')
+                loaded.status = 'stopped'
+                swarm.save_heartbeat_state(loaded)
+
+        mock_sleep.side_effect = sleep_and_stop
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # tmux_send should NOT have been called — beat was skipped
+        mock_tmux_send.assert_not_called()
+
+        # beat_count should remain 0
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.beat_count, 0)
+
+    @patch('swarm.tmux_capture_pane')
+    @patch('swarm.tmux_send')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.State')
+    @patch('swarm.time.monotonic')
+    @patch('swarm.time.sleep')
+    def test_monitor_sends_beat_when_message_not_pending(self, mock_sleep, mock_monotonic, mock_state_cls, mock_refresh, mock_tmux_send, mock_capture):
+        """Test monitor sends beat normally when previous message is not in pane."""
+        state = swarm.HeartbeatState(
+            worker_name='builder',
+            interval_seconds=60,
+            message='continue',
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status='active',
+            beat_count=0,
+        )
+        swarm.save_heartbeat_state(state)
+
+        mock_worker = MagicMock()
+        mock_worker.tmux.session = 'session'
+        mock_worker.tmux.window = 'window'
+        mock_worker.tmux.socket = None
+        mock_state = MagicMock()
+        mock_state.get_worker.return_value = mock_worker
+        mock_state_cls.return_value = mock_state
+        mock_refresh.return_value = 'running'
+
+        # Pane does NOT contain the heartbeat message
+        mock_capture.return_value = "some output\n$ \n"
+
+        # Simulate time progression past interval, then time for reset after send
+        mock_monotonic.side_effect = [0, 100, 100]
+
+        call_count = [0]
+        def sleep_and_stop(seconds):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                loaded = swarm.load_heartbeat_state('builder')
+                loaded.status = 'stopped'
+                swarm.save_heartbeat_state(loaded)
+
+        mock_sleep.side_effect = sleep_and_stop
+
+        swarm.run_heartbeat_monitor('builder')
+
+        # tmux_send SHOULD have been called
+        mock_tmux_send.assert_called_once_with(
+            'session', 'window', 'continue', enter=True, socket=None
+        )
+
+        # beat_count should be incremented
+        updated = swarm.load_heartbeat_state('builder')
+        self.assertEqual(updated.beat_count, 1)
+
 
 class TestMonitorBeatCountAndLastBeatAt(unittest.TestCase):
     """Test that beat_count and last_beat_at are updated after beat is sent."""

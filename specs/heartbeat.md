@@ -267,6 +267,7 @@ Safety:
 
 ## Edge Cases
 
+- **Previous beat unconsumed**: Before sending, the monitor captures the tmux pane and checks if the heartbeat message appears in the last non-empty line. If found, the beat is skipped and the interval timer resets, preventing stacked messages (e.g., `continuecontinue`).
 - **Worker exits between beats**: Heartbeat detects worker not running, sets status to "stopped"
 - **Multiple heartbeats for same worker**: Rejected unless `--force` used
 - **Very short interval**: Allowed but warned (< 1 minute shows warning)

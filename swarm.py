@@ -2231,6 +2231,22 @@ def run_heartbeat_monitor(worker_name: str) -> None:
         # Check if it's time to send a beat
         elapsed = time.monotonic() - last_beat_monotonic
         if elapsed >= heartbeat_state.interval_seconds:
+            # Check if previous message is still pending in pane
+            try:
+                pane_content = tmux_capture_pane(
+                    worker.tmux.session,
+                    worker.tmux.window,
+                    socket=worker.tmux.socket
+                )
+                lines = [l for l in pane_content.rstrip().split('\n') if l.strip()]
+                last_line = lines[-1] if lines else ""
+                if heartbeat_state.message in last_line:
+                    # Previous beat unconsumed, skip this one
+                    last_beat_monotonic = time.monotonic()
+                    continue
+            except Exception:
+                pass  # If capture fails, proceed with send
+
             # Time to send a beat
             try:
                 tmux_send(
