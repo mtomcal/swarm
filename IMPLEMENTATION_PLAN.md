@@ -48,10 +48,10 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 ### Phase 2: Remove Workflow Tests
 
-- [ ] **2.1 Delete workflow unit tests**
+- [x] **2.1 Delete workflow unit tests**
   - Delete file: `test_cmd_workflow.py`
 
-- [ ] **2.2 Delete workflow integration tests**
+- [x] **2.2 Delete workflow integration tests**
   - Delete file: `tests/test_integration_workflow.py`
 
 ### Phase 3: Remove Workflow Spec
