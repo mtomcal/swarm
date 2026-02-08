@@ -322,6 +322,19 @@ When a container hits the memory limit:
 
 This is the primary reason to use sandboxed execution for unattended runs.
 
+## Alternative: Beads Task Queue
+
+Instead of using `IMPLEMENTATION_PLAN.md` as a flat checklist, you can use [beads](https://github.com/your-org/beads) as a structured task queue with dependency tracking, priority ordering, and automatic expansion of each task into implementation, code review, and test review phases.
+
+See [Beads + Ralph Task Queue](beads-ralph-queue.md) for the full guide. The key difference:
+
+| | IMPLEMENTATION_PLAN.md | Beads queue |
+|---|---|---|
+| Task store | Markdown checklist in git | Beads database (JSONL in git) |
+| Dependencies | None (flat list) | Blocking deps between tasks |
+| Review cycle | None | Auto-expands to implement → review → test review |
+| Priority | Worker picks subjectively | `bd ready` returns highest priority unblocked task |
+
 ## Adapting to Your Project
 
 1. **Toolchain**: Edit `Dockerfile.sandbox` to add your language runtime
