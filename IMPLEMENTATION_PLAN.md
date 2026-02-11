@@ -31,12 +31,12 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
 
 ### Phase 2: `ralph clean` Command
 
-- [ ] **2.1 Add `clean` subparser under ralph subparsers**
+- [x] **2.1 Add `clean` subparser under ralph subparsers**
   - Positional `name` (optional), `--all` flag
   - Validate: one of `name` or `--all` required
   - File: `swarm.py` (in `main()` argparse setup)
 
-- [ ] **2.2 Implement `cmd_ralph_clean(args)` function**
+- [x] **2.2 Implement `cmd_ralph_clean(args)` function**
   - If `name`: remove `~/.swarm/ralph/<name>/` directory
   - If `--all`: iterate `~/.swarm/ralph/*/` and remove each
   - Check if worker still running → print warning
@@ -45,11 +45,11 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
   - Output: "cleaned ralph state for <name>"
   - File: `swarm.py`
 
-- [ ] **2.3 Add dispatch in `cmd_ralph()`**
+- [x] **2.3 Add dispatch in `cmd_ralph()`**
   - Add `"clean"` case in `cmd_ralph()` that calls `cmd_ralph_clean(args)`
   - File: `swarm.py`
 
-- [ ] **2.4 Add unit tests for `ralph clean`**
+- [x] **2.4 Add unit tests for `ralph clean`**
   - Test: clean specific worker removes state dir
   - Test: clean specific worker prints warning if worker still running
   - Test: clean non-existent worker → exit 1 with error message

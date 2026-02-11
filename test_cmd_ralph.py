@@ -9978,5 +9978,293 @@ class TestRalphLsCLI(unittest.TestCase):
         self.assertEqual(ls_output, list_output)
 
 
+class TestRalphCleanSubparser(unittest.TestCase):
+    """Test that ralph clean subparser is correctly configured."""
+
+    def test_ralph_clean_subcommand_exists(self):
+        """Test that 'ralph clean' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'clean', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('name', result.stdout.lower())
+        self.assertIn('--all', result.stdout)
+
+    def test_ralph_clean_accepts_name(self):
+        """Test that ralph clean accepts a positional name argument."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'clean', 'agent', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_ralph_clean_accepts_all_flag(self):
+        """Test that ralph clean accepts --all flag."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'clean', '--all', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+
+class TestCmdRalphClean(unittest.TestCase):
+    """Test cmd_ralph_clean function."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.old_ralph_dir = swarm.RALPH_DIR
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        self.old_state_file = swarm.STATE_FILE
+        self.old_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        swarm.RALPH_DIR = self.old_ralph_dir
+        swarm.STATE_FILE = self.old_state_file
+        swarm.STATE_LOCK_FILE = self.old_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_clean_specific_worker_removes_state_dir(self):
+        """Test: clean specific worker removes state dir."""
+        # Create ralph state for worker
+        ralph_state = swarm.RalphState(
+            worker_name='agent',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='stopped',
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        state_dir = swarm.RALPH_DIR / 'agent'
+        self.assertTrue(state_dir.exists())
+
+        args = Namespace(name='agent', all=False)
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            swarm.cmd_ralph_clean(args)
+
+        self.assertFalse(state_dir.exists())
+
+    def test_clean_specific_worker_prints_warning_if_running(self):
+        """Test: clean specific worker prints warning if worker still running."""
+        ralph_state = swarm.RalphState(
+            worker_name='agent',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running',
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create a fake worker in swarm state
+        state = swarm.State()
+        worker = swarm.Worker(name='agent', status='running', cmd=['claude'],
+                                  started='2024-01-15T10:30:00', cwd='/tmp')
+        state.add_worker(worker)
+
+        args = Namespace(name='agent', all=False)
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('sys.stderr') as mock_stderr:
+                swarm.cmd_ralph_clean(args)
+
+        # Check warning was printed to stderr
+        stderr_output = ''.join(str(call) for call in mock_stderr.write.call_args_list)
+        self.assertIn("warning", stderr_output)
+        self.assertIn("still running", stderr_output)
+
+        # State dir should still be removed
+        state_dir = swarm.RALPH_DIR / 'agent'
+        self.assertFalse(state_dir.exists())
+
+    def test_clean_nonexistent_worker_exits_1(self):
+        """Test: clean non-existent worker → exit 1 with error message."""
+        args = Namespace(name='nonexistent', all=False)
+
+        with self.assertRaises(SystemExit) as cm:
+            with patch('sys.stderr') as mock_stderr:
+                swarm.cmd_ralph_clean(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_clean_all_removes_all_ralph_state_dirs(self):
+        """Test: --all removes all ralph state dirs."""
+        # Create ralph state for two workers
+        for name in ['agent', 'builder']:
+            ralph_state = swarm.RalphState(
+                worker_name=name,
+                prompt_file='/path/to/prompt.md',
+                max_iterations=10,
+                current_iteration=3,
+                status='stopped',
+            )
+            swarm.save_ralph_state(ralph_state)
+
+        self.assertTrue((swarm.RALPH_DIR / 'agent').exists())
+        self.assertTrue((swarm.RALPH_DIR / 'builder').exists())
+
+        args = Namespace(name=None, all=True)
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            swarm.cmd_ralph_clean(args)
+
+        self.assertFalse((swarm.RALPH_DIR / 'agent').exists())
+        self.assertFalse((swarm.RALPH_DIR / 'builder').exists())
+
+    def test_clean_all_with_no_ralph_state_is_noop(self):
+        """Test: --all with no ralph state → no-op, exit 0."""
+        # RALPH_DIR exists but is empty
+        args = Namespace(name=None, all=True)
+
+        # Should not raise any exception
+        swarm.cmd_ralph_clean(args)
+
+    def test_clean_all_with_no_ralph_dir_is_noop(self):
+        """Test: --all with no ralph dir → no-op, exit 0."""
+        # Remove RALPH_DIR entirely
+        shutil.rmtree(swarm.RALPH_DIR)
+
+        args = Namespace(name=None, all=True)
+
+        # Should not raise any exception
+        swarm.cmd_ralph_clean(args)
+
+    def test_clean_neither_name_nor_all_exits_1(self):
+        """Test: neither name nor --all → error."""
+        args = Namespace(name=None, all=False)
+
+        with self.assertRaises(SystemExit) as cm:
+            swarm.cmd_ralph_clean(args)
+
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_clean_all_prints_cleaned_message_for_each(self):
+        """Test: --all prints cleaned message for each worker."""
+        for name in ['agent', 'builder']:
+            ralph_state = swarm.RalphState(
+                worker_name=name,
+                prompt_file='/path/to/prompt.md',
+                max_iterations=10,
+                current_iteration=3,
+                status='stopped',
+            )
+            swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name=None, all=True)
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('builtins.print') as mock_print:
+                swarm.cmd_ralph_clean(args)
+
+        calls = [str(call) for call in mock_print.call_args_list]
+        output = '\n'.join(calls)
+        self.assertIn('cleaned ralph state for agent', output)
+        self.assertIn('cleaned ralph state for builder', output)
+
+    def test_clean_specific_worker_prints_cleaned_message(self):
+        """Test: clean specific worker prints cleaned message."""
+        ralph_state = swarm.RalphState(
+            worker_name='agent',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='stopped',
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='agent', all=False)
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('builtins.print') as mock_print:
+                swarm.cmd_ralph_clean(args)
+
+        mock_print.assert_called_with('cleaned ralph state for agent')
+
+    def test_clean_all_warns_for_running_workers(self):
+        """Test: --all prints warning for running workers but still cleans them."""
+        ralph_state = swarm.RalphState(
+            worker_name='agent',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            current_iteration=3,
+            status='running',
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Create a fake worker in swarm state
+        state = swarm.State()
+        worker = swarm.Worker(name='agent', status='running', cmd=['claude'],
+                                  started='2024-01-15T10:30:00', cwd='/tmp')
+        state.add_worker(worker)
+
+        args = Namespace(name=None, all=True)
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('sys.stderr') as mock_stderr:
+                swarm.cmd_ralph_clean(args)
+
+        stderr_output = ''.join(str(call) for call in mock_stderr.write.call_args_list)
+        self.assertIn("warning", stderr_output)
+        self.assertIn("still running", stderr_output)
+
+        # State dir should still be removed
+        self.assertFalse((swarm.RALPH_DIR / 'agent').exists())
+
+
+class TestRalphCleanDispatch(unittest.TestCase):
+    """Test ralph clean is dispatched correctly from cmd_ralph."""
+
+    def test_dispatch_clean_to_cmd_ralph_clean(self):
+        """Test that 'ralph clean' dispatches to cmd_ralph_clean."""
+        args = Namespace(ralph_command='clean', name='agent', all=False)
+
+        with patch('swarm.cmd_ralph_clean') as mock_clean:
+            swarm.cmd_ralph(args)
+
+        mock_clean.assert_called_once_with(args)
+
+    def test_dispatch_clean_all(self):
+        """Test that 'ralph clean --all' dispatches to cmd_ralph_clean."""
+        args = Namespace(ralph_command='clean', name=None, all=True)
+
+        with patch('swarm.cmd_ralph_clean') as mock_clean:
+            swarm.cmd_ralph(args)
+
+        mock_clean.assert_called_once_with(args)
+
+
+class TestRalphCleanCLI(unittest.TestCase):
+    """Test ralph clean CLI integration."""
+
+    def test_ralph_clean_no_args_shows_error(self):
+        """Test ralph clean with no arguments shows error."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'clean'],
+            capture_output=True,
+            text=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('error', result.stderr.lower())
+
+    def test_ralph_clean_in_ralph_help(self):
+        """Test that clean appears in ralph --help output."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('clean', result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

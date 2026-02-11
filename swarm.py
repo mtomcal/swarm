@@ -1567,6 +1567,19 @@ See Also:
   swarm ralph status --help    Detailed status for a specific worker
 """
 
+RALPH_CLEAN_HELP_EPILOG = """\
+Remove ralph state for one or all workers. Does NOT kill worker processes
+or remove worktrees — use 'swarm kill --rm-worktree' for full cleanup.
+
+Examples:
+  swarm ralph clean agent              # Remove state for 'agent'
+  swarm ralph clean --all              # Remove all ralph state
+
+See Also:
+  swarm kill --help              Kill workers and optionally remove worktrees
+  swarm ralph status --help      Check ralph status before cleaning
+"""
+
 RALPH_LOGS_HELP_EPILOG = """\
 Shows the iteration history log for a ralph worker. This is separate from
 'swarm logs' which shows the worker's tmux output.
@@ -3749,6 +3762,18 @@ def main() -> None:
     ralph_ls_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
                             default="all", help="Filter by ralph status (default: all)")
 
+    # ralph clean - remove ralph state
+    ralph_clean_p = ralph_subparsers.add_parser(
+        "clean",
+        help="Remove ralph state for one or all workers",
+        epilog=RALPH_CLEAN_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ralph_clean_p.add_argument("name", nargs="?", default=None,
+                                help="Name of the ralph worker to clean state for")
+    ralph_clean_p.add_argument("--all", action="store_true", dest="all",
+                                help="Clean ralph state for all workers")
+
     # ralph logs - view iteration history
     ralph_logs_p = ralph_subparsers.add_parser(
         "logs",
@@ -5045,6 +5070,8 @@ def cmd_ralph(args) -> None:
         cmd_ralph_list(args)
     elif args.ralph_command == "ls":
         cmd_ralph_list(args)
+    elif args.ralph_command == "clean":
+        cmd_ralph_clean(args)
     elif args.ralph_command == "logs":
         cmd_ralph_logs(args)
 
@@ -5704,6 +5731,57 @@ def cmd_ralph_list(args) -> None:
             for header in headers:
                 row_parts.append(row[header].ljust(col_widths[header]))
             print("  ".join(row_parts))
+
+
+def cmd_ralph_clean(args) -> None:
+    """Remove ralph state for one or all workers.
+
+    Removes the ralph state directory (~/.swarm/ralph/<name>/) without
+    killing worker processes or removing worktrees.
+
+    Args:
+        args: Namespace with optional name and all attributes
+    """
+    # Validate: one of name or --all required
+    if not args.name and not args.all:
+        print("swarm: error: must specify worker name or use --all", file=sys.stderr)
+        sys.exit(1)
+
+    if args.all:
+        # Clean all ralph state directories
+        if not RALPH_DIR.exists():
+            return
+
+        state = State()
+        cleaned = False
+        for worker_dir in sorted(RALPH_DIR.iterdir()):
+            if worker_dir.is_dir():
+                worker_name = worker_dir.name
+                # Check if worker is still running
+                worker = state.get_worker(worker_name)
+                if worker and refresh_worker_status(worker) == "running":
+                    print(f"swarm: warning: worker '{worker_name}' is still running (only ralph state removed)", file=sys.stderr)
+                import shutil
+                shutil.rmtree(worker_dir)
+                print(f"cleaned ralph state for {worker_name}")
+                cleaned = True
+        return
+
+    # Clean specific worker
+    ralph_state_dir = RALPH_DIR / args.name
+    if not ralph_state_dir.exists():
+        print(f"swarm: error: no ralph state found for worker '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if worker is still running
+    state = State()
+    worker = state.get_worker(args.name)
+    if worker and refresh_worker_status(worker) == "running":
+        print(f"swarm: warning: worker '{args.name}' is still running (only ralph state removed)", file=sys.stderr)
+
+    import shutil
+    shutil.rmtree(ralph_state_dir)
+    print(f"cleaned ralph state for {args.name}")
 
 
 def cmd_ralph_logs(args) -> None:
