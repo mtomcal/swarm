@@ -9851,5 +9851,132 @@ class TestCmdRalphLogsDispatch(unittest.TestCase):
         mock_logs.assert_called_once_with(args)
 
 
+class TestRalphLsSubparser(unittest.TestCase):
+    """Test that ralph ls subparser (alias for list) is correctly configured."""
+
+    def test_ralph_ls_subcommand_exists(self):
+        """Test that 'ralph ls' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'ls', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('format', result.stdout.lower())
+
+    def test_ralph_ls_format_flag(self):
+        """Test --format flag accepts valid values."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'ls', '--format', 'json', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_ralph_ls_status_flag(self):
+        """Test --status flag accepts valid values."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'ls', '--status', 'running', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_ralph_ls_same_args_as_list(self):
+        """Test that ralph ls accepts the same arguments as ralph list."""
+        ls_help = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'ls', '--help'],
+            capture_output=True,
+            text=True
+        )
+        list_help = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'list', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(ls_help.returncode, 0)
+        self.assertEqual(list_help.returncode, 0)
+        # Both should have --format and --status flags
+        self.assertIn('--format', ls_help.stdout)
+        self.assertIn('--status', ls_help.stdout)
+        self.assertIn('--format', list_help.stdout)
+        self.assertIn('--status', list_help.stdout)
+
+
+class TestRalphLsDispatch(unittest.TestCase):
+    """Test ralph ls is dispatched correctly from cmd_ralph."""
+
+    def test_dispatch_ls_to_cmd_ralph_list(self):
+        """Test that 'ralph ls' dispatches to cmd_ralph_list."""
+        args = Namespace(ralph_command='ls', format='table', status='all')
+
+        with patch('swarm.cmd_ralph_list') as mock_list:
+            swarm.cmd_ralph(args)
+
+        mock_list.assert_called_once_with(args)
+
+    def test_dispatch_ls_json_format(self):
+        """Test that 'ralph ls --format json' dispatches to cmd_ralph_list."""
+        args = Namespace(ralph_command='ls', format='json', status='all')
+
+        with patch('swarm.cmd_ralph_list') as mock_list:
+            swarm.cmd_ralph(args)
+
+        mock_list.assert_called_once_with(args)
+
+
+class TestRalphLsCLI(unittest.TestCase):
+    """Test ralph ls produces identical output to ralph list."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.old_ralph_dir = swarm.RALPH_DIR
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.RALPH_DIR.mkdir(parents=True, exist_ok=True)
+
+        self.old_state_file = swarm.STATE_FILE
+        self.old_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        swarm.RALPH_DIR = self.old_ralph_dir
+        swarm.STATE_FILE = self.old_state_file
+        swarm.STATE_LOCK_FILE = self.old_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_ls_empty_same_as_list(self):
+        """Test ralph ls with no workers produces same output as ralph list."""
+        args_ls = Namespace(ralph_command='ls', format='table', status='all')
+        args_list = Namespace(ralph_command='list', format='table', status='all')
+
+        with patch('builtins.print') as mock_print_ls:
+            swarm.cmd_ralph_list(args_ls)
+        ls_output = [str(call) for call in mock_print_ls.call_args_list]
+
+        with patch('builtins.print') as mock_print_list:
+            swarm.cmd_ralph_list(args_list)
+        list_output = [str(call) for call in mock_print_list.call_args_list]
+
+        self.assertEqual(ls_output, list_output)
+
+    def test_ralph_ls_json_empty_same_as_list(self):
+        """Test ralph ls --format json with no workers produces same output as ralph list --format json."""
+        args_ls = Namespace(ralph_command='ls', format='json', status='all')
+        args_list = Namespace(ralph_command='list', format='json', status='all')
+
+        with patch('builtins.print') as mock_print_ls:
+            swarm.cmd_ralph_list(args_ls)
+        ls_output = [str(call) for call in mock_print_ls.call_args_list]
+
+        with patch('builtins.print') as mock_print_list:
+            swarm.cmd_ralph_list(args_list)
+        list_output = [str(call) for call in mock_print_list.call_args_list]
+
+        self.assertEqual(ls_output, list_output)
+
+
 if __name__ == "__main__":
     unittest.main()

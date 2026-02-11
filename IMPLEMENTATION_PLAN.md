@@ -16,15 +16,15 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
 
 ### Phase 1: `ralph ls` Alias
 
-- [ ] **1.1 Add `ls` subparser under ralph subparsers**
+- [x] **1.1 Add `ls` subparser under ralph subparsers**
   - Add `ralph_subparsers.add_parser("ls", ...)` mirroring `ralph list` parser
   - File: `swarm.py` (in `main()` argparse setup, near ralph subparsers ~line 3729)
 
-- [ ] **1.2 Add dispatch in `cmd_ralph()`**
+- [x] **1.2 Add dispatch in `cmd_ralph()`**
   - Add `"ls"` case in `cmd_ralph()` that calls `cmd_ralph_list(args)`
   - File: `swarm.py` (~line 5017-5034)
 
-- [ ] **1.3 Add unit tests for `ralph ls`**
+- [x] **1.3 Add unit tests for `ralph ls`**
   - Test that `ralph ls` produces identical output to `ralph list`
   - Test that `ralph ls` accepts same arguments (`--format`, `--status`)
   - File: `test_cmd_ralph.py`

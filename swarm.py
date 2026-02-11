@@ -3737,6 +3737,18 @@ def main() -> None:
     ralph_list_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
                               default="all", help="Filter by ralph status (default: all)")
 
+    # ralph ls - alias for ralph list
+    ralph_ls_p = ralph_subparsers.add_parser(
+        "ls",
+        help="List all ralph workers (alias for 'list')",
+        epilog=RALPH_LIST_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ralph_ls_p.add_argument("--format", choices=["table", "json", "names"],
+                            default="table", help="Output format (default: table)")
+    ralph_ls_p.add_argument("--status", choices=["all", "running", "paused", "stopped", "failed"],
+                            default="all", help="Filter by ralph status (default: all)")
+
     # ralph logs - view iteration history
     ralph_logs_p = ralph_subparsers.add_parser(
         "logs",
@@ -5012,6 +5024,7 @@ def cmd_ralph(args) -> None:
     - resume: Resume ralph loop for a worker
     - run: Run the ralph loop (main outer loop execution)
     - list: List all ralph workers
+    - ls: Alias for list
     - logs: Show iteration history log for a worker
     """
     if args.ralph_command == "spawn":
@@ -5029,6 +5042,8 @@ def cmd_ralph(args) -> None:
     elif args.ralph_command == "run":
         cmd_ralph_run(args)
     elif args.ralph_command == "list":
+        cmd_ralph_list(args)
+    elif args.ralph_command == "ls":
         cmd_ralph_list(args)
     elif args.ralph_command == "logs":
         cmd_ralph_logs(args)
