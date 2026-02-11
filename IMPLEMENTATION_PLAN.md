@@ -60,13 +60,13 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
 
 ### Phase 3: Theme Picker Not-Ready Detection
 
-- [ ] **3.1 Add not-ready patterns to `wait_for_agent_ready()`**
+- [x] **3.1 Add not-ready patterns to `wait_for_agent_ready()`**
   - Add patterns: `Choose the text style`, `looks best with your terminal`
   - When a not-ready pattern matches, do NOT return True
   - Optionally: send Enter via `tmux send-keys` to dismiss theme picker, continue polling
   - File: `swarm.py` (~line 3199-3233, `wait_for_agent_ready()`)
 
-- [ ] **3.2 Add unit tests for theme picker detection**
+- [x] **3.2 Add unit tests for theme picker detection**
   - Test: theme picker text does not trigger ready detection
   - Test: theme picker followed by real ready pattern eventually succeeds
   - File: `test_ready_patterns.py`

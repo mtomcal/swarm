@@ -3228,12 +3228,47 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: O
         r"(?:^|\x1b\[[0-9;]*m)>>>\s",     # Python REPL ">>> "
     ]
 
+    # Patterns that indicate the agent is NOT ready and is blocked on an
+    # interactive prompt (e.g., theme picker in fresh Docker containers).
+    # When detected, send Enter to dismiss and continue waiting.
+    not_ready_patterns = [
+        r"Choose the text style",           # First-time theme picker
+        r"looks best with your terminal",   # Theme picker subtitle
+    ]
+
     start = time.time()
     while (time.time() - start) < timeout:
         try:
             output = tmux_capture_pane(session, window, socket=socket)
+            lines = output.split('\n')
+
+            # Check for not-ready patterns first (e.g., theme picker)
+            not_ready = False
+            for line in lines:
+                for pattern in not_ready_patterns:
+                    if re.search(pattern, line):
+                        not_ready = True
+                        break
+                if not_ready:
+                    break
+
+            if not_ready:
+                # Dismiss the blocking prompt by sending Enter, then continue polling
+                try:
+                    cmd_prefix = tmux_cmd_prefix(socket)
+                    target = f"{session}:{window}"
+                    subprocess.run(
+                        cmd_prefix + ["send-keys", "-t", target, "Enter"],
+                        capture_output=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(0.5)
+                continue
+
             # Check each line for ready patterns
-            for line in output.split('\n'):
+            for line in lines:
                 for pattern in ready_patterns:
                     if re.search(pattern, line):
                         return True

@@ -392,5 +392,107 @@ opencode v1.0.115
         )
 
 
+    # =========================================================================
+    # Theme Picker Not-Ready Pattern Tests
+    # =========================================================================
+
+    def test_theme_picker_choose_text_style_not_ready(self):
+        """THEME-1: 'Choose the text style' does NOT trigger ready detection."""
+        output = "Choose the text style that looks best with your terminal"
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected theme picker 'Choose the text style' to NOT be detected as ready. Output: {output!r}"
+        )
+
+    def test_theme_picker_looks_best_not_ready(self):
+        """THEME-2: 'looks best with your terminal' does NOT trigger ready detection."""
+        output = "looks best with your terminal"
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected theme picker 'looks best with your terminal' to NOT be detected as ready. Output: {output!r}"
+        )
+
+    def test_theme_picker_full_screen_not_ready(self):
+        """THEME-3: Full theme picker screen does NOT trigger ready detection."""
+        output = """
+Choose the text style that looks best with your terminal
+
+  ○ Light
+  ● Dark
+  ○ Light High Contrast
+  ○ Dark High Contrast
+"""
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected full theme picker screen to NOT be detected as ready. Output length: {len(output)} chars"
+        )
+
+    def test_theme_picker_with_prompt_pattern_not_ready(self):
+        """THEME-4: Theme picker with '> ' in output still NOT ready (not-ready takes priority)."""
+        # This tests that not-ready patterns are checked before ready patterns.
+        # The '>' might appear in the theme picker UI but should not trigger ready.
+        output = """Choose the text style that looks best with your terminal
+> Dark
+  Light"""
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected theme picker with '> ' marker to NOT be detected as ready "
+            f"(not-ready patterns take priority). Output: {output!r}"
+        )
+
+    def test_theme_picker_sends_enter_to_dismiss(self):
+        """THEME-5: Theme picker detection sends Enter to dismiss via tmux."""
+        with patch('swarm.tmux_capture_pane', return_value="Choose the text style that looks best"), \
+             patch('swarm.subprocess.run') as mock_run, \
+             patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+            mock_run.return_value = MagicMock(returncode=0)
+            # Will timeout, but we want to verify Enter was sent
+            swarm.wait_for_agent_ready(
+                session="test-session",
+                window="test-window",
+                timeout=1,
+                socket=None
+            )
+            # Verify send-keys Enter was called at least once
+            enter_calls = [
+                call for call in mock_run.call_args_list
+                if call[0] and "send-keys" in call[0][0] and "Enter" in call[0][0]
+            ]
+            self.assertGreater(
+                len(enter_calls), 0,
+                "Expected tmux send-keys Enter to be called to dismiss theme picker"
+            )
+
+    def test_theme_picker_then_ready_pattern_succeeds(self):
+        """THEME-6: Theme picker followed by real ready pattern eventually returns True."""
+        # First call returns theme picker, second call returns ready pattern
+        call_count = [0]
+        def mock_capture(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return "Choose the text style that looks best with your terminal"
+            return "bypass permissions on"
+
+        with patch('swarm.tmux_capture_pane', side_effect=mock_capture), \
+             patch('swarm.subprocess.run') as mock_run, \
+             patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+            mock_run.return_value = MagicMock(returncode=0)
+            result = swarm.wait_for_agent_ready(
+                session="test-session",
+                window="test-window",
+                timeout=10,
+                socket=None
+            )
+            self.assertTrue(
+                result,
+                "Expected ready detection to succeed after theme picker is dismissed "
+                "and real ready pattern appears"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
