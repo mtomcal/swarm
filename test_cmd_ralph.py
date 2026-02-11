@@ -4785,7 +4785,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
             return 'stopped'
 
         inactivity_count = [0]
-        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False):
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             inactivity_count[0] += 1
             if inactivity_count[0] == 1:
                 return "inactive"  # First check shows inactivity
@@ -5695,8 +5695,8 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         sig = inspect.signature(swarm.detect_inactivity)
         params = list(sig.parameters.keys())
         self.assertNotIn('mode', params, "mode parameter should be removed")
-        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous'],
-                         "Should have worker, timeout, done_pattern, and check_done_continuous params")
+        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous', 'prompt_baseline_lines'],
+                         "Should have worker, timeout, done_pattern, check_done_continuous, and prompt_baseline_lines params")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
@@ -6867,7 +6867,7 @@ class TestRalphRunIntegration(unittest.TestCase):
 
         detect_calls = []
 
-        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             """Capture detect_inactivity calls."""
             detect_calls.append({
                 'worker_name': worker.name,
@@ -7214,7 +7214,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
         # - First call: return "inactive" (inactivity detected) - triggers kill then restart
         # - Second call: return "exited" (worker exited) - loop completes
         detect_call_count = [0]
-        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             detect_call_count[0] += 1
             operations.append({
                 'op': 'detect_inactivity',
@@ -7368,7 +7368,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
             )
 
         detect_count = [0]
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             detect_count[0] += 1
             if detect_count[0] == 1:
                 return "inactive"  # Trigger restart on first call
@@ -7852,7 +7852,7 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
         # Then on iteration 2, max_iterations is reached, loop exits
         detect_calls = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             detect_calls[0] += 1
             # Always return "exited" (worker exited) to advance iterations
             return "exited"
@@ -8314,7 +8314,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_calls = []
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             """Simulate detect_inactivity with blocking and return 'exited' (worker exit)."""
             detect_calls.append({
                 'worker': worker.name,
@@ -8428,7 +8428,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_call_count = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             """Return 'inactive' on first call (inactivity), 'exited' on second (exit)."""
             detect_call_count[0] += 1
             time.sleep(0.1)  # Brief blocking for realism
@@ -8544,7 +8544,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         detect_start_times = []
         detect_end_times = []
 
-        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             """Simulate detect_inactivity that blocks for 0.5 seconds."""
             detect_start_times.append(time.time())
             # This simulates the blocking behavior of real detect_inactivity
@@ -8978,7 +8978,7 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         args = Namespace(name='flag-test-worker')
         detect_calls = []
 
-        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False):
+        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
             detect_calls.append({
                 'timeout': timeout,
                 'done_pattern': done_pattern,
@@ -10264,6 +10264,251 @@ class TestRalphCleanCLI(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn('clean', result.stdout)
+
+
+class TestDonePatternBaseline(unittest.TestCase):
+    """Test done-pattern baseline filtering to prevent self-match against prompt text."""
+
+    def test_done_pattern_in_prompt_does_not_match_with_baseline(self):
+        """Test that done pattern in prompt text (before baseline) does NOT trigger a match."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        # Simulate pane content where the done pattern appears in the prompt (first 5 lines)
+        # but NOT in agent output (after baseline)
+        pane_content = (
+            "line 1\n"
+            "line 2\n"
+            "When done, output /done on its own line\n"  # done pattern in prompt text
+            "line 4\n"
+            "line 5\n"
+            "Agent is still working...\n"
+            "Processing tasks..."
+        )
+
+        call_count = [0]
+        def mock_capture(*args, **kwargs):
+            call_count[0] += 1
+            return pane_content
+
+        def mock_refresh(w):
+            # Stop after a few cycles to avoid infinite loop
+            if call_count[0] >= 3:
+                return 'stopped'
+            return 'running'
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="/done",
+                        check_done_continuous=True,
+                        prompt_baseline_lines=5  # First 5 lines are prompt
+                    )
+                    # Should NOT match done pattern because it's in the prompt (before baseline)
+                    self.assertEqual(result, "exited",
+                        "Done pattern in prompt text should not trigger match when baseline is set")
+
+    def test_done_pattern_in_agent_output_matches_with_baseline(self):
+        """Test that done pattern in agent output (after baseline) DOES trigger a match."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        # Simulate pane content where the done pattern appears AFTER the baseline
+        pane_content = (
+            "line 1\n"
+            "line 2\n"
+            "When done, output /done on its own line\n"  # done pattern in prompt text
+            "line 4\n"
+            "line 5\n"
+            "Agent working...\n"
+            "/done"  # done pattern in agent output (after baseline)
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('swarm.tmux_capture_pane', return_value=pane_content):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="/done",
+                        check_done_continuous=True,
+                        prompt_baseline_lines=5  # First 5 lines are prompt
+                    )
+                    self.assertEqual(result, "done_pattern",
+                        "Done pattern in agent output (after baseline) should trigger match")
+
+    def test_done_pattern_without_baseline_matches_anywhere(self):
+        """Test that done pattern matches anywhere when no baseline is set (backward compat)."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        pane_content = "line 1\n/done\nline 3"
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('swarm.tmux_capture_pane', return_value=pane_content):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="/done",
+                        check_done_continuous=True,
+                        prompt_baseline_lines=0  # No baseline
+                    )
+                    self.assertEqual(result, "done_pattern",
+                        "Done pattern should match anywhere when baseline is 0")
+
+    def test_baseline_recorded_after_prompt_injection(self):
+        """Test that send_prompt_to_worker returns pane line count for baseline."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
+        )
+
+        # Simulate pane content with 5 lines after prompt is sent
+        pane_after_send = "line 1\nline 2\nline 3\nline 4\nline 5"
+
+        with patch('swarm.wait_for_agent_ready'):
+            with patch('swarm.tmux_send'):
+                with patch('swarm.tmux_capture_pane', return_value=pane_after_send):
+                    baseline = swarm.send_prompt_to_worker(worker, "test prompt")
+
+        self.assertEqual(baseline, 5, "Should return line count of pane after sending prompt")
+
+    def test_baseline_returns_zero_for_non_tmux_worker(self):
+        """Test that send_prompt_to_worker returns 0 for non-tmux worker."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            pid=12345
+        )
+
+        baseline = swarm.send_prompt_to_worker(worker, "test prompt")
+        self.assertEqual(baseline, 0, "Should return 0 for non-tmux worker")
+
+    def test_baseline_returns_zero_on_capture_error(self):
+        """Test that send_prompt_to_worker returns 0 if pane capture fails."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
+        )
+
+        with patch('swarm.wait_for_agent_ready'):
+            with patch('swarm.tmux_send'):
+                with patch('swarm.tmux_capture_pane',
+                           side_effect=subprocess.CalledProcessError(1, 'tmux')):
+                    baseline = swarm.send_prompt_to_worker(worker, "test prompt")
+
+        self.assertEqual(baseline, 0, "Should return 0 on capture error")
+
+    def test_ralph_state_has_prompt_baseline_lines_field(self):
+        """Test RalphState has prompt_baseline_lines field with correct default."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10
+        )
+        self.assertEqual(state.prompt_baseline_lines, 0,
+            "prompt_baseline_lines should default to 0")
+
+    def test_ralph_state_prompt_baseline_lines_roundtrip(self):
+        """Test prompt_baseline_lines survives round-trip through dict serialization."""
+        original = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            prompt_baseline_lines=42
+        )
+        d = original.to_dict()
+        self.assertEqual(d['prompt_baseline_lines'], 42)
+
+        restored = swarm.RalphState.from_dict(d)
+        self.assertEqual(restored.prompt_baseline_lines, 42)
+
+    def test_ralph_state_from_dict_defaults_baseline_when_missing(self):
+        """Test from_dict defaults prompt_baseline_lines to 0 for old state files."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/path/to/prompt.md',
+            'max_iterations': 10,
+            # prompt_baseline_lines is missing (old state format)
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertEqual(state.prompt_baseline_lines, 0,
+            "Should default to 0 when field is missing from old state files")
+
+    def test_done_pattern_baseline_with_regex_pattern(self):
+        """Test baseline filtering works with regex done patterns."""
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        # Regex pattern appears in prompt (before baseline) but not after
+        pane_content = (
+            "line 1\n"
+            "Use SWARM_DONE_X9K to signal completion\n"  # Pattern in prompt
+            "line 3\n"
+            "Agent output here..."
+        )
+
+        call_count = [0]
+        def mock_capture(*args, **kwargs):
+            call_count[0] += 1
+            return pane_content
+
+        def mock_refresh(w):
+            if call_count[0] >= 3:
+                return 'stopped'
+            return 'running'
+
+        with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+            with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern=r"SWARM_DONE_\w+",
+                        check_done_continuous=True,
+                        prompt_baseline_lines=3  # First 3 lines are prompt
+                    )
+                    self.assertEqual(result, "exited",
+                        "Regex done pattern in prompt should not match with baseline filtering")
 
 
 if __name__ == "__main__":

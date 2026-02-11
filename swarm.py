@@ -1952,6 +1952,7 @@ class RalphState:
     inactivity_timeout: int = 180
     check_done_continuous: bool = False
     exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
+    prompt_baseline_lines: int = 0  # Pane line count after prompt injection, for done-pattern baseline filtering
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -1971,6 +1972,7 @@ class RalphState:
             "inactivity_timeout": self.inactivity_timeout,
             "check_done_continuous": self.check_done_continuous,
             "exit_reason": self.exit_reason,
+            "prompt_baseline_lines": self.prompt_baseline_lines,
         }
 
     @classmethod
@@ -1992,6 +1994,7 @@ class RalphState:
             inactivity_timeout=d.get("inactivity_timeout", 180),
             check_done_continuous=d.get("check_done_continuous", False),
             exit_reason=d.get("exit_reason"),
+            prompt_baseline_lines=d.get("prompt_baseline_lines", 0),
         )
 
 
@@ -5382,7 +5385,14 @@ def cmd_ralph_spawn(args) -> None:
 
         # Step 6: Send the prompt to the worker for the first iteration
         prompt_content = Path(args.prompt_file).read_text()
-        send_prompt_to_worker(worker, prompt_content)
+        baseline_lines = send_prompt_to_worker(worker, prompt_content)
+
+        # Record baseline line count for done-pattern self-match mitigation
+        try:
+            ralph_state.prompt_baseline_lines = int(baseline_lines)
+        except (TypeError, ValueError):
+            ralph_state.prompt_baseline_lines = 0
+        save_ralph_state(ralph_state)
 
     except subprocess.CalledProcessError as e:
         # Handle worktree or tmux creation failures
@@ -5915,7 +5925,8 @@ def detect_inactivity(
     worker: Worker,
     timeout: int,
     done_pattern: Optional[str] = None,
-    check_done_continuous: bool = False
+    check_done_continuous: bool = False,
+    prompt_baseline_lines: int = 0
 ) -> str:
     """Detect if a worker has become inactive using screen-stable detection.
 
@@ -5935,6 +5946,9 @@ def detect_inactivity(
         timeout: Seconds of screen stability before restart
         done_pattern: Optional regex pattern to check for completion
         check_done_continuous: If True, check done pattern during monitoring
+        prompt_baseline_lines: Number of pane lines at prompt injection time.
+            When > 0, done pattern is only checked against lines after this baseline,
+            preventing self-match against the prompt text itself.
 
     Returns:
         String indicating why monitoring ended:
@@ -5989,8 +6003,16 @@ def detect_inactivity(
             )
 
             # Check done pattern continuously if enabled
-            if done_regex and done_regex.search(current_output):
-                return "done_pattern"
+            if done_regex:
+                # If baseline is set, only check lines after the baseline
+                # to avoid self-matching against the prompt text
+                if prompt_baseline_lines > 0:
+                    lines = current_output.split('\n')
+                    check_content = '\n'.join(lines[prompt_baseline_lines:])
+                else:
+                    check_content = current_output
+                if done_regex.search(check_content):
+                    return "done_pattern"
 
             # Normalize and hash the content
             normalized = normalize_content(current_output)
@@ -6134,15 +6156,19 @@ def spawn_worker_for_ralph(
     return worker
 
 
-def send_prompt_to_worker(worker: Worker, prompt_content: str) -> None:
+def send_prompt_to_worker(worker: Worker, prompt_content: str) -> int:
     """Send prompt content to a worker.
 
     Args:
         worker: The worker to send to
         prompt_content: The prompt content to send
+
+    Returns:
+        Number of lines in the pane after sending the prompt (baseline for done-pattern filtering).
+        Returns 0 if the worker has no tmux info.
     """
     if not worker.tmux:
-        return
+        return 0
 
     socket = worker.tmux.socket
 
@@ -6162,6 +6188,17 @@ def send_prompt_to_worker(worker: Worker, prompt_content: str) -> None:
         enter=True,
         socket=socket
     )
+
+    # Capture pane line count after prompt injection for done-pattern baseline
+    try:
+        pane_content = tmux_capture_pane(
+            worker.tmux.session,
+            worker.tmux.window,
+            socket=socket
+        )
+        return len(pane_content.split('\n'))
+    except subprocess.CalledProcessError:
+        return 0
 
 
 def cmd_ralph_run(args) -> None:
@@ -6416,7 +6453,14 @@ def _run_ralph_loop_inner(
                 state.add_worker(worker)
 
                 # Send prompt to the worker
-                send_prompt_to_worker(worker, prompt_content)
+                baseline_lines = send_prompt_to_worker(worker, prompt_content)
+
+                # Record baseline line count for done-pattern self-match mitigation
+                try:
+                    ralph_state.prompt_baseline_lines = int(baseline_lines)
+                except (TypeError, ValueError):
+                    ralph_state.prompt_baseline_lines = 0
+                save_ralph_state(ralph_state)
 
             except Exception as e:
                 print(f"swarm: error: failed to spawn worker: {e}", file=sys.stderr)
@@ -6451,7 +6495,8 @@ def _run_ralph_loop_inner(
             worker,
             ralph_state.inactivity_timeout,
             done_pattern=ralph_state.done_pattern,
-            check_done_continuous=ralph_state.check_done_continuous
+            check_done_continuous=ralph_state.check_done_continuous,
+            prompt_baseline_lines=ralph_state.prompt_baseline_lines
         )
 
         # Reload ralph state (could have been paused while monitoring)

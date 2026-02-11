@@ -1,7 +1,7 @@
 # Implementation Plan: Round 2 Spec Changes (Docker Sandbox + Ralph UX)
 
 **Created**: 2026-02-11
-**Status**: IN PROGRESS
+**Status**: COMPLETE
 **Goal**: Implement code changes specified in the Round 2 spec updates — new `ralph clean` and `ralph ls` commands, theme picker detection in ready-detection, and done-pattern self-match mitigation.
 
 ---
@@ -73,19 +73,19 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
 
 ### Phase 4: Done Pattern Self-Match Mitigation
 
-- [ ] **4.1 Record baseline buffer position after prompt injection**
+- [x] **4.1 Record baseline buffer position after prompt injection**
   - In `send_prompt_to_worker()` or immediately after, capture the current pane line count
   - Store as `prompt_baseline_lines` in ralph state or as a return value
   - File: `swarm.py`
 
-- [ ] **4.2 Filter baseline from done-pattern checking**
+- [x] **4.2 Filter baseline from done-pattern checking**
   - In `detect_inactivity()` when `check_done_continuous` is True:
     - Capture full pane content
     - Skip lines up to `prompt_baseline_lines`
     - Only match done pattern against lines AFTER the baseline
   - File: `swarm.py` (~line 5786-5888)
 
-- [ ] **4.3 Add unit tests for done-pattern baseline**
+- [x] **4.3 Add unit tests for done-pattern baseline**
   - Test: done pattern in prompt text (before baseline) does NOT match
   - Test: done pattern in agent output (after baseline) DOES match
   - Test: baseline is recorded after prompt injection
@@ -93,17 +93,17 @@ Round 2 feedback from real-world Docker sandbox usage surfaced several issues. T
 
 ### Phase 5: Verify
 
-- [ ] **5.1 Run unit tests**
+- [x] **5.1 Run unit tests**
   - `python3 -m unittest test_cmd_ralph -v`
   - `python3 -m unittest test_ready_patterns -v`
   - `python3 -m unittest test_cmd_spawn -v`
 
-- [ ] **5.2 Verify CLI**
+- [x] **5.2 Verify CLI**
   - `python3 swarm.py ralph ls --help` → shows list help
   - `python3 swarm.py ralph clean --help` → shows clean help
   - `python3 swarm.py ralph --help` → shows ls and clean in subcommands
 
-- [ ] **5.3 Run full test suite (carefully)**
+- [x] **5.3 Run full test suite (carefully)**
   - `python3 -m unittest discover -s . -p 'test_*.py' -v`
   - Note: may crash swarm workers per CLAUDE.md caveat — run in isolation
 
