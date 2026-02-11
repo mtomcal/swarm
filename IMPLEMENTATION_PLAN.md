@@ -135,3 +135,29 @@ All spec changes are already committed in the current diff:
 - **Phase 2 (ralph clean)**: Straightforward — file deletion with validation, 1-2 hours
 - **Phase 3 (theme picker)**: Moderate — need to add negative pattern matching without breaking existing ready detection, 1-2 hours
 - **Phase 4 (done-pattern baseline)**: Most complex — threading baseline line count through prompt injection → inactivity detection, 2-3 hours
+
+---
+
+## Execution Stats
+
+**Method**: Docker-sandboxed `loop.sh` (`SANDBOX=1 ./loop.sh 20`)
+**Date**: 2026-02-11
+**Total time**: ~31 minutes (20:22–20:53)
+**Iterations**: 4 of 20 budget
+**Model**: Opus
+**Container resources**: 8 GiB memory, 4 CPUs, 512 PIDs
+
+| Iter | Phase | Commit | Duration | Tasks | Tests Added |
+|------|-------|--------|----------|-------|-------------|
+| 1 | Phase 1 (ralph ls) | `cd4b823` | ~3 min | 1.1, 1.2, 1.3 | ralph ls alias tests |
+| 2 | Phase 2 (ralph clean) | `e39763a` | ~10 min | 2.1, 2.2, 2.3, 2.4 | 17 tests (4 classes) |
+| 3 | Phase 3 (theme picker) | `5bf33e9` | ~4 min | 3.1, 3.2 | 6 tests |
+| 4 | Phase 4 + 5 (baseline + verify) | `073509d` | ~14 min | 4.1, 4.2, 4.3, 5.1, 5.2, 5.3 | 10 tests |
+
+**Final test count**: 551 tests passing across test_cmd_ralph, test_ready_patterns, test_cmd_spawn, test_cmd_init, test_cmd_heartbeat.
+
+**Notes**:
+- All phases completed faster than estimated (31 min actual vs 4.5–7.5 hr estimated)
+- Worker combined tightly-coupled tasks within phases (e.g., 2.1-2.4 in one iteration)
+- Phase 4 was the longest iteration (~14 min) due to cross-cutting changes requiring mock updates across 48 existing tests
+- Auth fix required: `loop.sh` volume mounts needed `/home/node/` instead of `/home/loopuser/` (container user mismatch)
