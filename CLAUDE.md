@@ -129,6 +129,9 @@ swarm ralph pause agent      # Pause the loop
 swarm ralph resume agent     # Resume the loop
 swarm ralph init             # Create starter PROMPT.md
 swarm ralph list             # List all ralph workers
+swarm ralph ls               # Alias for ralph list
+swarm ralph clean agent      # Remove ralph state for a worker
+swarm ralph clean --all      # Remove all ralph state
 ```
 
 **Scripting/Advanced**: Use `--no-run` to spawn without starting the loop:
@@ -177,6 +180,18 @@ swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 100 --
 ```bash
 swarm kill agent --rm-worktree  # Also removes ~/.swarm/ralph/agent/
 ```
+
+**Done pattern self-matches prompt content**: When using `--done-pattern` with `--check-done-continuous`, the done pattern is checked against the full tmux pane buffer — including the prompt text typed via `tmux send-keys`. If your PROMPT.md contains the done pattern literally (e.g., `/done` appears in both the prompt and the done pattern), the loop stops immediately before the agent does any work. Fix: use a unique signal like `SWARM_DONE_X9K` that won't appear in prose.
+
+**Docker sandbox: missing `-it` flags**: If using `sandbox.sh` (Docker wrapper), ensure `docker run --rm -it` (not just `docker run --rm`). Without `-it`, Claude gets no TTY and exits silently.
+
+**Docker sandbox: theme picker blocking**: Fresh Docker containers without Claude preferences hit an interactive theme picker. Pre-configure in Dockerfile:
+```dockerfile
+RUN mkdir -p /home/loopuser/.claude && \
+    echo '{"theme":"dark"}' > /home/loopuser/.claude/settings.local.json
+```
+
+**Docker sandbox: skip `--worktree`**: `--worktree` is incompatible with Docker-sandboxed workers. Docker already provides filesystem isolation; omit `--worktree` when using `sandbox.sh`.
 
 ## Project Structure
 

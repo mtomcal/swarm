@@ -255,7 +255,7 @@ swarm ralph logs <name> [--live] [--lines N]
 
 **Inputs**:
 - `--done-pattern` (str, optional): Regex pattern to match
-- `--check-done-continuous` (bool, optional): Check during monitoring, not just after exit
+- `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit (default: false)
 
 **Default Behavior** (without `--check-done-continuous`):
 1. After each agent exit, capture recent output
@@ -268,10 +268,24 @@ swarm ralph logs <name> [--live] [--lines N]
 3. If matched, immediately stop loop (don't wait for exit or timeout)
 4. Useful when you want to stop as soon as "All tasks complete" appears
 
+**WARNING — Self-Match Footgun**: When using `--check-done-continuous`, the done pattern is checked against the full tmux pane buffer. Since `send_prompt_to_worker()` types the prompt content into the terminal via `tmux send-keys`, **any done pattern that appears literally in the prompt file will self-match immediately**, stopping the loop before the agent does any work.
+
+Example: If PROMPT.md contains `Output /done on its own line` and the done pattern is `/done`, the loop stops after ~26 seconds with `exit_reason: done_pattern` because the prompt text itself matches.
+
+**Mitigation** (required when using `--check-done-continuous`):
+1. **Mark a baseline buffer position** after sending the prompt via `tmux send-keys`. Only check for done patterns in output that appears AFTER the prompt was sent. Clear the terminal after prompt injection (`tmux send-keys -t ... C-l`) or record the pane line count as a baseline.
+2. **Use a done signal that cannot appear in prose**. Split the signal across string concatenation so the literal pattern never appears in the prompt:
+   ```
+   python3 -c "print('SWARM'+'_DONE'+'_X9K')"
+   ```
+   Then use `--done-pattern "SWARM_DONE_X9K"`.
+3. **Grace period**: Skip done-pattern checks for the first N seconds after sending the prompt.
+
 **Common Patterns**:
 - `"All tasks complete"` - Simple string match
 - `"IMPLEMENTATION_PLAN.md.*100%"` - Plan completion
 - `"No remaining tasks"` - Task list empty
+- `"SWARM_DONE_X9K"` - Unique signal that won't appear in prompt text (recommended for `--check-done-continuous`)
 
 ### Monitor Disconnect Handling
 
@@ -649,11 +663,82 @@ done
 | `swarm ralph resume <name>` | Resume ralph loop |
 | `swarm ralph status <name>` | Show ralph loop status |
 | `swarm ralph list` | List all ralph workers |
+| `swarm ralph ls` | Alias for `swarm ralph list` (consistency with `swarm ls`) |
 | `swarm ralph logs <name>` | Show iteration history log |
 | `swarm ralph logs <name> --live` | Tail iteration log |
 | `swarm ralph logs <name> --lines N` | Show last N entries |
+| `swarm ralph clean <name>` | Remove ralph state for a worker |
+| `swarm ralph clean --all` | Remove ralph state for all workers |
 | `swarm ralph init` | Create PROMPT.md template |
 | `swarm ralph template` | Output template to stdout |
+
+### Ralph Clean Command
+
+**Description**: Remove ralph state for one or all workers without killing the worker process or removing worktrees.
+
+**Commands**:
+- `swarm ralph clean <name>` - Remove ralph state for a specific worker
+- `swarm ralph clean --all` - Remove ralph state for all workers
+
+**Behavior**:
+1. Remove ralph state directory (`~/.swarm/ralph/<name>/`)
+2. Does NOT kill the worker process (use `swarm kill` for that)
+3. Does NOT remove worktrees (use `swarm kill --rm-worktree` for that)
+4. `--all` iterates over all subdirectories in `~/.swarm/ralph/`
+
+**Use Cases**:
+- Clean up orphaned ralph state after manual worker cleanup
+- Reset ralph state without affecting the running worker
+- Bulk cleanup of all ralph state directories
+
+**Error Conditions**:
+| Condition | Behavior |
+|-----------|----------|
+| No ralph state for worker | Exit 1 with "swarm: error: no ralph state found for worker '<name>'" |
+| `--all` with no ralph state | No-op, exit 0 |
+| Worker still running | Warning: "swarm: warning: worker '<name>' is still running (only ralph state removed)" |
+
+### Ralph Ls Alias
+
+**Description**: `swarm ralph ls` is accepted as an alias for `swarm ralph list`, for consistency with `swarm ls`.
+
+**Behavior**: Identical to `swarm ralph list` in all respects (same arguments, same output).
+
+### Docker Sandbox Caveats
+
+**Description**: Known issues when using ralph with Docker-sandboxed workers (e.g., `sandbox.sh` wrapping `docker run ... claude`).
+
+#### Docker TTY Requirement
+
+When using `docker run` to wrap the agent command, the `-it` flags (interactive + TTY) are required. Without them, tmux provides a TTY to `sandbox.sh` but Docker does not pass it through to the container. The agent inside Docker gets no TTY and exits immediately.
+
+**Symptom**: Worker tmux window dies silently after spawn. `send_prompt_to_worker()` fails with exit status 1.
+
+**Fix**: Ensure `docker run --rm -it` (not just `docker run --rm`) in `sandbox.sh`.
+
+#### Theme Picker Blocking
+
+Fresh Docker containers without Claude Code preferences hit an interactive theme picker on first launch. This blocks all input — the prompt sent by `send_prompt_to_worker()` goes into the theme picker instead of the Claude prompt.
+
+**Mitigations**:
+1. Pre-configure theme in Docker image: `RUN mkdir -p /home/loopuser/.claude && echo '{"theme":"dark"}' > /home/loopuser/.claude/settings.local.json`
+2. Mount full `~/.claude/` directory (not just credentials and settings) so the container inherits all preferences
+3. Set `CLAUDE_THEME=dark` environment variable if supported
+
+#### Worktree + Docker Incompatibility
+
+`--worktree` is incompatible with Docker-sandboxed workers. The worktree is created on the host at a path like `/home/user/code/.worktrees/worker/`, and Docker mounts `$(pwd):/workspace`. The worktree path is visible inside Docker, but the Docker container provides its own filesystem isolation, making worktrees redundant and potentially confusing.
+
+**Guideline**: Omit `--worktree` when using Docker sandbox. The Docker container provides isolation. Use `--worktree` only with native (non-Docker) workers.
+
+#### Ralph Run Backgrounding
+
+`swarm ralph run <name>` must run in a real terminal. Backgrounding it from within another agent session (`swarm ralph run worker &`) causes the monitoring loop to exit immediately with no output, because the double-backgrounded process loses its stdio connection.
+
+**Workarounds**:
+- The worker continues running in tmux regardless of the monitor — check on it with `swarm ralph status` and `tmux capture-pane`
+- Run `ralph run` in its own tmux window or use `nohup`
+- Use `ralph spawn` (which auto-starts the monitor) instead of the two-step `spawn --no-run` + `run` workflow
 
 ## Scenarios
 
@@ -853,6 +938,58 @@ done
   - Ralph state set: `exit_reason: monitor_disconnected`
   - Worker continues running in tmux
   - `swarm ralph status agent` shows: "Exit reason: monitor_disconnected (worker still running)"
+
+### Scenario: Done pattern self-matches prompt content
+- **Given**: PROMPT.md contains "Output /done on its own line and stop"
+- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --done-pattern "/done" --check-done-continuous -- claude`
+- **Then**:
+  - Prompt typed into tmux pane via `send-keys`
+  - Done pattern `/done` matches the prompt text in the pane buffer
+  - Loop stops after ~26 seconds with `exit_reason: done_pattern`
+  - Agent never performed any work
+  - **This is a known footgun** — use a unique signal pattern that doesn't appear in the prompt
+
+### Scenario: Ralph ls alias
+- **Given**: Ralph workers exist
+- **When**: `swarm ralph ls`
+- **Then**:
+  - Output identical to `swarm ralph list`
+  - Shows NAME, RALPH_STATUS, WORKER_STATUS, ITERATION, FAILURES columns
+
+### Scenario: Clean ralph state for specific worker
+- **Given**: Ralph state exists for "agent"
+- **When**: `swarm ralph clean agent`
+- **Then**:
+  - Ralph state directory removed (`~/.swarm/ralph/agent/`)
+  - Output: "cleaned ralph state for agent"
+  - Worker process and worktree unaffected
+
+### Scenario: Clean all ralph state
+- **Given**: Ralph state exists for "agent" and "builder"
+- **When**: `swarm ralph clean --all`
+- **Then**:
+  - Both ralph state directories removed
+  - Output: "cleaned ralph state for agent", "cleaned ralph state for builder"
+  - Worker processes and worktrees unaffected
+
+### Scenario: Docker sandbox without -it flags
+- **Given**: `sandbox.sh` uses `docker run --rm` (no `-it`)
+- **When**: Ralph spawns worker with `-- ./sandbox.sh --dangerously-skip-permissions`
+- **Then**:
+  - tmux window created, `sandbox.sh` starts
+  - Docker container starts but Claude gets no TTY
+  - Claude exits immediately with "Input must be provided either through stdin or as a prompt argument when using --print"
+  - tmux window dies silently
+  - `send_prompt_to_worker()` fails with exit status 1
+
+### Scenario: Docker container hits theme picker
+- **Given**: Fresh Docker container with no Claude Code preferences
+- **When**: `claude` starts inside container
+- **Then**:
+  - Interactive theme picker displayed
+  - Prompt sent by ralph goes into theme picker, not Claude
+  - Worker appears stuck, eventually times out
+  - **Fix**: Pre-configure theme in Docker image
 
 ## Edge Cases
 

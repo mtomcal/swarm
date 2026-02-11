@@ -170,7 +170,7 @@ swarm ls --tag team-a            # List only team-a workers
 
 | Group | Description | Subcommands |
 |-------|-------------|-------------|
-| `ralph` | Autonomous looping | `spawn` `run` `init` `status` `pause` `resume` `list` |
+| `ralph` | Autonomous looping | `spawn` `run` `init` `status` `pause` `resume` `list` `ls` `clean` |
 | `heartbeat` | Rate limit recovery | `start` `stop` `list` `status` `pause` `resume` |
 
 ## Ralph Mode (Autonomous Looping)
@@ -207,7 +207,7 @@ tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
 ### How It Works
 
 1. Each iteration reads your prompt file and sends it to a fresh agent
-2. The agent works until it exits or goes inactive (no output for 60s by default)
+2. The agent works until it exits or goes inactive (no output for 180s by default)
 3. Loop restarts with fresh context, re-reading the prompt file
 4. Stops when: max iterations reached, `--done-pattern` matched, or 5 consecutive failures
 
@@ -217,7 +217,7 @@ tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
 |------|---------|-------------|
 | `--prompt-file` | required | Prompt sent each iteration |
 | `--max-iterations` | unlimited | Stop after N iterations |
-| `--inactivity-timeout` | 60s | Restart after N seconds of no output |
+| `--inactivity-timeout` | 180s | Restart after N seconds of no output |
 | `--done-pattern` | none | Regex to stop loop when matched |
 
 ### Controlling the Loop
@@ -226,8 +226,17 @@ tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
 swarm ralph pause refactor     # Pause after current iteration
 swarm ralph resume refactor    # Continue paused loop
 swarm ralph list               # List all ralph workers with status
+swarm ralph ls                 # Alias for ralph list
+swarm ralph clean refactor     # Remove ralph state for a worker
+swarm ralph clean --all        # Remove all ralph state
 swarm kill refactor            # Stop immediately
 ```
+
+### Caveats
+
+**Done pattern + prompt content**: When using `--done-pattern` with `--check-done-continuous`, the pattern must NOT appear literally in your prompt file. The prompt text is typed into the terminal, and the done pattern scans the full buffer — including the prompt. Use a unique signal pattern (e.g., `SWARM_DONE_X9K`).
+
+**Docker sandbox**: If using `sandbox.sh`, ensure `docker run --rm -it` (needs `-it` for TTY). Fresh containers need theme pre-configuration in the Dockerfile to avoid the first-time theme picker. Omit `--worktree` with Docker (Docker provides its own isolation).
 
 ## Heartbeat (Rate Limit Recovery)
 

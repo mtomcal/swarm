@@ -145,7 +145,7 @@ if [ -z "$GH_TOKEN" ]; then
     echo "  fix: run 'gh auth login' or export GH_TOKEN=ghp_..." >&2
 fi
 
-exec docker run --rm \
+exec docker run --rm -it \
     --memory="$MEMORY" \
     --memory-swap="$MEMORY" \
     --cpus="$CPUS" \

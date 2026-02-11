@@ -58,6 +58,8 @@ swarm <command> [options] [arguments]
 | `ralph init` | Create PROMPT.md template |
 | `ralph template` | Output template to stdout |
 | `ralph list` | List ralph workers |
+| `ralph ls` | Alias for `ralph list` (consistency with `swarm ls`) |
+| `ralph clean` | Remove ralph state for one or all workers |
 | `ralph run` | Run ralph loop (internal) |
 
 ### Ralph Spawn Arguments
@@ -88,6 +90,21 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 | `<name>` | positional | Yes | - | Worker name |
 | `--live` | bool | No | false | Tail the log file in real-time |
 | `--lines` | int | No | all | Show last N entries |
+
+### Ralph Clean Arguments
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `<name>` | positional | No* | - | Worker name to clean |
+| `--all` | bool | No* | false | Clean ralph state for all workers |
+
+\* One of `<name>` or `--all` is required.
+
+### Ralph Spawn Caveats
+
+**`--worktree` + Docker sandbox**: `--worktree` should be omitted when the worker command is a Docker-based sandbox (e.g., `./sandbox.sh`). Docker provides its own filesystem isolation, making worktrees redundant. The worktree path on the host may not map correctly inside the container.
+
+**`--done-pattern` + `--check-done-continuous`**: The done pattern must NOT appear literally in the prompt file. The prompt text is typed into the tmux pane, and continuous done checking scans the full pane buffer — including the prompt itself. Use a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prose.
 
 ### Global Exit Codes
 

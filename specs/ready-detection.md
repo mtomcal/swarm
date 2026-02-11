@@ -84,6 +84,27 @@ Swarm provides `--ready-wait` functionality that blocks after spawning a worker 
 | `(?:^\|\x1b\[[0-9;]*m)\$\s` | Shell "$ " prompt | "$ ", "\x1b[34m$ " |
 | `(?:^\|\x1b\[[0-9;]*m)>>>\s` | Python REPL ">>> " | ">>> " |
 
+### Not-Ready States (Blocking Indicators)
+
+**Description**: Patterns that indicate the agent is NOT ready and is blocked on an interactive prompt that prevents normal operation. When detected, these should NOT be treated as "ready" — the agent cannot accept prompts in these states.
+
+#### Claude Code Theme Picker
+| Pattern | Description | Example Match |
+|---------|-------------|---------------|
+| `Choose the text style` | First-time theme picker | "Choose the text style that looks best" |
+| `looks best with your terminal` | Theme picker subtitle | "looks best with your terminal" |
+
+**Problem**: Fresh Docker containers (or any environment without cached Claude Code preferences) display an interactive theme picker on first launch. This blocks all input — any prompt sent via `tmux send-keys` is consumed by the theme picker, not the Claude Code prompt.
+
+**Detection Behavior**:
+- If a not-ready pattern is detected during `wait_for_agent_ready()`, the function should NOT return True
+- Optionally, send Enter to dismiss the theme picker (accepting the default theme) and continue waiting for a real ready pattern
+
+**Prevention**:
+- Pre-configure theme in Docker images: `mkdir -p ~/.claude && echo '{"theme":"dark"}' > ~/.claude/settings.local.json`
+- Mount the host's `~/.claude/` directory into the container
+- Set `CLAUDE_THEME=dark` environment variable if supported
+
 ### Spawn with Ready Wait
 
 **Description**: The `spawn` command's `--ready-wait` flag integrates ready detection.
@@ -168,6 +189,14 @@ Swarm provides `--ready-wait` functionality that blocks after spawning a worker 
   - CalledProcessError caught
   - Continues polling
   - Eventually succeeds when window exists
+
+### Scenario: Theme picker detected in Docker container
+- **Given**: A tmux worker running Claude Code in a fresh Docker container
+- **When**: Output shows "Choose the text style that looks best with your terminal"
+- **Then**:
+  - `wait_for_agent_ready` does NOT return True
+  - Theme picker is a blocking state, not a ready state
+  - Optionally: send Enter to dismiss, continue waiting for real ready pattern
 
 ## Edge Cases
 

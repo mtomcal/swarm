@@ -239,3 +239,96 @@ The main friction points were:
 8. **Test artifacts committed** - agent created test files that got included → ✅ Best practices documented
 
 Most issues have been addressed with better defaults, clearer help text, automatic cleanup of failed/killed workers, more informative status messages, and transactional spawn behavior. The two deferred items (better inactivity detection, commit message interference) are tracked for future work.
+
+---
+
+## Round 2 — Swarm + Docker Sandbox Issues (2026-02-11)
+
+Real-world session attempting to run a ralph worker with a Docker sandbox (`sandbox.sh` wrapping `docker run ... claude`). Multiple blocking issues discovered.
+
+### 8. `--done-pattern` self-matches against prompt content sent via `tmux send-keys` ✅ Resolved (docs/specs)
+
+**Problem:** When using `--check-done-continuous`, the done pattern is checked against the entire tmux pane buffer. Since `send_prompt_to_worker()` types the full PROMPT.md content into the terminal via `tmux send-keys -l`, any done pattern that appears literally in the prompt text will immediately self-match, stopping the loop before the agent does any work.
+
+**Example:** PROMPT.md contained the text `Output /done on its own line and stop.` The done pattern was `--done-pattern "/done"`. The loop stopped after 26 seconds with `exit_reason: done_pattern` — the agent had claimed the task but hadn't started working.
+
+**Workaround:** Split the done signal across string concatenation so the literal pattern never appears in the prompt: `python3 -c "print('SWARM'+'_DONE'+'_X9K')"`. This is fragile and ugly.
+
+**Suggestions:**
+- **Best fix:** After sending the prompt via `tmux send-keys`, clear the terminal (`tmux send-keys -t ... C-l`) or mark a "baseline" buffer position. Only check for done patterns in output that appears AFTER the prompt was sent.
+- **Alternative:** Don't scan the first N seconds after sending the prompt (grace period).
+- **Alternative:** Strip the prompt content from the captured pane before pattern matching.
+- **Document the footgun:** At minimum, warn in help text: "WARNING: The done pattern must NOT appear literally in your prompt file when using --check-done-continuous."
+
+**Severity:** Critical — silently breaks the loop with no useful error. Appears to work (iteration starts, task is claimed) but stops immediately.
+
+**Resolution:** Documented as a known footgun in `specs/ralph-loop.md` (Done Pattern Detection section), `specs/cli-interface.md` (Ralph Spawn Caveats), `CLAUDE.md` (Troubleshooting), and `README.md` (Caveats). Recommended mitigation: use a unique signal pattern (e.g., `SWARM_DONE_X9K`) that cannot appear in prompt prose. Baseline buffer position approach documented as the preferred code fix for future implementation.
+
+### 9. `sandbox.sh` / Docker needs `-it` flags for interactive CLI tools ✅ Resolved (template fix)
+
+**Problem:** The `sandbox.sh` template uses `docker run --rm` without `-it` (interactive + TTY). When tmux creates a window running `./sandbox.sh`, the tmux pane provides a TTY to `sandbox.sh` but Docker doesn't pass it through to the container. Claude Code inside Docker gets no TTY and exits immediately with: `Error: Input must be provided either through stdin or as a prompt argument when using --print`.
+
+The tmux window dies silently (no error visible to swarm), then `send_prompt_to_worker()` tries `tmux send-keys` to a dead window and gets `exit status 1`.
+
+**Fix:** Change `docker run --rm` to `docker run --rm -it` in `sandbox.sh`.
+
+**Suggestions:**
+- Document this requirement in the Dockerfile.sandbox / sandbox template.
+- Consider having swarm detect that the tmux window died during spawn and provide a clearer error: "Worker window exited before agent became ready. Check your command."
+
+**Resolution:** `SANDBOX_SH_TEMPLATE` in swarm.py and `sandbox.sh` in `specs/project-onboarding.md` updated to use `docker run --rm -it`. `docs/sandbox-loop-spec.md` updated with `-it` requirement and explanation. The `run_claude_sandboxed()` example also updated.
+
+### 10. Docker container hits Claude Code first-time theme picker ✅ Resolved (Dockerfile fix)
+
+**Problem:** Fresh Docker containers don't have Claude Code's theme preference set. When `claude` starts inside a new container, it shows an interactive theme picker ("Choose the text style that looks best with your terminal") which blocks all input. The prompt sent by `send_prompt_to_worker()` goes into the theme picker instead of the Claude Code prompt.
+
+**Workaround:** Run workers natively (without Docker sandbox) to avoid the first-time setup. Or pre-configure the theme in the Docker image.
+
+**Suggestions:**
+- Add `claude --theme dark` or equivalent to the Dockerfile to pre-set the theme during image build.
+- Or mount the host's full `~/.claude/` directory (not just credentials and settings) so the container inherits all preferences.
+- Or add a `CLAUDE_THEME=dark` environment variable that skips the picker.
+- The `wait_for_agent_ready()` function should detect the theme picker as a "not ready" state and handle it (e.g., send Enter to accept the default).
+
+**Resolution:** `Dockerfile.sandbox` updated to pre-configure theme: `echo '{"theme":"dark"}' > settings.local.json`. Dockerfile examples in `docs/sandbox-loop-spec.md` and `specs/project-onboarding.md` also updated. Theme picker added as a "Not-Ready State" in `specs/ready-detection.md` with detection patterns and suggested handling. Code fix for `wait_for_agent_ready()` to auto-dismiss deferred.
+
+### 11. `--worktree` + Docker sandbox fails (worktree path not accessible inside container) ✅ Resolved (docs)
+
+**Problem:** When `--worktree` is used with a Docker sandbox, the worktree is created on the host at a path like `/home/user/code/.worktrees/worker-abc123/`. The Docker command in `sandbox.sh` mounts `$(pwd):/workspace`, but `pwd` inside the worktree is the worktree path. The Docker container mounts the worktree, but the worktree may have different path requirements or the Docker image may not be configured to handle arbitrary mount points.
+
+**Workaround:** Skip `--worktree` when using Docker sandbox.
+
+**Suggestions:**
+- Document the incompatibility: "When using Docker sandbox, omit --worktree. The Docker container provides its own isolation."
+- Or have swarm detect Docker commands and adjust worktree behavior automatically.
+
+**Resolution:** Documented as incompatible in `specs/ralph-loop.md` (Docker Sandbox Caveats), `specs/cli-interface.md` (Ralph Spawn Caveats), `docs/sandbox-loop-spec.md` (Known Caveats), `CLAUDE.md` (Troubleshooting), and `README.md` (Caveats). Guideline: omit `--worktree` when using Docker sandbox. Auto-detection of Docker commands deferred.
+
+### 12. `ralph run` exits silently when backgrounded from Claude Code ✅ Resolved (docs)
+
+**Problem:** Running `swarm ralph run worker &` from within a Claude Code session (which itself runs in a sandbox) causes the monitoring loop to exit immediately with no output. The process starts but can't maintain the foreground monitoring connection when double-backgrounded.
+
+**Workaround:** The worker continues running in tmux regardless of the monitor. Check on it manually with `swarm ralph status` and `tmux capture-pane`.
+
+**Suggestions:**
+- Document that `ralph run` must be run in a real terminal, not backgrounded from within another agent.
+- Add a `--daemon` flag that properly daemonizes the monitor with PID file tracking.
+- Consider using tmux itself to host the monitor (separate window) instead of relying on foreground process.
+
+**Resolution:** Documented as a limitation in `specs/ralph-loop.md` (Docker Sandbox Caveats — Ralph Run Backgrounding) and `docs/sandbox-loop-spec.md` (Known Caveats). Workarounds documented: use `nohup`, run in its own tmux window, or use `ralph spawn` (which auto-starts the monitor). `--daemon` mode deferred as a future enhancement.
+
+## Round 2 Summary
+
+> **Updated 2026-02-11**: All Round 2 issues have been addressed with documentation, spec updates, and template fixes. See status markers on each item.
+
+The main friction points in this session:
+1. **Done pattern self-match** — prompt content typed into terminal matches the done pattern, silently stopping the loop → ✅ Documented footgun + mitigation in specs, CLAUDE.md, README.md
+2. **Docker TTY** — missing `-it` flags cause silent container death → ✅ Fixed in SANDBOX_SH_TEMPLATE, sandbox-loop-spec, project-onboarding
+3. **Theme picker** — fresh containers hit first-time setup blocking automation → ✅ Dockerfile.sandbox updated + theme picker added to ready-detection spec
+4. **Worktree + Docker** — incompatible combination not documented → ✅ Documented in all relevant specs and docs
+5. **Monitor backgrounding** — `ralph run` can't be backgrounded from within another agent → ✅ Documented limitation with workarounds; `--daemon` mode deferred
+
+### Additional improvements in this round:
+6. **`swarm ralph ls`** — added as alias for `swarm ralph list` (consistency with `swarm ls`)
+7. **`swarm ralph clean`** — new command spec for cleaning ralph state (`<name>` or `--all`)
+8. **README.md** — fixed `--inactivity-timeout` default from 60s to 180s

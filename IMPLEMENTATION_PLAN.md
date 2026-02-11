@@ -1,115 +1,111 @@
-# Implementation Plan: Remove Workflow Subcommand
+# Implementation Plan: Round 2 Spec Changes (Docker Sandbox + Ralph UX)
 
-**Created**: 2026-02-07
-**Status**: COMPLETE
-**Goal**: Remove `swarm workflow` subcommand entirely. Orchestration belongs in ORCHESTRATOR.md (a markdown file), not in code.
+**Created**: 2026-02-11
+**Status**: IN PROGRESS
+**Goal**: Implement code changes specified in the Round 2 spec updates — new `ralph clean` and `ralph ls` commands, theme picker detection in ready-detection, and done-pattern self-match mitigation.
 
 ---
 
-## Rationale
+## Context
 
-The `swarm workflow` subcommand reimplements sequential pipeline orchestration in ~2000 lines of Python + 8500 lines of tests. This duplicates what a simple markdown file (ORCHESTRATOR.md) already does better:
-
-- ORCHESTRATOR.md composes existing primitives (`ralph`, `spawn`, `send`, `heartbeat`)
-- No YAML schema to learn, no stage state machines to debug
-- A human or director agent adapts in real-time instead of following rigid YAML
-- Unix philosophy: keep primitives simple, compose via documents
+Round 2 feedback from real-world Docker sandbox usage surfaced several issues. The specs and docs have already been updated (see `FEEDBACK.md` Round 2). One code fix has already been applied (`SANDBOX_SH_TEMPLATE` now has `-it` flags). The remaining items require implementation in `swarm.py` and new tests.
 
 ---
 
 ## Tasks
 
-### Phase 1: Remove Workflow Code from swarm.py
+### Phase 1: `ralph ls` Alias
 
-- [x] **1.1 Remove workflow data classes**
-  - Delete: `StageState` (line ~2660), `WorkflowState` (~2698), `StageDefinition` (~2754), `WorkflowDefinition` (~2835), `WorkflowValidationError` (~2891)
-  - Delete: `StageCompletionResult` (~8514), `StageTransitionResult` (~8764)
+- [ ] **1.1 Add `ls` subparser under ralph subparsers**
+  - Add `ralph_subparsers.add_parser("ls", ...)` mirroring `ralph list` parser
+  - File: `swarm.py` (in `main()` argparse setup, near ralph subparsers ~line 3729)
+
+- [ ] **1.2 Add dispatch in `cmd_ralph()`**
+  - Add `"ls"` case in `cmd_ralph()` that calls `cmd_ralph_list(args)`
+  - File: `swarm.py` (~line 5017-5034)
+
+- [ ] **1.3 Add unit tests for `ralph ls`**
+  - Test that `ralph ls` produces identical output to `ralph list`
+  - Test that `ralph ls` accepts same arguments (`--format`, `--status`)
+  - File: `test_cmd_ralph.py`
+
+### Phase 2: `ralph clean` Command
+
+- [ ] **2.1 Add `clean` subparser under ralph subparsers**
+  - Positional `name` (optional), `--all` flag
+  - Validate: one of `name` or `--all` required
+  - File: `swarm.py` (in `main()` argparse setup)
+
+- [ ] **2.2 Implement `cmd_ralph_clean(args)` function**
+  - If `name`: remove `~/.swarm/ralph/<name>/` directory
+  - If `--all`: iterate `~/.swarm/ralph/*/` and remove each
+  - Check if worker still running → print warning
+  - Error if no ralph state found for named worker (exit 1)
+  - `--all` with no state → no-op, exit 0
+  - Output: "cleaned ralph state for <name>"
   - File: `swarm.py`
 
-- [x] **1.2 Remove workflow helper functions**
-  - Delete all functions between the data classes and `cmd_workflow` that are workflow-specific
-  - This includes: `load_workflow_state`, `save_workflow_state`, `run_workflow_monitor`, `parse_workflow_yaml`, `validate_workflow_definition`, and any other workflow-only helpers
+- [ ] **2.3 Add dispatch in `cmd_ralph()`**
+  - Add `"clean"` case in `cmd_ralph()` that calls `cmd_ralph_clean(args)`
   - File: `swarm.py`
 
-- [x] **1.3 Remove workflow command handlers**
-  - Delete: `cmd_workflow`, `cmd_workflow_validate`, `cmd_workflow_status`, `cmd_workflow_list`, `cmd_workflow_cancel`, `cmd_workflow_resume`, `cmd_workflow_resume_all`, `cmd_workflow_logs`, `cmd_workflow_run`
+- [ ] **2.4 Add unit tests for `ralph clean`**
+  - Test: clean specific worker removes state dir
+  - Test: clean specific worker prints warning if worker still running
+  - Test: clean non-existent worker → exit 1 with error message
+  - Test: `--all` removes all ralph state dirs
+  - Test: `--all` with no ralph state → no-op, exit 0
+  - Test: neither name nor --all → error
+  - File: `test_cmd_ralph.py`
+
+### Phase 3: Theme Picker Not-Ready Detection
+
+- [ ] **3.1 Add not-ready patterns to `wait_for_agent_ready()`**
+  - Add patterns: `Choose the text style`, `looks best with your terminal`
+  - When a not-ready pattern matches, do NOT return True
+  - Optionally: send Enter via `tmux send-keys` to dismiss theme picker, continue polling
+  - File: `swarm.py` (~line 3199-3233, `wait_for_agent_ready()`)
+
+- [ ] **3.2 Add unit tests for theme picker detection**
+  - Test: theme picker text does not trigger ready detection
+  - Test: theme picker followed by real ready pattern eventually succeeds
+  - File: `test_ready_patterns.py`
+
+### Phase 4: Done Pattern Self-Match Mitigation
+
+- [ ] **4.1 Record baseline buffer position after prompt injection**
+  - In `send_prompt_to_worker()` or immediately after, capture the current pane line count
+  - Store as `prompt_baseline_lines` in ralph state or as a return value
   - File: `swarm.py`
 
-- [x] **1.4 Remove workflow argparse subparsers**
-  - Remove the `workflow` subparser from `main()` argparse setup
-  - Remove any workflow-related help text constants (e.g. `WORKFLOW_HELP_*`)
-  - File: `swarm.py`
+- [ ] **4.2 Filter baseline from done-pattern checking**
+  - In `detect_inactivity()` when `check_done_continuous` is True:
+    - Capture full pane content
+    - Skip lines up to `prompt_baseline_lines`
+    - Only match done pattern against lines AFTER the baseline
+  - File: `swarm.py` (~line 5786-5888)
 
-- [x] **1.5 Remove WORKFLOWS_DIR constant and any workflow imports**
-  - Delete `WORKFLOWS_DIR = SWARM_DIR / "workflows"` near top of file
-  - Remove any `import yaml` or yaml-related imports that are only used by workflow
-  - Check if `yaml` is used elsewhere (ralph uses it too?) -- only remove if workflow-only
-  - File: `swarm.py`
+- [ ] **4.3 Add unit tests for done-pattern baseline**
+  - Test: done pattern in prompt text (before baseline) does NOT match
+  - Test: done pattern in agent output (after baseline) DOES match
+  - Test: baseline is recorded after prompt injection
+  - File: `test_cmd_ralph.py`
 
-### Phase 2: Remove Workflow Tests
+### Phase 5: Verify
 
-- [x] **2.1 Delete workflow unit tests**
-  - Delete file: `test_cmd_workflow.py`
+- [ ] **5.1 Run unit tests**
+  - `python3 -m unittest test_cmd_ralph -v`
+  - `python3 -m unittest test_ready_patterns -v`
+  - `python3 -m unittest test_cmd_spawn -v`
 
-- [x] **2.2 Delete workflow integration tests**
-  - Delete file: `tests/test_integration_workflow.py`
+- [ ] **5.2 Verify CLI**
+  - `python3 swarm.py ralph ls --help` → shows list help
+  - `python3 swarm.py ralph clean --help` → shows clean help
+  - `python3 swarm.py ralph --help` → shows ls and clean in subcommands
 
-### Phase 3: Remove Workflow Spec
-
-- [x] **3.1 Delete workflow spec**
-  - Delete file: `specs/workflow.md`
-
-- [x] **3.2 Update specs/README.md**
-  - Remove `workflow.md` from the P1 table
-  - Update any cross-references
-
-### Phase 4: Update Documentation
-
-- [x] **4.1 Update README.md**
-  - Remove workflow section and all `swarm workflow` examples
-  - Add/promote ORCHESTRATOR.md pattern in its place (link to `docs/autonomous-loop-guide.md`)
-  - Keep it brief: the guide doc has the details
-
-- [x] **4.2 Update CLAUDE.md**
-  - Remove workflow references from Quick Reference, Architecture Notes, Testing Guidelines
-  - Remove WorkflowState/StageState from Key Data Classes
-  - Remove `test_cmd_workflow.py` and `tests/test_integration_workflow.py` from Test Files
-
-- [x] **4.3 Update specs that cross-reference workflow**
-  - `specs/cli-help-standards.md` - remove workflow help text examples (16 references)
-  - `specs/heartbeat.md` - update cross-reference (~1 reference)
-  - `specs/ralph-loop.md` - update cross-reference (~2 references)
-  - `specs/security-permissions.md` - update if needed (~1 reference)
-
-### Phase 5: Update Remaining References
-
-- [x] **5.1 Clean up SWARM_INSTRUCTIONS constant**
-  - The `SWARM_INSTRUCTIONS` template (injected by `swarm init`) likely mentions workflow
-  - Remove workflow section from it
-  - File: `swarm.py`
-
-- [x] **5.2 Update cli-help-standards spec**
-  - Remove workflow-specific help text examples
-  - File: `specs/cli-help-standards.md`
-
-### Phase 6: Verify
-
-- [x] **6.1 Run tests to verify nothing is broken**
-  - Run: `python3 -m unittest test_cmd_ralph -v`
-  - Run: `python3 -m unittest test_cmd_spawn -v`
-  - Run: `python3 -m unittest test_cmd_kill -v`
-  - Run: `python3 -m unittest test_cmd_init -v`
-  - Run: `python3 -m unittest test_cmd_heartbeat -v`
-  - Run any other non-workflow test files
-  - Verify no import errors or missing references
-
-- [x] **6.2 Verify clean CLI**
-  - Run: `python3 swarm.py --help` -- workflow should not appear
-  - Run: `python3 swarm.py workflow` -- should error cleanly (unknown command)
-
-- [x] **6.3 Grep for stale references**
-  - `grep -rn 'workflow' swarm.py` -- should only find incidental uses (e.g. "workflow" in generic help text about agent workflows), not `cmd_workflow` or `WorkflowState`
-  - `grep -rn 'cmd_workflow\|WorkflowState\|StageState\|WorkflowDefinition' swarm.py` -- should return 0 results
+- [ ] **5.3 Run full test suite (carefully)**
+  - `python3 -m unittest discover -s . -p 'test_*.py' -v`
+  - Note: may crash swarm workers per CLAUDE.md caveat — run in isolation
 
 ---
 
@@ -117,27 +113,25 @@ The `swarm workflow` subcommand reimplements sequential pipeline orchestration i
 
 | File | Change |
 |------|--------|
-| `swarm.py` | Remove ~2000 lines of workflow code |
-| `test_cmd_workflow.py` | DELETE entire file |
-| `tests/test_integration_workflow.py` | DELETE entire file |
-| `specs/workflow.md` | DELETE entire file |
-| `specs/README.md` | Remove workflow from P1 table |
-| `specs/cli-help-standards.md` | Remove workflow examples |
-| `specs/heartbeat.md` | Update cross-reference |
-| `specs/ralph-loop.md` | Update cross-reference |
-| `specs/security-permissions.md` | Update cross-reference |
-| `README.md` | Remove workflow section, add ORCHESTRATOR.md mention |
-| `CLAUDE.md` | Remove workflow references |
+| `swarm.py` | Add `ralph ls` alias, `ralph clean` command, theme picker not-ready patterns, done-pattern baseline filtering |
+| `test_cmd_ralph.py` | Tests for `ralph ls`, `ralph clean`, done-pattern baseline |
+| `test_ready_patterns.py` | Tests for theme picker not-ready detection |
 
 ---
 
-## What We Keep
+## Spec References
 
-All other swarm primitives are untouched:
-- `spawn` / `kill` / `ls` / `status` / `logs` / `wait` / `clean` / `respawn`
-- `send` / `attach` / `interrupt` / `eof`
-- `ralph` (autonomous looping)
-- `heartbeat` (rate limit recovery)
-- `init` (project scaffolding)
+All spec changes are already committed in the current diff:
+- `specs/ralph-loop.md` — Ralph Clean, Ralph Ls, Docker Sandbox Caveats, Done Pattern Self-Match warning
+- `specs/cli-interface.md` — Ralph Clean Arguments, Ralph Spawn Caveats, ralph ls/clean in subcommand table
+- `specs/ready-detection.md` — Not-Ready States (theme picker), scenario for theme picker
+- `specs/project-onboarding.md` — sandbox.sh uses `-it`, Dockerfile pre-configures theme
 
-Orchestration is done via ORCHESTRATOR.md + existing primitives.
+---
+
+## Complexity Notes
+
+- **Phase 1 (ralph ls)**: Trivial — alias dispatch, 30 min
+- **Phase 2 (ralph clean)**: Straightforward — file deletion with validation, 1-2 hours
+- **Phase 3 (theme picker)**: Moderate — need to add negative pattern matching without breaking existing ready detection, 1-2 hours
+- **Phase 4 (done-pattern baseline)**: Most complex — threading baseline line count through prompt injection → inactivity detection, 2-3 hours
