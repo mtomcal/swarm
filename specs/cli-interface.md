@@ -104,7 +104,7 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 
 **`--worktree` + Docker sandbox**: `--worktree` should be omitted when the worker command is a Docker-based sandbox (e.g., `./sandbox.sh`). Docker provides its own filesystem isolation, making worktrees redundant. The worktree path on the host may not map correctly inside the container.
 
-**`--done-pattern` + `--check-done-continuous`**: The done pattern must NOT appear literally in the prompt file. The prompt text is typed into the tmux pane, and continuous done checking scans the full pane buffer — including the prompt itself. Use a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prose.
+**`--done-pattern` + `--check-done-continuous`**: The prompt text is typed into the tmux pane via `send-keys`. Baseline filtering captures the pane content after prompt injection and excludes it from done-pattern scanning, preventing self-match. Using a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prompt prose is still recommended as a defense-in-depth measure.
 
 ### Global Exit Codes
 

@@ -313,6 +313,7 @@ class RalphState:
     inactivity_timeout: int = 180         # Seconds before restart
     check_done_continuous: bool = False   # Check pattern during monitoring
     exit_reason: Optional[str] = None     # Why loop stopped
+    prompt_baseline_content: str = ""     # Pane content after prompt injection (done-pattern self-match prevention)
 ```
 
 **JSON Representation**:
@@ -332,7 +333,8 @@ class RalphState:
   "done_pattern": "regex|null",
   "inactivity_timeout": 180,
   "check_done_continuous": false,
-  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null"
+  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null",
+  "prompt_baseline_content": ""
 }
 ```
 
@@ -354,6 +356,7 @@ class RalphState:
 | `inactivity_timeout` | int | No | 180 | Seconds of screen stability before restart |
 | `check_done_continuous` | bool | No | false | Check done pattern during monitoring |
 | `exit_reason` | string | No | null | Why the loop stopped |
+| `prompt_baseline_content` | string | No | "" | Pane content after prompt injection (done-pattern self-match prevention) |
 
 **Status Values**:
 | Status | Description |

@@ -172,7 +172,8 @@ This enables the core ralph pattern: each iteration builds on the previous one's
   "done_pattern": "regex|null",
   "inactivity_timeout": 300,
   "check_done_continuous": false,
-  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null"
+  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null",
+  "prompt_baseline_content": "string (pane content captured after prompt injection, for done-pattern self-match prevention)"
 }
 ```
 
@@ -268,24 +269,23 @@ swarm ralph logs <name> [--live] [--lines N]
 3. If matched, immediately stop loop (don't wait for exit or timeout)
 4. Useful when you want to stop as soon as "All tasks complete" appears
 
-**WARNING — Self-Match Footgun**: When using `--check-done-continuous`, the done pattern is checked against the full tmux pane buffer. Since `send_prompt_to_worker()` types the prompt content into the terminal via `tmux send-keys`, **any done pattern that appears literally in the prompt file will self-match immediately**, stopping the loop before the agent does any work.
+**Self-Match Prevention**: When using `--check-done-continuous`, the done pattern is checked against the tmux pane buffer. Since `send_prompt_to_worker()` types the prompt content into the terminal via `tmux send-keys`, the prompt text itself appears in the pane buffer. Without mitigation, any done pattern that appears literally in the prompt file would self-match immediately.
 
-Example: If PROMPT.md contains `Output /done on its own line` and the done pattern is `/done`, the loop stops after ~26 seconds with `exit_reason: done_pattern` because the prompt text itself matches.
+**Baseline Filtering**: After sending the prompt, `send_prompt_to_worker()` captures the full pane content (including scrollback) as a baseline snapshot. During monitoring, `detect_inactivity()` captures the current pane content (including scrollback) and strips the baseline content prefix before checking the done pattern. This ensures only output produced by the agent — after the prompt was sent — is scanned.
 
-**Mitigation** (required when using `--check-done-continuous`):
-1. **Mark a baseline buffer position** after sending the prompt via `tmux send-keys`. Only check for done patterns in output that appears AFTER the prompt was sent. Clear the terminal after prompt injection (`tmux send-keys -t ... C-l`) or record the pane line count as a baseline.
-2. **Use a done signal that cannot appear in prose**. Split the signal across string concatenation so the literal pattern never appears in the prompt:
-   ```
-   python3 -c "print('SWARM'+'_DONE'+'_X9K')"
-   ```
-   Then use `--done-pattern "SWARM_DONE_X9K"`.
-3. **Grace period**: Skip done-pattern checks for the first N seconds after sending the prompt.
+**Implementation Requirements**:
+1. `send_prompt_to_worker()` captures the pane content (with scrollback via `tmux capture-pane -p -S -<N>`) immediately after sending the prompt. The captured text is stored as `prompt_baseline_content` in `RalphState`.
+2. `detect_inactivity()` captures the current pane content (with the same scrollback depth) and removes the `prompt_baseline_content` prefix before running the done-pattern regex.
+3. If the current pane content does not start with the baseline (e.g., terminal was cleared), the full pane content is checked.
+4. Backward compatibility: if `prompt_baseline_content` is empty (old state files or non-tmux workers), the done pattern is checked against the full pane content.
+
+**Best Practice**: Using a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prompt prose is still recommended as a defense-in-depth measure, but is no longer required.
 
 **Common Patterns**:
 - `"All tasks complete"` - Simple string match
 - `"IMPLEMENTATION_PLAN.md.*100%"` - Plan completion
 - `"No remaining tasks"` - Task list empty
-- `"SWARM_DONE_X9K"` - Unique signal that won't appear in prompt text (recommended for `--check-done-continuous`)
+- `"SWARM_DONE_X9K"` - Unique signal that won't appear in prompt text
 
 ### Monitor Disconnect Handling
 
@@ -939,15 +939,25 @@ Fresh Docker containers without Claude Code preferences hit an interactive theme
   - Worker continues running in tmux
   - `swarm ralph status agent` shows: "Exit reason: monitor_disconnected (worker still running)"
 
-### Scenario: Done pattern self-matches prompt content
+### Scenario: Done pattern in prompt text does not self-match
 - **Given**: PROMPT.md contains "Output /done on its own line and stop"
 - **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --done-pattern "/done" --check-done-continuous -- claude`
 - **Then**:
   - Prompt typed into tmux pane via `send-keys`
-  - Done pattern `/done` matches the prompt text in the pane buffer
-  - Loop stops after ~26 seconds with `exit_reason: done_pattern`
-  - Agent never performed any work
-  - **This is a known footgun** — use a unique signal pattern that doesn't appear in the prompt
+  - Pane content captured as baseline after prompt injection
+  - Done pattern `/done` in prompt text is excluded by baseline filtering
+  - Loop continues monitoring — does NOT self-match
+  - Agent works normally until it outputs `/done` in its own output (after the baseline)
+
+### Scenario: Done pattern in agent output matches after baseline
+- **Given**: PROMPT.md contains "Output /done on its own line and stop"
+- **Given**: Agent outputs "/done" after completing its work
+- **When**: `detect_inactivity()` polls pane content with `--check-done-continuous`
+- **Then**:
+  - Current pane content captured (with scrollback)
+  - Baseline content prefix stripped
+  - Done pattern `/done` matches in the remaining agent output
+  - Loop stops with `exit_reason: done_pattern`
 
 ### Scenario: Ralph ls alias
 - **Given**: Ralph workers exist
