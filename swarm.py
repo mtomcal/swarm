@@ -3279,6 +3279,8 @@ def wait_for_agent_ready(session: str, window: str, timeout: int = 30, socket: O
     not_ready_patterns = [
         r"Choose the text style",           # First-time theme picker
         r"looks best with your terminal",   # Theme picker subtitle
+        r"Select login method",             # Login/OAuth prompt
+        r"Paste code here",                 # OAuth code entry prompt
     ]
 
     start = time.time()

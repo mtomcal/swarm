@@ -494,5 +494,53 @@ Choose the text style that looks best with your terminal
             )
 
 
+    # =========================================================================
+    # Login/OAuth Not-Ready Pattern Tests
+    # =========================================================================
+
+    def test_login_select_login_method_not_ready(self):
+        """LOGIN-1: 'Select login method' does NOT trigger ready detection."""
+        output = "Select login method"
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected login prompt 'Select login method' to NOT be detected as ready. Output: {output!r}"
+        )
+
+    def test_login_paste_code_here_not_ready(self):
+        """LOGIN-2: 'Paste code here' does NOT trigger ready detection."""
+        output = "Paste code here"
+        result = self._wait_for_ready_with_output(output, timeout=1)
+        self.assertFalse(
+            result,
+            f"Expected OAuth prompt 'Paste code here' to NOT be detected as ready. Output: {output!r}"
+        )
+
+    def test_login_prompt_then_ready_pattern_succeeds(self):
+        """LOGIN-3: Login prompt followed by real ready pattern eventually succeeds."""
+        call_count = [0]
+        def mock_capture(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return "Select login method\n  1. API Key\n  2. OAuth"
+            return "bypass permissions on"
+
+        with patch('swarm.tmux_capture_pane', side_effect=mock_capture), \
+             patch('swarm.subprocess.run') as mock_run, \
+             patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+            mock_run.return_value = MagicMock(returncode=0)
+            result = swarm.wait_for_agent_ready(
+                session="test-session",
+                window="test-window",
+                timeout=10,
+                socket=None
+            )
+            self.assertTrue(
+                result,
+                "Expected ready detection to succeed after login prompt is dismissed "
+                "and real ready pattern appears"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

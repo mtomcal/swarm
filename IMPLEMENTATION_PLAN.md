@@ -16,13 +16,13 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 1: Login/OAuth Not-Ready Patterns
 
-- [ ] **1.1 Add login/OAuth not-ready patterns to `wait_for_agent_ready()`**
+- [x] **1.1 Add login/OAuth not-ready patterns to `wait_for_agent_ready()`**
   - Add patterns: `Select login method`, `Paste code here`
   - These join the existing theme picker patterns in `not_ready_patterns` list
   - When matched, send Enter to dismiss and continue polling (existing behavior)
   - File: `swarm.py` (~line 3279, `not_ready_patterns` list)
 
-- [ ] **1.2 Add unit tests for login/OAuth not-ready detection**
+- [x] **1.2 Add unit tests for login/OAuth not-ready detection**
   - Test: `Select login method` text does not trigger ready detection
   - Test: `Paste code here` text does not trigger ready detection
   - Test: login prompt followed by real ready pattern eventually succeeds
