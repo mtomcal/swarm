@@ -37,6 +37,7 @@ swarm <command> [options] [arguments]
 | `send` | Send text to worker | Yes |
 | `interrupt` | Send Ctrl-C to worker | Yes |
 | `eof` | Send Ctrl-D to worker | No |
+| `peek` | Capture worker terminal output | Yes |
 | `attach` | Attach to tmux window | No |
 | `logs` | View worker output | No |
 | `kill` | Kill worker | Yes |
@@ -77,6 +78,7 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 | `--done-pattern` | string | No | null | Regex pattern to stop loop |
 | `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
 | `--no-run` | bool | No | false | Spawn only, don't start loop |
+| `--foreground` | bool | No | false | Block while loop runs (for human terminal use) |
 | `--replace` | bool | No | false | Auto-clean existing worker before spawn |
 | `--clean-state` | bool | No | false | Clear ralph state without affecting worker |
 | `--tmux` | bool | No | (no-op) | Accepted for consistency, ralph always uses tmux |
@@ -133,6 +135,7 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 | `clean` | Worker cleaned | Dirty worktree | Worker not found |
 | `respawn` | Worker respawned | Respawn failed | Worker not found |
 | `init` | File updated | Error writing | - |
+| `peek` | Output captured | Not running, not tmux | Worker not found |
 | `ralph logs` | Output displayed | Log file not found | Worker not found |
 
 ### Error Message Format

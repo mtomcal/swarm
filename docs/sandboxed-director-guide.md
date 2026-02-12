@@ -27,6 +27,10 @@ sudo ./setup-sandbox-network.sh
 
 # 4. Git auth (token passed to container, no SSH keys)
 gh auth login
+
+# 5. Claude auth (one of the following)
+export ANTHROPIC_API_KEY=sk-ant-...   # API key (preferred, no expiry)
+# OR: run 'claude login' on host (OAuth token auto-extracted by sandbox.sh)
 ```
 
 ### Before each session
@@ -63,7 +67,12 @@ claude --dangerously-skip-permissions
 grep -cE '^\s*-\s*\[x\]' IMPLEMENTATION_PLAN.md  # Done
 grep -cE '^\s*-\s*\[ \]' IMPLEMENTATION_PLAN.md   # Remaining
 
+# Worker terminal output (lightweight, non-interactive)
+swarm peek dev
+swarm peek dev -n 100         # more lines
+
 # Worker status
+swarm ls --status running
 swarm ralph status dev
 swarm ralph logs dev
 git log --oneline -5

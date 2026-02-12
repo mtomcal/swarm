@@ -601,11 +601,14 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         self.assertIn('--network=', content)
         self.assertIn('exec docker run', content)
         self.assertIn('claude "$@"', content)
-        # Verify granular mounts (not whole .claude directory)
-        self.assertIn('.credentials.json', content)
+        # Verify OAuth token extraction (not raw credentials mount)
+        self.assertIn('CLAUDE_CODE_OAUTH_TOKEN', content)
+        self.assertIn('claudeAiOauth', content)
         self.assertIn('settings.json', content)
         self.assertIn(':ro', content)
         self.assertNotIn('-v "$HOME/.claude:/home/loopuser/.claude"', content)
+        # Verify credentials.json is NOT bind-mounted (token is extracted as env var)
+        self.assertNotIn('.credentials.json:/home/loopuser', content)
         # Verify GH_TOKEN auth (no SSH keys)
         self.assertIn('GH_TOKEN', content)
         self.assertIn('gh auth token', content)
@@ -629,6 +632,8 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         self.assertIn('credential', content)
         self.assertIn('GH_TOKEN', content)
         self.assertNotIn('openssh', content)
+        # Verify theme picker fix (pre-configure settings.local.json)
+        self.assertIn('settings.local.json', content)
 
     def test_with_sandbox_orchestrator_content(self):
         """Test ORCHESTRATOR.md contains monitoring commands and operational learnings."""

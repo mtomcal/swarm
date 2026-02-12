@@ -101,7 +101,7 @@ Swarm maintains a persistent registry of all workers in a JSON file located at `
 | Condition | Behavior |
 |-----------|----------|
 | State file doesn't exist | Initialize with empty workers list |
-| Invalid JSON | Raises JSONDecodeError |
+| Invalid JSON | Log warning, backup corrupted file to `state.json.corrupted`, return empty state |
 | Missing required fields | Raises KeyError |
 
 ### Save State
@@ -263,5 +263,6 @@ swarm clean --all
 ## Implementation Notes
 
 - **Locking granularity**: Lock is held for entire load-modify-save cycle, not just individual operations. This ensures atomicity but may reduce concurrency under heavy load.
-- **No write-ahead log**: Updates are not crash-safe. A crash during write could corrupt state.json. Consider backup before operations in production.
+- **Crash-safe writes**: Use write-to-temp-then-rename pattern to prevent partial writes from corrupting the state file.
+- **Corrupt state recovery**: On JSONDecodeError, backup the file to `state.json.corrupted` and return empty/default state rather than crashing. Log a warning: `"swarm: warning: corrupt state file, resetting"`.
 - **Memory model**: State() loads entire registry into memory. For very large registries (1000+ workers), consider pagination.

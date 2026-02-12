@@ -113,6 +113,23 @@ swarm: error: <original error message>
 |-----------|----------|
 | Missing `=` in env string | Exit 1 with "swarm: error: invalid env format '<value>' (expected KEY=VAL)" |
 
+### Environment Propagation Chain
+
+**Description**: How `--env KEY=VAL` propagates through the full execution chain.
+
+When `--env KEY=VAL` is specified, the value propagates through:
+
+```
+swarm spawn --env KEY=VAL
+  -> tmux new-window with env set via shell wrapper
+    -> command receives KEY=VAL in its environment
+      -> (if command is sandbox.sh) docker run -e KEY passes it into container
+```
+
+**Guarantee**: Any `--env` value set at spawn time is available in the worker process environment. For Docker sandbox workers, `sandbox.sh` must explicitly forward the env var via `docker run -e KEY`.
+
+**Implementation**: tmux windows inherit the tmux server's environment at creation time. `swarm spawn` sets environment variables by wrapping the command in `env KEY=VAL <command>` to ensure reliable propagation regardless of tmux server state.
+
 ### Tmux Mode Spawn
 
 **Description**: Create worker running in a tmux window.

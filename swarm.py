@@ -145,6 +145,32 @@ if [ -z "$GH_TOKEN" ]; then
     echo "  fix: run 'gh auth login' or export GH_TOKEN=ghp_..." >&2
 fi
 
+# --- Claude auth ---
+# Priority: ANTHROPIC_API_KEY (direct API key, no expiry)
+#         > CLAUDE_CODE_OAUTH_TOKEN (explicit OAuth token)
+#         > auto-extract from ~/.claude/.credentials.json (subscription users)
+#
+# OAuth tokens expire after ~8h but sandbox.sh re-extracts each iteration.
+# For long sessions, ANTHROPIC_API_KEY is more reliable.
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    CREDS="$HOME/.claude/.credentials.json"
+    if [ -f "$CREDS" ]; then
+        CLAUDE_CODE_OAUTH_TOKEN=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('claudeAiOauth', {}).get('accessToken', ''))
+except Exception:
+    pass
+" "$CREDS" 2>/dev/null || true)
+        export CLAUDE_CODE_OAUTH_TOKEN
+    fi
+    if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+        echo "warning: no Claude auth found. Worker will show login prompt." >&2
+        echo "  fix: export ANTHROPIC_API_KEY=sk-ant-... or run 'claude login' on host." >&2
+    fi
+fi
+
 exec docker run --rm -it \
     --memory="$MEMORY" \
     --memory-swap="$MEMORY" \
@@ -152,10 +178,10 @@ exec docker run --rm -it \
     --pids-limit="$PIDS" \
     --network="$NETWORK" \
     -v "$(pwd):/workspace" \
-    -v "$HOME/.claude/.credentials.json:/home/loopuser/.claude/.credentials.json:ro" \
     -v "$CLAUDE_SETTINGS:/home/loopuser/.claude/settings.json:ro" \
     -v "$HOME/.claude/projects:/home/loopuser/.claude/projects" \
     -e ANTHROPIC_API_KEY \
+    -e CLAUDE_CODE_OAUTH_TOKEN \
     -e DISABLE_AUTOUPDATER=1 \
     -e "GH_TOKEN=$GH_TOKEN" \
     -w /workspace \
@@ -182,6 +208,11 @@ RUN if getent passwd $USER_ID >/dev/null; then userdel -r $(getent passwd $USER_
     if getent group $GROUP_ID >/dev/null; then groupdel $(getent group $GROUP_ID | cut -d: -f1) 2>/dev/null || true; fi && \\
     groupadd -g $GROUP_ID loopuser && \\
     useradd -m -u $USER_ID -g $GROUP_ID loopuser
+
+# Skip first-time theme picker in fresh containers
+RUN mkdir -p /home/loopuser/.claude && \\
+    echo '{"theme":"dark"}' > /home/loopuser/.claude/settings.local.json && \\
+    chown -R $USER_ID:$GROUP_ID /home/loopuser/.claude
 
 USER loopuser
 
@@ -347,6 +378,8 @@ docker run --rm --network=sandbox-net sandbox-loop curl -v --max-time 5 https://
 ## Quick Status
 ```bash
 swarm ralph status dev
+swarm ls --status running
+swarm peek dev
 git log --oneline -5
 grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Tasks done
 grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Tasks remaining
@@ -366,6 +399,9 @@ grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Remaining
 
 # Recent commits
 git log --oneline -5
+
+# Worker terminal output (lightweight, non-interactive)
+swarm peek dev
 
 # Container resource usage (use exact name from docker ps)
 docker ps --filter "ancestor=sandbox-loop" --format '{{.Names}}'

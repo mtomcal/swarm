@@ -42,16 +42,20 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 **Behavior**:
 1. Validate prompt file exists and is readable
 2. Automatically use tmux mode (ralph always uses tmux; `--tmux` accepted as no-op for consistency)
-3. If `--replace` specified and worker exists: kill worker, remove worktree if present, remove ralph state
+3. If `--replace` specified and worker exists:
+   a. If a ralph monitoring loop is running for the old worker, terminate it (SIGTERM)
+   b. Kill the worker (tmux window)
+   c. Remove worktree if present
+   d. Remove ralph state directory
 4. If `--clean-state` specified: remove ralph state directory (without affecting worker/worktree)
 5. Create worker and ralph state
 6. Warn if `--max-iterations` exceeds 50
 7. **Auto-start loop**: Unless `--no-run` is specified, automatically start the monitoring loop after spawning
 
 **Auto-start Behavior**:
-- By default, `ralph spawn` both creates the worker AND starts monitoring
-- The command blocks while the loop runs (use `&` or tmux to background)
-- Use `--no-run` when you want to spawn now but run the loop later
+- By default, `ralph spawn` creates the worker, starts the monitoring loop in the background, prints status, and returns immediately
+- Use `--foreground` to block while the loop runs (for human terminal use)
+- Use `--no-run` to spawn without starting the loop at all
 
 **Error Conditions**:
 | Condition | Behavior |
@@ -119,6 +123,56 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 4. If changed, reset stable time to 0
 5. When stable time >= timeout, trigger restart
 
+### Stuck Pattern Detection
+
+**Description**: Detect known stuck states during the inactivity detection polling loop and warn immediately.
+
+During each 2-second poll cycle, after hashing screen content for inactivity detection, check the normalized content against known stuck patterns. When detected, log a `[WARN]` entry to `iterations.log` immediately (don't wait for timeout).
+
+**Stuck Patterns**:
+
+| Pattern | Warning message |
+|---------|----------------|
+| `Select login method` | `Worker stuck at login prompt. Check auth credentials.` |
+| `Choose the text style` | `Worker stuck at theme picker. Check settings.local.json.` |
+| `looks best with your terminal` | `Worker stuck at theme picker. Check settings.local.json.` |
+| `Paste code here` | `Worker stuck at OAuth code entry. Use ANTHROPIC_API_KEY instead.` |
+
+**Behavior**:
+1. During each 2-second poll cycle, after hashing screen content, check normalized content against stuck patterns
+2. If a stuck pattern is detected and hasn't been warned about yet this iteration, log `[WARN]` to iterations.log
+3. Only warn once per pattern per iteration (avoid log spam)
+4. Warnings appear in `swarm ralph logs` output
+
+**Log Format**:
+```
+2026-02-12T13:24:30 [WARN] iteration 1: Worker stuck at login prompt. Check auth credentials.
+```
+
+### Pre-flight Validation
+
+**Description**: Early detection of stuck workers on the first iteration to fail fast with actionable errors.
+
+After the first iteration starts and the agent signals readiness (or after 10 seconds, whichever comes first), peek the terminal output and check for stuck patterns.
+
+**Behavior**:
+1. After `send_prompt_to_worker()` completes on iteration 1, wait 10 seconds
+2. Capture terminal output via `tmux_capture_pane()`
+3. Check against stuck patterns (same patterns as Stuck Pattern Detection)
+4. If a stuck pattern is detected:
+   - Log `[ERROR]` to iterations.log
+   - Print actionable error to stderr with fix instructions
+   - Kill worker and exit with code 1
+5. If no stuck pattern detected, continue normal monitoring
+
+**Output on failure**:
+```
+swarm: error: pre-flight check failed — worker stuck at login prompt.
+  fix: export ANTHROPIC_API_KEY=sk-ant-... or run 'claude login' on host.
+```
+
+**Applies to**: Iteration 1 only. Subsequent iterations skip the pre-flight check (if auth worked on iteration 1, it will work on iteration N).
+
 ### Prompt File Handling
 
 **Description**: Read and inject prompt content each iteration.
@@ -176,6 +230,15 @@ This enables the core ralph pattern: each iteration builds on the previous one's
   "prompt_baseline_content": "string (pane content captured after prompt injection, for done-pattern self-match prevention)"
 }
 ```
+
+**Corrupt State Recovery**:
+When `load_ralph_state()` encounters invalid JSON (JSONDecodeError):
+1. Log warning: `"swarm: warning: corrupt ralph state for '<name>', resetting"`
+2. Back up corrupted file to `state.json.corrupted`
+3. Create fresh default state (preserving worker_name and prompt_file from filename/path)
+4. Continue loop execution — do NOT crash
+
+This prevents the monitoring loop from dying on state corruption, which was observed when rapid iteration restarts race on the state file.
 
 **Worker Metadata**:
 The worker record includes ralph iteration in metadata:
@@ -359,9 +422,15 @@ The message is typed into the tmux pane and becomes part of the agent's input.
 
 **Description**: Output format for ralph operations.
 
-**Spawn with Ralph**:
+**Spawn with Ralph** (non-blocking default):
 ```
 spawned <name> (tmux: <session>:<window>) [ralph mode: iteration 1/100]
+
+Monitor:
+  swarm ralph status <name>    # loop progress
+  swarm peek <name>            # terminal output
+  swarm ralph logs <name>      # iteration history
+  swarm kill <name>            # stop worker
 ```
 
 **Iteration Start**:
@@ -528,7 +597,16 @@ When customizing, ensure these are covered:
 
 ### Live Agent View
 
-**Attach to tmux session**:
+**Quick peek at terminal output** (non-interactive):
+```bash
+swarm peek <name>             # last 30 lines of terminal
+swarm peek <name> -n 100     # last 100 lines
+swarm peek --all              # all running workers
+```
+- Lightweight alternative to `swarm attach`
+- Non-interactive — safe for scripts and directors
+
+**Attach to tmux session** (interactive):
 ```bash
 swarm attach <name>
 ```
@@ -549,12 +627,33 @@ Status: running
 Iteration: 7/100 (avg 5m12s/iter, ~48m remaining)
 Started: 2024-01-15 10:30:00
 Current iteration started: 2024-01-15 12:45:00
+Last screen change: 5s ago
 Consecutive failures: 0
 Total failures: 2
 Inactivity timeout: 180s
 Done pattern: All tasks complete
 Exit reason: (none - still running)
 ```
+
+**Stuck Detection in Status Output**:
+When the terminal screen has been unchanged for >60 seconds, the status output automatically includes:
+- A `(possibly stuck)` suffix on the Status line
+- The last 5 lines of terminal output
+
+```
+Ralph Loop: agent
+Status: running (possibly stuck — no output change for 90s)
+Iteration: 1/50
+Last screen change: 90s ago
+Last output:
+  Select login method:
+  > 1. Claude account with subscription
+Consecutive failures: 0
+Total failures: 0
+Exit reason: (none - still running)
+```
+
+This helps directors quickly identify stuck workers without needing to run `swarm peek`.
 
 **Status when stopped shows exit reason**:
 ```
@@ -647,6 +746,7 @@ done
 | `--done-pattern` | str | No | null | Regex to stop loop |
 | `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
 | `--no-run` | bool | No | false | Spawn only, don't start loop |
+| `--foreground` | bool | No | false | Block while loop runs (for human terminal use) |
 | `--replace` | bool | No | false | Auto-clean existing worker/worktree/state before spawn |
 | `--clean-state` | bool | No | false | Clear ralph state without affecting worker/worktree |
 | `--tmux` | bool | No | (no-op) | Accepted for consistency with `swarm spawn`, but ralph always uses tmux |
@@ -725,6 +825,17 @@ Fresh Docker containers without Claude Code preferences hit an interactive theme
 2. Mount full `~/.claude/` directory (not just credentials and settings) so the container inherits all preferences
 3. Set `CLAUDE_THEME=dark` environment variable if supported
 
+#### OAuth Authentication
+
+Mounting `~/.claude/.credentials.json` into Docker containers does not reliably provide authentication for interactive Claude sessions. The OAuth flow requires browser-based token exchange, and tokens expire after ~8 hours.
+
+`sandbox.sh` auto-extracts the OAuth token from `~/.claude/.credentials.json` on the host and passes it as the `CLAUDE_CODE_OAUTH_TOKEN` environment variable. This is re-extracted each iteration, providing fresh tokens. For long sessions (>8h), `ANTHROPIC_API_KEY` is more reliable as it does not expire.
+
+**Auth priority chain** (highest to lowest):
+1. `ANTHROPIC_API_KEY` — direct API key, no expiry
+2. `CLAUDE_CODE_OAUTH_TOKEN` — explicit OAuth token env var
+3. Auto-extracted from `~/.claude/.credentials.json` — subscription users
+
 #### Worktree + Docker Incompatibility
 
 `--worktree` is incompatible with Docker-sandboxed workers. The worktree is created on the host at a path like `/home/user/code/.worktrees/worker/`, and Docker mounts `$(pwd):/workspace`. The worktree path is visible inside Docker, but the Docker container provides its own filesystem isolation, making worktrees redundant and potentially confusing.
@@ -736,18 +847,29 @@ Fresh Docker containers without Claude Code preferences hit an interactive theme
 `swarm ralph run <name>` must run in a real terminal. Backgrounding it from within another agent session (`swarm ralph run worker &`) causes the monitoring loop to exit immediately with no output, because the double-backgrounded process loses its stdio connection.
 
 **Workarounds**:
-- The worker continues running in tmux regardless of the monitor — check on it with `swarm ralph status` and `tmux capture-pane`
+- The worker continues running in tmux regardless of the monitor — check on it with `swarm ralph status` and `swarm peek <name>`
 - Run `ralph run` in its own tmux window or use `nohup`
 - Use `ralph spawn` (which auto-starts the monitor) instead of the two-step `spawn --no-run` + `run` workflow
 
 ## Scenarios
 
-### Scenario: Basic ralph loop (auto-start)
+### Scenario: Basic ralph loop (auto-start, non-blocking)
 - **Given**: Prompt file exists at `./PROMPT.md`
 - **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
 - **Then**:
   - Worker spawned in tmux mode
-  - Monitoring loop starts automatically
+  - Monitoring loop starts in background
+  - Command returns immediately with status output
+  - Output: "spawned agent (tmux: swarm:agent) [ralph mode: iteration 1/10]"
+  - Output includes monitoring commands (peek, status, logs, kill)
+  - Ralph state created at `~/.swarm/ralph/agent/state.json`
+
+### Scenario: Ralph spawn with --foreground
+- **Given**: Prompt file exists at `./PROMPT.md`
+- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 --foreground -- claude`
+- **Then**:
+  - Worker spawned in tmux mode
+  - Monitoring loop starts in foreground
   - Command blocks while loop runs
   - Output: "spawned agent (tmux: swarm:agent) [ralph mode: iteration 1/10]"
   - Ralph state created at `~/.swarm/ralph/agent/state.json`
@@ -938,6 +1060,15 @@ Fresh Docker containers without Claude Code preferences hit an interactive theme
   - Ralph state set: `exit_reason: monitor_disconnected`
   - Worker continues running in tmux
   - `swarm ralph status agent` shows: "Exit reason: monitor_disconnected (worker still running)"
+
+### Scenario: Pre-flight detects stuck worker
+- **Given**: sandbox.sh launches Claude without valid auth
+- **When**: ralph spawn starts iteration 1
+- **Then**:
+  - After 10s, peek shows "Select login method"
+  - Log: "[ERROR] iteration 1: pre-flight failed — Worker stuck at login prompt"
+  - Worker killed, loop exits with code 1
+  - Stderr: actionable fix instructions
 
 ### Scenario: Done pattern in prompt text does not self-match
 - **Given**: PROMPT.md contains "Output /done on its own line and stop"
@@ -1155,5 +1286,5 @@ Verify by reading code first. Run tests. Update plan. Commit.
 - **Iteration logging**: Each iteration is logged with timestamps to enable debugging and analysis.
 - **Graceful shutdown**: SIGTERM to the ralph process should pause the loop and allow current agent to complete.
 - **Resource management**: Each iteration creates a fresh agent with a new context window, consuming API tokens.
-- **Auto-start default**: `ralph spawn` runs the loop by default for simpler UX. Use `--no-run` for the legacy two-command workflow.
+- **Auto-start default**: `ralph spawn` starts the loop in the background by default and returns immediately. Use `--foreground` to block. Use `--no-run` to skip starting the loop entirely.
 - **Worktree persistence**: When using `--worktree`, the same worktree is reused across all iterations. Work persists via git commits.

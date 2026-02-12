@@ -51,8 +51,9 @@ Swarm manages parallel agent workers in isolated git worktrees via tmux.
 ### Quick Reference
 ```bash
 swarm spawn --name <id> --tmux --worktree -- claude --dangerously-skip-permissions  # Start agent
-swarm ls                          # List all workers
+swarm ls --status running         # List running workers
 swarm status <name>               # Check worker status
+swarm peek <name>                 # Peek at terminal output (last 30 lines)
 swarm send <name> "prompt"        # Send prompt to worker
 swarm logs <name>                 # View worker output
 swarm attach <name>               # Attach to tmux window
@@ -189,7 +190,7 @@ RUN mkdir -p /home/loopuser/.claude && \
 ### Specifications (`specs/`)
 Behavioral specs in priority order (P0 = critical):
 - **P0**: `worktree-isolation.md`, `ready-detection.md`, `state-management.md`
-- **P1**: `spawn.md`, `ralph-loop.md`, `kill.md`, `send.md`, `tmux-integration.md`, `heartbeat.md`
+- **P1**: `spawn.md`, `ralph-loop.md`, `kill.md`, `send.md`, `tmux-integration.md`, `heartbeat.md`, `peek.md`
 - **P2**: `ls.md`, `status.md`, `logs.md`, `wait.md`, `clean.md`, `respawn.md`, `interrupt-eof.md`, `attach.md`, `init.md`
 - **Supporting**: `data-structures.md`, `environment.md`, `cli-interface.md`, `cli-help-standards.md`
 

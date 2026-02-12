@@ -94,6 +94,14 @@ Swarm provides `--ready-wait` functionality that blocks after spawning a worker 
 | `Choose the text style` | First-time theme picker | "Choose the text style that looks best" |
 | `looks best with your terminal` | Theme picker subtitle | "looks best with your terminal" |
 
+#### Claude Code Login / OAuth Prompts
+| Pattern | Description | Example Match |
+|---------|-------------|---------------|
+| `Select login method` | Login method picker | "Select login method:" |
+| `Paste code here` | OAuth code entry prompt | "Paste code here:" |
+
+**Problem**: Docker containers without valid Claude auth credentials (no `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`) display an interactive login prompt. Workers cannot complete authentication non-interactively, causing them to appear stuck.
+
 **Problem**: Fresh Docker containers (or any environment without cached Claude Code preferences) display an interactive theme picker on first launch. This blocks all input — any prompt sent via `tmux send-keys` is consumed by the theme picker, not the Claude Code prompt.
 
 **Detection Behavior**:

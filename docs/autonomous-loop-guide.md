@@ -94,17 +94,38 @@ if [ -z "$GH_TOKEN" ]; then
     echo "  fix: run 'gh auth login' or export GH_TOKEN=ghp_..." >&2
 fi
 
-exec docker run --rm \
+## --- Claude auth ---
+# Priority: ANTHROPIC_API_KEY > CLAUDE_CODE_OAUTH_TOKEN > auto-extract
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    CREDS="$HOME/.claude/.credentials.json"
+    if [ -f "$CREDS" ]; then
+        CLAUDE_CODE_OAUTH_TOKEN=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('claudeAiOauth', {}).get('accessToken', ''))
+except Exception:
+    pass
+" "$CREDS" 2>/dev/null || true)
+        export CLAUDE_CODE_OAUTH_TOKEN
+    fi
+    if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+        echo "warning: no Claude auth found. Worker will show login prompt." >&2
+        echo "  fix: export ANTHROPIC_API_KEY=sk-ant-... or run 'claude login' on host." >&2
+    fi
+fi
+
+exec docker run --rm -it \
     --memory="$MEMORY" \
     --memory-swap="$MEMORY" \
     --cpus="$CPUS" \
     --pids-limit="$PIDS" \
     --network="$NETWORK" \
     -v "$(pwd):/workspace" \
-    -v "$HOME/.claude/.credentials.json:/home/loopuser/.claude/.credentials.json:ro" \
     -v "$CLAUDE_SETTINGS:/home/loopuser/.claude/settings.json:ro" \
     -v "$HOME/.claude/projects:/home/loopuser/.claude/projects" \
     -e ANTHROPIC_API_KEY \
+    -e CLAUDE_CODE_OAUTH_TOKEN \
     -e DISABLE_AUTOUPDATER=1 \
     -e "GH_TOKEN=$GH_TOKEN" \
     -w /workspace \
@@ -115,7 +136,7 @@ exec docker run --rm \
 **Security posture**:
 - **No SSH keys mounted** — git auth uses `GH_TOKEN` over HTTPS
 - Token lives only in container memory (env var), dies with the container
-- Claude credentials mounted **read-only**
+- Claude auth via env var — no credentials file mounted into container
 - Only `projects/` directory is read-write (Claude needs this for project memory)
 - No `.gitconfig` mounted (credential helper is baked into the image)
 
@@ -123,6 +144,38 @@ exec docker run --rm \
 - You can version `sandbox.sh` per project (different toolchains need different images)
 - Swarm's `-- command` accepts any executable — `sandbox.sh` is just an executable that runs Claude inside Docker
 - No swarm code changes needed when Docker flags evolve
+
+### Claude Authentication
+
+`sandbox.sh` supports three authentication methods (highest priority first):
+
+1. **`ANTHROPIC_API_KEY`** — Direct API key, no expiry. Most reliable for long sessions.
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+2. **`CLAUDE_CODE_OAUTH_TOKEN`** — Explicit OAuth token env var.
+   ```bash
+   export CLAUDE_CODE_OAUTH_TOKEN=...
+   ```
+
+3. **Auto-extract from `~/.claude/.credentials.json`** — For subscription users who have run `claude login`. The token is extracted each iteration, so it stays fresh. Tokens expire after ~8h.
+
+If none are available, workers will show a login prompt and appear stuck. The sandbox.sh script warns on stderr when no auth is found.
+
+### Environment Variables
+
+Environment variables set at spawn time propagate through the full chain:
+
+```
+swarm ralph spawn --env ANTHROPIC_API_KEY=sk-ant-... --name dev -- ./sandbox.sh
+  -> tmux window receives ANTHROPIC_API_KEY
+    -> sandbox.sh receives ANTHROPIC_API_KEY
+      -> docker run -e ANTHROPIC_API_KEY passes it into container
+        -> Claude process receives ANTHROPIC_API_KEY
+```
+
+For Docker sandbox workers, `sandbox.sh` must explicitly forward each env var via `docker run -e KEY`. The template already forwards `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, and `DISABLE_AUTOUPDATER`.
 
 ### Dockerfile.sandbox
 
@@ -202,6 +255,24 @@ sudo ./teardown-sandbox-network.sh
 Override via environment:
 ```bash
 MEMORY_LIMIT=12g CPU_LIMIT=6 PIDS_LIMIT=1024 ./sandbox.sh --dangerously-skip-permissions
+```
+
+### Monitoring Workers
+
+```bash
+# Quick peek at worker terminal output (non-interactive)
+swarm peek dev                # last 30 lines
+swarm peek dev -n 100         # last 100 lines
+swarm peek --all              # all running workers
+
+# Iteration progress
+swarm ralph status dev
+
+# Iteration history
+swarm ralph logs dev
+
+# List running workers
+swarm ls --status running
 ```
 
 ## Layer 2: Task Plan
