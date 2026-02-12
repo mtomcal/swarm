@@ -1,7 +1,7 @@
 # Implementation Plan: Round 3 — Ralph Diagnostics & UX Improvements
 
 **Created**: 2026-02-12
-**Status**: NOT STARTED
+**Status**: COMPLETE
 **Goal**: Implement code changes from the Round 3 spec updates — stuck pattern detection, pre-flight validation, corrupt state recovery, `--foreground` flag, screen change tracking in status, and login/OAuth not-ready patterns.
 
 ---
@@ -170,15 +170,15 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 8: Verify
 
-- [ ] **8.1 Run unit tests**
+- [x] **8.1 Run unit tests**
   - `python3 -m unittest test_cmd_ralph -v`
   - `python3 -m unittest test_ready_patterns -v`
 
-- [ ] **8.2 Verify CLI**
+- [x] **8.2 Verify CLI**
   - `python3 swarm.py ralph spawn --help` → shows `--foreground` flag
   - `python3 swarm.py ralph status --help` → works
 
-- [ ] **8.3 Run full test suite**
+- [x] **8.3 Run full test suite**
   - `python3 -m unittest discover -s . -p 'test_*.py' -v`
   - Note: may crash swarm workers per CLAUDE.md caveat — run in isolation
 
