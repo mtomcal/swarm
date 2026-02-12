@@ -30,6 +30,15 @@ LOGS_DIR = SWARM_DIR / "logs"
 RALPH_DIR = SWARM_DIR / "ralph"  # Ralph loop state directory
 HEARTBEATS_DIR = SWARM_DIR / "heartbeats"  # Heartbeat state directory
 
+# Stuck patterns: screen content substrings that indicate the worker is stuck
+# at an interactive prompt and not making progress. Maps pattern to warning message.
+STUCK_PATTERNS = {
+    "Select login method": "Worker stuck at login prompt. Check auth credentials.",
+    "Choose the text style": "Worker stuck at theme picker. Check settings.local.json.",
+    "looks best with your terminal": "Worker stuck at theme picker. Check settings.local.json.",
+    "Paste code here": "Worker stuck at OAuth code entry. Use ANTHROPIC_API_KEY instead.",
+}
+
 # Agent instructions template for AGENTS.md/CLAUDE.md injection
 # Marker string 'Process Management (swarm)' used for idempotent detection
 SWARM_INSTRUCTIONS = """
@@ -6069,6 +6078,9 @@ def detect_inactivity(
         """Hash normalized content with MD5."""
         return hashlib.md5(content.encode()).hexdigest()
 
+    # Track which stuck patterns have already been warned about this iteration
+    warned_stuck_patterns: set = set()
+
     while True:
         # Check if worker is still running
         if refresh_worker_status(worker) == "stopped":
@@ -6108,6 +6120,16 @@ def detect_inactivity(
             # Normalize and hash the content
             normalized = normalize_content(current_output)
             current_hash = hash_content(normalized)
+
+            # Check for stuck patterns (warn once per pattern per iteration)
+            if ralph_state is not None:
+                for stuck_text, stuck_msg in STUCK_PATTERNS.items():
+                    if stuck_text in normalized and stuck_text not in warned_stuck_patterns:
+                        warned_stuck_patterns.add(stuck_text)
+                        log_ralph_iteration(
+                            ralph_state.worker_name, "WARN",
+                            message=f"iteration {ralph_state.current_iteration}: {stuck_msg}"
+                        )
 
             # Compare hashes
             if current_hash != last_hash:

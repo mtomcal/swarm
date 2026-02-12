@@ -3163,6 +3163,259 @@ class TestScreenChangeTracking(unittest.TestCase):
         self.assertFalse(mock_save.called)
 
 
+class TestStuckPatternDetection(unittest.TestCase):
+    """Test stuck pattern detection in detect_inactivity()."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_stuck_patterns_constant_exists(self):
+        """Test STUCK_PATTERNS constant is defined with expected entries."""
+        self.assertTrue(hasattr(swarm, 'STUCK_PATTERNS'))
+        self.assertIsInstance(swarm.STUCK_PATTERNS, dict)
+        self.assertIn("Select login method", swarm.STUCK_PATTERNS)
+        self.assertIn("Choose the text style", swarm.STUCK_PATTERNS)
+        self.assertIn("looks best with your terminal", swarm.STUCK_PATTERNS)
+        self.assertIn("Paste code here", swarm.STUCK_PATTERNS)
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_stuck_pattern_triggers_warn_log(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_log, mock_save):
+        """Test: stuck pattern in screen content triggers [WARN] log entry."""
+        mock_refresh.return_value = 'running'
+        # Screen shows login prompt, then stays the same until timeout
+        stuck_content = "Welcome to Claude\nSelect login method\nOption 1: API Key"
+        mock_capture.side_effect = [stuck_content, stuck_content, stuck_content]
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            current_iteration=1
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+        # Verify WARN was logged
+        warn_calls = [c for c in mock_log.call_args_list
+                      if c[0][1] == 'WARN']
+        self.assertEqual(len(warn_calls), 1)
+        self.assertIn("login prompt", warn_calls[0][1]['message'])
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_stuck_pattern_warned_once_per_iteration(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_log, mock_save):
+        """Test: same stuck pattern only warned once per iteration (no spam)."""
+        mock_refresh.return_value = 'running'
+        # Same stuck content repeated multiple poll cycles before timeout
+        stuck_content = "Choose the text style\nDark\nLight"
+        mock_capture.side_effect = [stuck_content, stuck_content, stuck_content, stuck_content]
+        # First poll: new hash → no stable_start; second poll: same → stable_start=0;
+        # third poll: same → check timeout (2 >= 1) → return inactive
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            current_iteration=3
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+        # Count WARN calls — should be exactly 1 despite multiple polls
+        warn_calls = [c for c in mock_log.call_args_list
+                      if c[0][1] == 'WARN']
+        self.assertEqual(len(warn_calls), 1,
+                         "Stuck pattern should only warn once per iteration")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_different_stuck_patterns_each_trigger_warning(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_log, mock_save):
+        """Test: different stuck patterns each trigger their own warning."""
+        mock_refresh.return_value = 'running'
+        # Screen contains two different stuck patterns
+        stuck_content = "Select login method\nPaste code here\nWaiting..."
+        mock_capture.side_effect = [stuck_content, stuck_content, stuck_content]
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            current_iteration=1
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+        # Should have 2 WARN calls — one for each distinct pattern
+        warn_calls = [c for c in mock_log.call_args_list
+                      if c[0][1] == 'WARN']
+        self.assertEqual(len(warn_calls), 2,
+                         "Each distinct stuck pattern should trigger its own warning")
+        # Verify the messages are different
+        messages = [c[1]['message'] for c in warn_calls]
+        self.assertNotEqual(messages[0], messages[1])
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_no_stuck_pattern_no_warn_log(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_log, mock_save):
+        """Test: normal content does not trigger stuck pattern warnings."""
+        mock_refresh.return_value = 'running'
+        normal_content = "Claude Code v2.1.4\n> Working on task..."
+        mock_capture.side_effect = [normal_content, normal_content, normal_content]
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            current_iteration=1
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+        # No WARN calls should have been made
+        warn_calls = [c for c in mock_log.call_args_list
+                      if c[0][1] == 'WARN']
+        self.assertEqual(len(warn_calls), 0,
+                         "Normal content should not trigger stuck pattern warnings")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.log_ralph_iteration')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_stuck_detection_skipped_without_ralph_state(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_log, mock_save):
+        """Test: stuck pattern detection is skipped when ralph_state is None."""
+        mock_refresh.return_value = 'running'
+        stuck_content = "Select login method\nOption 1"
+        mock_capture.side_effect = [stuck_content, stuck_content, stuck_content]
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        # Call without ralph_state
+        result = swarm.detect_inactivity(worker, timeout=1)
+        self.assertEqual(result, "inactive")
+
+        # No WARN calls since ralph_state is None
+        warn_calls = [c for c in mock_log.call_args_list
+                      if c[0][1] == 'WARN']
+        self.assertEqual(len(warn_calls), 0)
+
+    def test_stuck_pattern_warn_written_to_iterations_log(self):
+        """Test: stuck pattern warning is written to iterations.log file."""
+        # Create ralph directory for the worker
+        ralph_dir = Path(self.temp_dir) / "ralph" / "test-worker"
+        ralph_dir.mkdir(parents=True, exist_ok=True)
+
+        # Log a WARN event directly via log_ralph_iteration
+        swarm.log_ralph_iteration(
+            'test-worker', 'WARN',
+            message='iteration 1: Worker stuck at login prompt. Check auth credentials.'
+        )
+
+        # Verify the log file contains the WARN entry
+        log_path = ralph_dir / "iterations.log"
+        self.assertTrue(log_path.exists())
+        log_content = log_path.read_text()
+        self.assertIn('[WARN]', log_content)
+        self.assertIn('Worker stuck at login prompt', log_content)
+
+
 class TestCheckMonitorDisconnect(unittest.TestCase):
     """Test _check_monitor_disconnect function (B5)."""
 

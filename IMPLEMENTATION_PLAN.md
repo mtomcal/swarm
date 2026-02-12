@@ -69,7 +69,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 4: Stuck Pattern Detection
 
-- [ ] **4.1 Define stuck patterns constant**
+- [x] **4.1 Define stuck patterns constant**
   - Create `STUCK_PATTERNS` dict mapping pattern strings to warning messages:
     - `"Select login method"` → `"Worker stuck at login prompt. Check auth credentials."`
     - `"Choose the text style"` → `"Worker stuck at theme picker. Check settings.local.json."`
@@ -77,14 +77,14 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
     - `"Paste code here"` → `"Worker stuck at OAuth code entry. Use ANTHROPIC_API_KEY instead."`
   - File: `swarm.py` (near module-level constants)
 
-- [ ] **4.2 Implement stuck pattern detection in `detect_inactivity()`**
+- [x] **4.2 Implement stuck pattern detection in `detect_inactivity()`**
   - During each 2-second poll cycle, after hashing screen content, check normalized content against `STUCK_PATTERNS`
   - If a stuck pattern is detected and hasn't been warned about yet this iteration:
     - Log `[WARN]` to iterations.log: `"2026-02-12T13:24:30 [WARN] iteration 1: Worker stuck at login prompt. Check auth credentials."`
     - Track warned patterns in a set to avoid log spam (once per pattern per iteration)
   - File: `swarm.py` (~line 5963, `detect_inactivity()`)
 
-- [ ] **4.3 Add unit tests for stuck pattern detection**
+- [x] **4.3 Add unit tests for stuck pattern detection**
   - Test: stuck pattern in screen content triggers `[WARN]` log entry
   - Test: same stuck pattern only warned once per iteration (no spam)
   - Test: different stuck patterns each trigger their own warning
