@@ -171,3 +171,35 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 - **Phase 5 (verify)**: Trivial — run tests, ~15 min
 
 **Total estimated: ~3 hours of worker time, ~4-6 iterations**
+
+---
+
+## Execution Results
+
+**Completed**: 2026-02-12
+**Mode**: Docker sandbox (`SANDBOX=1 ./loop.sh 15 PROMPT.md`)
+
+| Metric | Value |
+|--------|-------|
+| Tasks completed | 14/14 |
+| Iterations used | 4 of 15 budget |
+| Wall time | ~51 min (18:27–19:18 UTC) |
+| Commits | 4 |
+| Peak container memory | ~250 MiB / 8 GiB |
+| Test suite | 1043 tests passing |
+
+### Commits
+
+| Iteration | Commit | Phase | Description |
+|-----------|--------|-------|-------------|
+| 1 | `44446d1` | Phase 1 | `swarm peek` command — subparser, `cmd_peek()`, unit tests |
+| 2 | `698c026` | Phase 2 | Env propagation — `create_tmux_window()` env param, caller threading, tests |
+| 3 | `14944a5` | Phase 3 | Transactional rollback — `_rollback_spawn()`, try/except in `cmd_spawn()`, tests |
+| 4 | `40f7147` | Phase 4+5 | Corrupt state recovery in `State._load()`, tests, full verification |
+
+### Notes
+
+- Worker combined tightly-coupled tasks (1.1+1.2, 2.1+2.2, 3.1+3.2) as intended by PROMPT.md guidance
+- Iteration 4 handled Phase 4 + Phase 5 verification in a single pass, including fixing a pre-existing test (`test_state_file_recovery.test_corrupted_json`) that expected crash behavior now replaced by graceful recovery
+- Pre-commit hook required `coverage` package — worker worked around it successfully
+- No OOM, no stuck iterations, no manual intervention needed
