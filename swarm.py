@@ -5633,9 +5633,27 @@ def cmd_ralph_status(args) -> None:
         print(f"swarm: error: worker '{args.name}' is not a ralph worker", file=sys.stderr)
         sys.exit(1)
 
+    # Pre-calculate screen change age for use in Status line and display
+    screen_change_seconds_ago = None
+    if ralph_state.last_screen_change:
+        try:
+            last_change_dt = datetime.fromisoformat(ralph_state.last_screen_change)
+            now = datetime.now(timezone.utc)
+            # Ensure last_change_dt is timezone-aware for comparison
+            if last_change_dt.tzinfo is None:
+                last_change_dt = last_change_dt.replace(tzinfo=timezone.utc)
+            screen_change_seconds_ago = int((now - last_change_dt).total_seconds())
+        except (ValueError, TypeError):
+            pass
+
     # Format output per spec
     print(f"Ralph Loop: {ralph_state.worker_name}")
-    print(f"Status: {ralph_state.status}")
+
+    # Build status line — append stuck warning if screen unchanged >60s
+    status_line = f"Status: {ralph_state.status}"
+    if screen_change_seconds_ago is not None and screen_change_seconds_ago > 60:
+        status_line += f" (possibly stuck — no output change for {screen_change_seconds_ago}s)"
+    print(status_line)
 
     # Build iteration line with ETA if we have timing data
     iteration_line = f"Iteration: {ralph_state.current_iteration}/{ralph_state.max_iterations}"
@@ -5667,22 +5685,32 @@ def cmd_ralph_status(args) -> None:
     print(f"Inactivity timeout: {ralph_state.inactivity_timeout}s")
 
     # Display last screen change timestamp
-    if ralph_state.last_screen_change:
-        try:
-            last_change_dt = datetime.fromisoformat(ralph_state.last_screen_change)
-            now = datetime.now(timezone.utc)
-            # Ensure last_change_dt is timezone-aware for comparison
-            if last_change_dt.tzinfo is None:
-                last_change_dt = last_change_dt.replace(tzinfo=timezone.utc)
-            seconds_ago = int((now - last_change_dt).total_seconds())
-            print(f"Last screen change: {seconds_ago}s ago")
-        except (ValueError, TypeError):
-            print("Last screen change: (unknown)")
+    if screen_change_seconds_ago is not None:
+        print(f"Last screen change: {screen_change_seconds_ago}s ago")
+    elif ralph_state.last_screen_change:
+        print("Last screen change: (unknown)")
     else:
         print("Last screen change: (none)")
 
     if ralph_state.done_pattern:
         print(f"Done pattern: {ralph_state.done_pattern}")
+
+    # Show last 5 terminal lines when possibly stuck (screen unchanged >60s)
+    if screen_change_seconds_ago is not None and screen_change_seconds_ago > 60 and worker and worker.tmux:
+        try:
+            pane_content = tmux_capture_pane(
+                session=worker.tmux.session,
+                window=worker.tmux.window,
+                socket=worker.tmux.socket,
+            )
+            lines = [l for l in pane_content.rstrip('\n').split('\n') if l.strip()]
+            last_lines = lines[-5:] if len(lines) >= 5 else lines
+            if last_lines:
+                print("Last output:")
+                for line in last_lines:
+                    print(f"  {line}")
+        except Exception:
+            pass  # tmux may not be available in status check
 
     # Show exit reason (B5: special handling for monitor_disconnected)
     if ralph_state.exit_reason:

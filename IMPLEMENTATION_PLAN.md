@@ -92,14 +92,14 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 5: Stuck Detection in Status Output
 
-- [ ] **5.1 Show "(possibly stuck)" in status when screen unchanged >60s**
+- [x] **5.1 Show "(possibly stuck)" in status when screen unchanged >60s**
   - In `cmd_ralph_status()`, if `last_screen_change` is older than 60 seconds:
     - Append `(possibly stuck — no output change for <N>s)` to the Status line
     - Display last 5 lines of terminal output under `"Last output:"` section
     - Use `tmux_capture_pane()` to get current terminal content
   - File: `swarm.py` (~line 5579, `cmd_ralph_status()`)
 
-- [ ] **5.2 Add unit tests for stuck detection in status**
+- [x] **5.2 Add unit tests for stuck detection in status**
   - Test: status shows `(possibly stuck)` when screen unchanged >60s
   - Test: status includes last 5 terminal lines when stuck
   - Test: status does NOT show stuck when screen changed recently

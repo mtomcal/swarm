@@ -3094,6 +3094,145 @@ class TestScreenChangeTracking(unittest.TestCase):
         # Should NOT show (none)
         self.assertNotIn('(none)', output)
 
+    @patch('swarm.tmux_capture_pane')
+    def test_status_shows_possibly_stuck_when_screen_unchanged_over_60s(self, mock_capture):
+        """Test status shows (possibly stuck) when screen unchanged >60s."""
+        from datetime import datetime, timezone, timedelta
+
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Set last_screen_change to 120 seconds ago (>60s threshold)
+        now = datetime.now(timezone.utc)
+        long_ago = (now - timedelta(seconds=120)).isoformat()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            started='2024-01-15T10:30:00',
+            last_screen_change=long_ago
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Mock tmux_capture_pane to return some terminal lines
+        mock_capture.return_value = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n"
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        # Status line should include stuck warning
+        self.assertIn('possibly stuck', output)
+        self.assertRegex(output, r'no output change for \d+s')
+        # Should show last output section
+        self.assertIn('Last output:', output)
+
+    @patch('swarm.tmux_capture_pane')
+    def test_status_shows_last_terminal_lines_when_stuck(self, mock_capture):
+        """Test status includes last 5 terminal lines when stuck."""
+        from datetime import datetime, timezone, timedelta
+
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        now = datetime.now(timezone.utc)
+        long_ago = (now - timedelta(seconds=90)).isoformat()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            started='2024-01-15T10:30:00',
+            last_screen_change=long_ago
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        # Return 7 lines; last 5 should be displayed
+        mock_capture.return_value = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\n"
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('Last output:', output)
+        # Should show last 5 non-empty lines
+        self.assertIn('gamma', output)
+        self.assertIn('delta', output)
+        self.assertIn('epsilon', output)
+        self.assertIn('zeta', output)
+        self.assertIn('eta', output)
+        # First two lines should NOT appear
+        self.assertNotIn('alpha', output)
+        self.assertNotIn('beta', output)
+
+    def test_status_does_not_show_stuck_when_screen_changed_recently(self):
+        """Test status does NOT show stuck when screen changed recently (<60s)."""
+        from datetime import datetime, timezone, timedelta
+
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Set last_screen_change to 10 seconds ago (well under 60s threshold)
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(seconds=10)).isoformat()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            started='2024-01-15T10:30:00',
+            last_screen_change=recent
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        # Status should NOT show stuck warning
+        self.assertNotIn('possibly stuck', output)
+        # Should NOT show last output section
+        self.assertNotIn('Last output:', output)
+
     @patch('swarm.save_ralph_state')
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
