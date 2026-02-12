@@ -107,7 +107,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 6: Pre-flight Validation
 
-- [ ] **6.1 Implement pre-flight check after iteration 1 prompt injection**
+- [x] **6.1 Implement pre-flight check after iteration 1 prompt injection**
   - After `send_prompt_to_worker()` on iteration 1 only:
     1. Wait 10 seconds
     2. Capture terminal output via `tmux_capture_pane()`
@@ -119,7 +119,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
     5. If no stuck pattern, continue normal monitoring
   - File: `swarm.py` (in ralph monitoring loop, after first `send_prompt_to_worker()`)
 
-- [ ] **6.2 Add unit tests for pre-flight validation**
+- [x] **6.2 Add unit tests for pre-flight validation**
   - Test: stuck pattern on iteration 1 → `[ERROR]` log + exit code 1
   - Test: no stuck pattern on iteration 1 → continues normally
   - Test: pre-flight only runs on iteration 1, not subsequent iterations

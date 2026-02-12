@@ -11238,5 +11238,203 @@ class TestDonePatternBaseline(unittest.TestCase):
                         "When terminal cleared (baseline not prefix), should check full content")
 
 
+class TestPreflightValidation(unittest.TestCase):
+    """Test pre-flight validation after iteration 1 prompt injection."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_path.write_text("test prompt content")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_preflight_stuck_pattern_iteration1_exits(self):
+        """Test: stuck pattern on iteration 1 → [ERROR] log + exit code 1."""
+        # Create worker (stopped so loop will spawn new one → iteration 1)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0 (will become iteration 1)
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=10,
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        mock_worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
+                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch('time.sleep'):
+                            # Pre-flight capture returns stuck content
+                            with patch('swarm.tmux_capture_pane',
+                                       return_value="Welcome\nSelect login method\nOption 1"):
+                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                                    with patch('swarm.log_ralph_iteration') as mock_log:
+                                        with patch('builtins.print'):
+                                            with self.assertRaises(SystemExit) as ctx:
+                                                swarm.cmd_ralph_run(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        mock_kill.assert_called_once()
+
+        # Verify ERROR was logged
+        error_calls = [c for c in mock_log.call_args_list
+                       if len(c[0]) >= 2 and c[0][1] == 'ERROR']
+        self.assertGreaterEqual(len(error_calls), 1,
+                                "Pre-flight failure should log an [ERROR] entry")
+        self.assertIn("pre-flight", error_calls[0][1]['message'])
+
+        # Verify ralph state was set to failed
+        saved_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(saved_state.status, "failed")
+        self.assertEqual(saved_state.exit_reason, "preflight_failed")
+
+    def test_preflight_no_stuck_pattern_continues(self):
+        """Test: no stuck pattern on iteration 1 → continues normally."""
+        # Create worker (stopped so loop will spawn new one → iteration 1)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 0 (will become iteration 1), max_iterations=1 to exit
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=1,
+            current_iteration=0,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        mock_worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
+                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch('time.sleep'):
+                            # Pre-flight capture returns normal content (no stuck patterns)
+                            with patch('swarm.tmux_capture_pane',
+                                       return_value="Claude Code v2.1\n> Working on task..."):
+                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                                    with patch('builtins.print'):
+                                        # Should NOT exit with error — loop completes normally
+                                        # (max_iterations=1, so it exits after iteration 1)
+                                        swarm.cmd_ralph_run(args)
+
+        # Worker should NOT have been killed by pre-flight
+        mock_kill.assert_not_called()
+
+    def test_preflight_only_runs_on_iteration1(self):
+        """Test: pre-flight only runs on iteration 1, not subsequent iterations."""
+        # Create worker (stopped so loop will spawn new one)
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='stopped',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1 (next will be iteration 2), max_iterations=2 to exit
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        mock_worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
+                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
+                    with patch.object(swarm.State, 'add_worker'):
+                        with patch('time.sleep'):
+                            # Return stuck content — but since it's iteration 2, pre-flight should NOT run
+                            with patch('swarm.tmux_capture_pane',
+                                       return_value="Select login method\nOption 1"):
+                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                                    with patch('builtins.print'):
+                                        # Should complete without error since pre-flight is skipped for iteration 2
+                                        swarm.cmd_ralph_run(args)
+
+        # Worker should NOT have been killed by pre-flight
+        mock_kill.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
