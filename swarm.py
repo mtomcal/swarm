@@ -2608,15 +2608,34 @@ def load_ralph_state(worker_name: str) -> Optional[RalphState]:
         worker_name: Name of the worker
 
     Returns:
-        RalphState if it exists, None otherwise
+        RalphState if it exists, None otherwise.
+        If the state file is corrupt JSON, backs up to state.json.corrupted
+        and returns a fresh default RalphState.
     """
     state_path = get_ralph_state_path(worker_name)
     if not state_path.exists():
         return None
 
-    with open(state_path, "r") as f:
-        data = json.load(f)
-        return RalphState.from_dict(data)
+    try:
+        with open(state_path, "r") as f:
+            data = json.load(f)
+            return RalphState.from_dict(data)
+    except json.JSONDecodeError:
+        print(f"swarm: warning: corrupt ralph state for '{worker_name}', resetting",
+              file=sys.stderr)
+        # Back up corrupted file
+        corrupted_path = state_path.parent / "state.json.corrupted"
+        try:
+            import shutil
+            shutil.copy2(state_path, corrupted_path)
+        except OSError:
+            pass  # Best-effort backup
+        # Return fresh default state
+        return RalphState(
+            worker_name=worker_name,
+            prompt_file="PROMPT.md",
+            max_iterations=0,
+        )
 
 
 def save_ralph_state(ralph_state: RalphState) -> None:

@@ -30,7 +30,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 2: Corrupt State Recovery
 
-- [ ] **2.1 Add JSONDecodeError handling to `load_ralph_state()`**
+- [x] **2.1 Add JSONDecodeError handling to `load_ralph_state()`**
   - Catch `json.JSONDecodeError` in `load_ralph_state()` (~line 2604)
   - On error:
     1. Log warning: `"swarm: warning: corrupt ralph state for '<name>', resetting"`
@@ -39,7 +39,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
     4. Continue execution — do NOT crash
   - File: `swarm.py` (~line 2604-2619)
 
-- [ ] **2.2 Add unit tests for corrupt state recovery**
+- [x] **2.2 Add unit tests for corrupt state recovery**
   - Test: corrupted JSON file → returns fresh RalphState + logs warning
   - Test: corrupted file is backed up to `state.json.corrupted`
   - Test: empty file → returns fresh RalphState

@@ -2564,6 +2564,103 @@ class TestRalphStatePersistence(unittest.TestCase):
         self.assertTrue(state_path.exists())
 
 
+class TestRalphCorruptStateRecovery(unittest.TestCase):
+    """Test corrupt ralph state recovery in load_ralph_state()."""
+
+    def setUp(self):
+        """Set up test fixtures with temporary SWARM_DIR."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_corrupt_json_returns_fresh_state(self):
+        """Test: corrupted JSON file returns fresh RalphState + logs warning."""
+        worker_name = 'corrupt-worker'
+        state_dir = swarm.RALPH_DIR / worker_name
+        state_dir.mkdir(parents=True)
+        state_path = state_dir / "state.json"
+        state_path.write_text("{invalid json content!!!")
+
+        import io
+        captured = io.StringIO()
+        with patch('sys.stderr', captured):
+            result = swarm.load_ralph_state(worker_name)
+
+        # Should return a fresh RalphState, not None
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, swarm.RalphState)
+        self.assertEqual(result.worker_name, worker_name)
+        self.assertEqual(result.prompt_file, "PROMPT.md")
+        self.assertEqual(result.max_iterations, 0)
+        self.assertEqual(result.current_iteration, 0)
+        self.assertEqual(result.status, "running")
+
+        # Should have logged a warning
+        self.assertIn("corrupt ralph state", captured.getvalue())
+        self.assertIn(worker_name, captured.getvalue())
+
+    def test_corrupt_file_backed_up(self):
+        """Test: corrupted file is backed up to state.json.corrupted."""
+        worker_name = 'backup-worker'
+        state_dir = swarm.RALPH_DIR / worker_name
+        state_dir.mkdir(parents=True)
+        state_path = state_dir / "state.json"
+        corrupt_content = "{this is not valid json"
+        state_path.write_text(corrupt_content)
+
+        with patch('sys.stderr', new_callable=lambda: __import__('io').StringIO()):
+            swarm.load_ralph_state(worker_name)
+
+        # Check backup file exists and has the corrupt content
+        backup_path = state_dir / "state.json.corrupted"
+        self.assertTrue(backup_path.exists())
+        self.assertEqual(backup_path.read_text(), corrupt_content)
+
+    def test_empty_file_returns_fresh_state(self):
+        """Test: empty file returns fresh RalphState."""
+        worker_name = 'empty-worker'
+        state_dir = swarm.RALPH_DIR / worker_name
+        state_dir.mkdir(parents=True)
+        state_path = state_dir / "state.json"
+        state_path.write_text("")
+
+        with patch('sys.stderr', new_callable=lambda: __import__('io').StringIO()):
+            result = swarm.load_ralph_state(worker_name)
+
+        # Empty file is invalid JSON, should return fresh state
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, swarm.RalphState)
+        self.assertEqual(result.worker_name, worker_name)
+        self.assertEqual(result.prompt_file, "PROMPT.md")
+
+    def test_valid_state_still_loads_normally(self):
+        """Test: valid state file still loads correctly (no regression)."""
+        worker_name = 'valid-worker'
+        original = swarm.RalphState(
+            worker_name=worker_name,
+            prompt_file='/path/to/prompt.md',
+            max_iterations=50,
+            current_iteration=10,
+            status='running',
+        )
+        swarm.save_ralph_state(original)
+
+        result = swarm.load_ralph_state(worker_name)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.worker_name, worker_name)
+        self.assertEqual(result.prompt_file, '/path/to/prompt.md')
+        self.assertEqual(result.max_iterations, 50)
+        self.assertEqual(result.current_iteration, 10)
+
+
 class TestCmdRalphStatus(unittest.TestCase):
     """Test cmd_ralph_status function."""
 
