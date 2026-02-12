@@ -63,19 +63,19 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 
 ### Phase 2: Environment Propagation for Tmux Workers
 
-- [ ] **2.1 Update `create_tmux_window()` to accept env dict**
+- [x] **2.1 Update `create_tmux_window()` to accept env dict**
   - Add `env: Optional[dict[str, str]] = None` parameter
   - When env is non-empty, wrap `cmd_str` with `env KEY1=VAL1 KEY2=VAL2 <cmd_str>`
   - Use `shlex.quote()` on both keys and values for safety
   - File: `swarm.py` (~line 3153, `create_tmux_window()`)
 
-- [ ] **2.2 Thread env through callers of `create_tmux_window()`**
+- [x] **2.2 Thread env through callers of `create_tmux_window()`**
   - `cmd_spawn()` (~line 4190): pass `env_dict` to `create_tmux_window()`
   - `cmd_ralph_spawn()` / `_do_ralph_spawn()`: pass env if available
   - `cmd_respawn()`: pass worker's stored env if applicable
   - File: `swarm.py`
 
-- [ ] **2.3 Add unit tests for env propagation**
+- [x] **2.3 Add unit tests for env propagation**
   - Test: `create_tmux_window()` with env wraps command correctly
   - Test: `create_tmux_window()` with empty/None env leaves command unchanged
   - Test: values containing spaces/special chars are properly quoted

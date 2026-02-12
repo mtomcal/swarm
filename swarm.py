@@ -3190,12 +3190,19 @@ def ensure_tmux_session(session: str, socket: Optional[str] = None) -> None:
         )
 
 
-def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str], socket: Optional[str] = None) -> None:
+def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str], socket: Optional[str] = None, env: Optional[dict[str, str]] = None) -> None:
     """Create a tmux window and run command."""
     ensure_tmux_session(session, socket)
 
     # Build the command string safely
     cmd_str = " ".join(shlex.quote(c) for c in cmd)
+
+    # Wrap command with env prefix if environment variables are provided
+    if env:
+        env_prefix = " ".join(
+            f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items()
+        )
+        cmd_str = f"env {env_prefix} {cmd_str}"
 
     cmd_prefix = tmux_cmd_prefix(socket)
     subprocess.run(
@@ -4247,7 +4254,7 @@ def cmd_spawn(args) -> None:
         session = args.session if args.session else get_default_session_name()
         socket = args.tmux_socket
         try:
-            create_tmux_window(session, args.name, cwd, cmd, socket)
+            create_tmux_window(session, args.name, cwd, cmd, socket, env=env_dict)
             tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
         except subprocess.CalledProcessError as e:
             print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
@@ -5108,7 +5115,7 @@ def cmd_respawn(args) -> None:
         # Spawn in tmux
         socket = original_tmux.socket if original_tmux else None
         try:
-            create_tmux_window(original_tmux.session, args.name, cwd, original_cmd, socket)
+            create_tmux_window(original_tmux.session, args.name, cwd, original_cmd, socket, env=original_env)
             tmux_info = TmuxInfo(session=original_tmux.session, window=args.name, socket=socket)
         except subprocess.CalledProcessError as e:
             print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
@@ -5548,7 +5555,7 @@ def cmd_ralph_spawn(args) -> None:
         # Step 2: Create tmux window
         session = args.session if args.session else get_default_session_name()
         socket = args.tmux_socket
-        create_tmux_window(session, args.name, cwd, cmd, socket)
+        create_tmux_window(session, args.name, cwd, cmd, socket, env=env_dict)
         tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
 
         # Step 3: Add worker to state
@@ -6446,7 +6453,7 @@ def spawn_worker_for_ralph(
         The created Worker object
     """
     # Create tmux window
-    create_tmux_window(session, name, cwd, cmd, socket)
+    create_tmux_window(session, name, cwd, cmd, socket, env=env)
     tmux_info = TmuxInfo(session=session, window=name, socket=socket)
 
     # Create worker object

@@ -21,20 +21,24 @@ class TestCmdSpawn(unittest.TestCase):
         self.swarm_dir = Path(self.temp_dir) / ".swarm"
         self.logs_dir = self.swarm_dir / "logs"
         self.state_file = self.swarm_dir / "state.json"
+        self.state_lock_file = self.swarm_dir / "state.lock"
 
         # Patch constants
         self.patcher_swarm_dir = patch.object(swarm, 'SWARM_DIR', self.swarm_dir)
         self.patcher_state_file = patch.object(swarm, 'STATE_FILE', self.state_file)
         self.patcher_logs_dir = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+        self.patcher_state_lock_file = patch.object(swarm, 'STATE_LOCK_FILE', self.state_lock_file)
         self.patcher_swarm_dir.start()
         self.patcher_state_file.start()
         self.patcher_logs_dir.start()
+        self.patcher_state_lock_file.start()
 
     def tearDown(self):
         """Clean up test fixtures."""
         self.patcher_swarm_dir.stop()
         self.patcher_state_file.stop()
         self.patcher_logs_dir.stop()
+        self.patcher_state_lock_file.stop()
         # Clean up temp directory
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -576,24 +580,32 @@ class TestSpawnWithHeartbeat(unittest.TestCase):
         self.swarm_dir = Path(self.temp_dir) / ".swarm"
         self.logs_dir = self.swarm_dir / "logs"
         self.state_file = self.swarm_dir / "state.json"
+        self.state_lock_file = self.swarm_dir / "state.lock"
         self.heartbeats_dir = self.swarm_dir / "heartbeats"
+        self.heartbeat_lock_file = self.swarm_dir / "heartbeat.lock"
 
         # Patch constants
         self.patcher_swarm_dir = patch.object(swarm, 'SWARM_DIR', self.swarm_dir)
         self.patcher_state_file = patch.object(swarm, 'STATE_FILE', self.state_file)
         self.patcher_logs_dir = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+        self.patcher_state_lock_file = patch.object(swarm, 'STATE_LOCK_FILE', self.state_lock_file)
         self.patcher_heartbeats_dir = patch.object(swarm, 'HEARTBEATS_DIR', self.heartbeats_dir)
+        self.patcher_heartbeat_lock_file = patch.object(swarm, 'HEARTBEAT_LOCK_FILE', self.heartbeat_lock_file)
         self.patcher_swarm_dir.start()
         self.patcher_state_file.start()
         self.patcher_logs_dir.start()
+        self.patcher_state_lock_file.start()
         self.patcher_heartbeats_dir.start()
+        self.patcher_heartbeat_lock_file.start()
 
     def tearDown(self):
         """Clean up test fixtures."""
         self.patcher_swarm_dir.stop()
         self.patcher_state_file.stop()
         self.patcher_logs_dir.stop()
+        self.patcher_state_lock_file.stop()
         self.patcher_heartbeats_dir.stop()
+        self.patcher_heartbeat_lock_file.stop()
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -798,6 +810,121 @@ class TestSpawnWithHeartbeat(unittest.TestCase):
                     heartbeat_msg = [c for c in calls if "heartbeat started" in c]
                     self.assertTrue(len(heartbeat_msg) > 0)
                     self.assertIn("no expiration", str(heartbeat_msg))
+
+
+class TestEnvPropagation(unittest.TestCase):
+    """Test environment variable propagation to tmux workers."""
+
+    def test_create_tmux_window_with_env_wraps_command(self):
+        """Test that create_tmux_window() with env wraps command with env prefix."""
+        with patch('swarm.ensure_tmux_session'):
+            with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+                with patch('subprocess.run') as mock_run:
+                    swarm.create_tmux_window(
+                        "session", "window", Path("/tmp"), ["echo", "hello"],
+                        socket=None, env={"FOO": "bar", "BAZ": "qux"}
+                    )
+
+                    mock_run.assert_called_once()
+                    call_args = mock_run.call_args[0][0]
+                    # The last element is the command string
+                    cmd_str = call_args[-1]
+                    self.assertIn("env ", cmd_str)
+                    self.assertIn("FOO=bar", cmd_str)
+                    self.assertIn("BAZ=qux", cmd_str)
+                    self.assertIn("echo hello", cmd_str)
+
+    def test_create_tmux_window_with_empty_env_no_prefix(self):
+        """Test that create_tmux_window() with empty env leaves command unchanged."""
+        with patch('swarm.ensure_tmux_session'):
+            with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+                with patch('subprocess.run') as mock_run:
+                    swarm.create_tmux_window(
+                        "session", "window", Path("/tmp"), ["echo", "hello"],
+                        socket=None, env={}
+                    )
+
+                    mock_run.assert_called_once()
+                    call_args = mock_run.call_args[0][0]
+                    cmd_str = call_args[-1]
+                    self.assertNotIn("env ", cmd_str)
+                    self.assertEqual(cmd_str, "echo hello")
+
+    def test_create_tmux_window_with_none_env_no_prefix(self):
+        """Test that create_tmux_window() with None env leaves command unchanged."""
+        with patch('swarm.ensure_tmux_session'):
+            with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+                with patch('subprocess.run') as mock_run:
+                    swarm.create_tmux_window(
+                        "session", "window", Path("/tmp"), ["echo", "hello"],
+                        socket=None, env=None
+                    )
+
+                    mock_run.assert_called_once()
+                    call_args = mock_run.call_args[0][0]
+                    cmd_str = call_args[-1]
+                    self.assertNotIn("env ", cmd_str)
+                    self.assertEqual(cmd_str, "echo hello")
+
+    def test_create_tmux_window_env_special_chars_quoted(self):
+        """Test that env values with spaces/special chars are properly quoted."""
+        with patch('swarm.ensure_tmux_session'):
+            with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+                with patch('subprocess.run') as mock_run:
+                    swarm.create_tmux_window(
+                        "session", "window", Path("/tmp"), ["echo", "hello"],
+                        socket=None, env={"MY_VAR": "hello world", "PATH_EXT": "/usr/bin:/usr/local/bin"}
+                    )
+
+                    mock_run.assert_called_once()
+                    call_args = mock_run.call_args[0][0]
+                    cmd_str = call_args[-1]
+                    self.assertIn("env ", cmd_str)
+                    # shlex.quote should wrap value with spaces in quotes
+                    self.assertIn("'hello world'", cmd_str)
+                    self.assertIn("MY_VAR=", cmd_str)
+                    self.assertIn("PATH_EXT=", cmd_str)
+
+    def test_spawn_tmux_passes_env_to_create_tmux_window(self):
+        """Test that cmd_spawn() passes env_dict to create_tmux_window() for tmux workers."""
+        temp_dir = tempfile.mkdtemp()
+        swarm_dir = Path(temp_dir) / ".swarm"
+        state_file = swarm_dir / "state.json"
+        state_lock_file = swarm_dir / "state.lock"
+        logs_dir = swarm_dir / "logs"
+
+        try:
+            with patch.object(swarm, 'SWARM_DIR', swarm_dir):
+                with patch.object(swarm, 'STATE_FILE', state_file):
+                    with patch.object(swarm, 'STATE_LOCK_FILE', state_lock_file):
+                        with patch.object(swarm, 'LOGS_DIR', logs_dir):
+                            args = Namespace(
+                                name="env-tmux-worker",
+                                cmd=["--", "bash"],
+                                tmux=True,
+                                session="swarm",
+                                tmux_socket=None,
+                                ready_wait=False,
+                                worktree=False,
+                                cwd=None,
+                                env=["FOO=bar", "BAZ=qux"],
+                                tags=[],
+                                ralph=False,
+                                prompt_file=None,
+                                max_iterations=None
+                            )
+
+                            with patch('swarm.create_tmux_window') as mock_tmux:
+                                with patch('builtins.print'):
+                                    swarm.cmd_spawn(args)
+
+                                    mock_tmux.assert_called_once()
+                                    call_kwargs = mock_tmux.call_args
+                                    # env should be passed as keyword argument
+                                    self.assertEqual(call_kwargs.kwargs.get('env'), {"FOO": "bar", "BAZ": "qux"})
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
