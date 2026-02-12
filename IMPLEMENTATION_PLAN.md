@@ -25,7 +25,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 
 ### Phase 1: `swarm peek` Command
 
-- [ ] **1.1 Add `peek` subparser to `main()`**
+- [x] **1.1 Add `peek` subparser to `main()`**
   - Add `peek_p = subparsers.add_parser("peek", ...)` after the existing `status` parser (~line 3601)
   - Arguments:
     - `name` (positional, nargs="?") — worker name
@@ -34,7 +34,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
   - Validation: one of `name` or `--all` required
   - File: `swarm.py` (in `main()`)
 
-- [ ] **1.2 Implement `cmd_peek(args)`**
+- [x] **1.2 Implement `cmd_peek(args)`**
   - Single-worker path:
     1. Load state, look up worker by name
     2. If not found → exit 2: `"swarm: error: worker '<name>' not found"`
@@ -49,7 +49,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
   - Error on capture failure → exit 1: `"swarm: error: failed to capture pane for '<name>': <error>"`
   - File: `swarm.py` (new function near other `cmd_*` functions)
 
-- [ ] **1.3 Add unit tests for `cmd_peek`**
+- [x] **1.3 Add unit tests for `cmd_peek`**
   - Test: basic peek returns captured content
   - Test: `--all` shows headers for multiple workers
   - Test: `--all` with `-n` applies per worker

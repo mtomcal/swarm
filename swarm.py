@@ -709,6 +709,46 @@ See Also:
   swarm attach --help    Attach to worker's tmux window
 """
 
+# Peek command help
+PEEK_HELP_DESCRIPTION = """\
+Capture and display recent terminal output from a worker.
+
+Captures the last N lines of a worker's tmux pane, providing a lightweight,
+non-interactive way to check what a worker is doing without attaching to the
+tmux session. Only works with tmux-based workers.
+
+Exit Codes:
+  0  Success — output captured and printed
+  1  Error — worker not running, not tmux, or capture failed
+  2  Not found — worker does not exist
+"""
+
+PEEK_HELP_EPILOG = """\
+Output Format:
+  For single worker: raw pane content is printed to stdout.
+  For --all: each worker's output is preceded by a header:
+    === worker-name ===
+    [last N lines of terminal output]
+
+Examples:
+  # Peek at a worker's terminal output (last 30 lines)
+  swarm peek my-worker
+
+  # Peek with more history
+  swarm peek my-worker -n 100
+
+  # Peek all running workers
+  swarm peek --all
+
+  # Peek all with custom line count
+  swarm peek --all -n 50
+
+See Also:
+  swarm attach --help    Attach to worker's tmux window (interactive)
+  swarm logs --help      View worker log files
+  swarm status --help    Check worker status
+"""
+
 # Send command help
 SEND_HELP_DESCRIPTION = """\
 Send text input to tmux-based workers.
@@ -3597,6 +3637,24 @@ def main() -> None:
     status_p.add_argument("name",
                          help="Worker name. Must match a registered worker exactly.")
 
+    # peek
+    peek_p = subparsers.add_parser(
+        "peek",
+        help="Peek at worker terminal output",
+        description=PEEK_HELP_DESCRIPTION,
+        epilog=PEEK_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    peek_p.add_argument("name", nargs="?",
+                        help="Worker name. Required unless using --all. Must be a "
+                             "tmux-based worker (spawned with --tmux).")
+    peek_p.add_argument("-n", "--lines", type=int, default=30,
+                        help="Number of lines to capture (default: 30). Captures "
+                             "from scrollback history.")
+    peek_p.add_argument("--all", action="store_true",
+                        help="Peek all running tmux workers. Non-tmux and "
+                             "non-running workers are silently skipped.")
+
     # send
     send_p = subparsers.add_parser(
         "send",
@@ -4075,6 +4133,8 @@ def main() -> None:
         cmd_ls(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "peek":
+        cmd_peek(args)
     elif args.command == "send":
         cmd_send(args)
     elif args.command == "interrupt":
@@ -4415,6 +4475,63 @@ def cmd_status(args) -> None:
         sys.exit(0)
     else:
         sys.exit(1)
+
+
+def cmd_peek(args) -> None:
+    """Peek at worker terminal output."""
+    # Load state
+    state = State()
+
+    # Handle --all: peek all running tmux workers
+    if args.all:
+        workers = [w for w in state.workers if w.tmux is not None]
+        for worker in workers:
+            # Check if tmux window is still alive
+            if not tmux_window_exists(worker.tmux.session, worker.tmux.window,
+                                       socket=worker.tmux.socket):
+                continue
+            # Capture pane content
+            try:
+                content = tmux_capture_pane(
+                    worker.tmux.session, worker.tmux.window,
+                    history_lines=args.lines, socket=worker.tmux.socket
+                )
+            except Exception:
+                continue
+            print(f"=== {worker.name} ===")
+            print(content)
+        sys.exit(0)
+
+    # Single worker path
+    if not args.name:
+        print("swarm: error: worker name required (or use --all)", file=sys.stderr)
+        sys.exit(1)
+
+    worker = state.get_worker(args.name)
+    if not worker:
+        print(f"swarm: error: worker '{args.name}' not found", file=sys.stderr)
+        sys.exit(2)
+
+    if not worker.tmux:
+        print(f"swarm: error: worker '{args.name}' is not a tmux worker", file=sys.stderr)
+        sys.exit(1)
+
+    if not tmux_window_exists(worker.tmux.session, worker.tmux.window,
+                               socket=worker.tmux.socket):
+        print(f"swarm: error: worker '{args.name}' is not running", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        content = tmux_capture_pane(
+            worker.tmux.session, worker.tmux.window,
+            history_lines=args.lines, socket=worker.tmux.socket
+        )
+    except Exception as e:
+        print(f"swarm: error: failed to capture pane for '{args.name}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(content, end="")
+    sys.exit(0)
 
 
 def cmd_send(args) -> None:
