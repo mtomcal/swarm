@@ -1,184 +1,143 @@
-# Implementation Plan: Round 3 — Ralph Diagnostics & UX Improvements
+# Implementation Plan: Round 4 — Spec Compliance Gaps
 
 **Created**: 2026-02-12
-**Status**: COMPLETE
-**Goal**: Implement code changes from the Round 3 spec updates — stuck pattern detection, pre-flight validation, corrupt state recovery, `--foreground` flag, screen change tracking in status, and login/OAuth not-ready patterns.
+**Status**: PENDING
+**Goal**: Close the remaining gaps between specs and implementation — `swarm peek` command, environment propagation for tmux workers, transactional rollback in `cmd_spawn()`, and corrupt state warning for `State._load()`.
 
 ---
 
 ## Context
 
-Round 3 feedback from directing a Docker-sandboxed ralph session surfaced several diagnostics and UX gaps. The specs and docs have already been updated (commit `58f9955`). The `sandbox.sh` template and `Dockerfile.sandbox` template changes in `swarm.py` are already committed. The remaining items below require implementation in `swarm.py` and new tests.
+A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete behavior. The specs already define the required behavior; this plan covers the code changes and tests.
+
+### Gap Summary
+
+| # | Gap | Spec | Severity |
+|---|-----|------|----------|
+| 1 | `swarm peek` command entirely missing | `specs/peek.md` | P1 |
+| 2 | `--env` not propagated to tmux workers | `specs/spawn.md` (Environment Propagation Chain) | P1 |
+| 3 | `cmd_spawn()` lacks transactional rollback | `specs/spawn.md` (Transactional Spawn) | P1 |
+| 4 | `State._load()` missing corrupt JSON recovery | `specs/state-management.md` | P2 |
 
 ---
 
 ## Tasks
 
-### Phase 1: Login/OAuth Not-Ready Patterns
+### Phase 1: `swarm peek` Command
 
-- [x] **1.1 Add login/OAuth not-ready patterns to `wait_for_agent_ready()`**
-  - Add patterns: `Select login method`, `Paste code here`
-  - These join the existing theme picker patterns in `not_ready_patterns` list
-  - When matched, send Enter to dismiss and continue polling (existing behavior)
-  - File: `swarm.py` (~line 3279, `not_ready_patterns` list)
+- [ ] **1.1 Add `peek` subparser to `main()`**
+  - Add `peek_p = subparsers.add_parser("peek", ...)` after the existing `status` parser (~line 3601)
+  - Arguments:
+    - `name` (positional, nargs="?") — worker name
+    - `-n/--lines` (int, default=30) — lines to capture
+    - `--all` (flag) — peek all running workers
+  - Validation: one of `name` or `--all` required
+  - File: `swarm.py` (in `main()`)
 
-- [x] **1.2 Add unit tests for login/OAuth not-ready detection**
-  - Test: `Select login method` text does not trigger ready detection
-  - Test: `Paste code here` text does not trigger ready detection
-  - Test: login prompt followed by real ready pattern eventually succeeds
-  - File: `test_ready_patterns.py`
+- [ ] **1.2 Implement `cmd_peek(args)`**
+  - Single-worker path:
+    1. Load state, look up worker by name
+    2. If not found → exit 2: `"swarm: error: worker '<name>' not found"`
+    3. If no tmux info → exit 1: `"swarm: error: worker '<name>' is not a tmux worker"`
+    4. Check tmux window alive via `tmux_window_exists()` → exit 1: `"swarm: error: worker '<name>' is not running"`
+    5. Call `tmux_capture_pane(session, window, history_lines=args.lines, socket=socket)`
+    6. Print result to stdout, exit 0
+  - `--all` path:
+    1. Load all workers, filter to running tmux workers
+    2. For each, print `=== worker-name ===` header then captured content
+    3. If no running tmux workers, print nothing, exit 0
+  - Error on capture failure → exit 1: `"swarm: error: failed to capture pane for '<name>': <error>"`
+  - File: `swarm.py` (new function near other `cmd_*` functions)
 
-### Phase 2: Corrupt State Recovery
+- [ ] **1.3 Add unit tests for `cmd_peek`**
+  - Test: basic peek returns captured content
+  - Test: `--all` shows headers for multiple workers
+  - Test: `--all` with `-n` applies per worker
+  - Test: non-existent worker → exit 2
+  - Test: non-tmux worker → exit 1
+  - Test: stopped tmux worker → exit 1
+  - Test: capture failure → exit 1
+  - Test: empty pane → exit 0, empty output
+  - Test: `--all` with no running workers → exit 0
+  - File: `test_cmd_peek.py` (new file)
 
-- [x] **2.1 Add JSONDecodeError handling to `load_ralph_state()`**
-  - Catch `json.JSONDecodeError` in `load_ralph_state()` (~line 2604)
+### Phase 2: Environment Propagation for Tmux Workers
+
+- [ ] **2.1 Update `create_tmux_window()` to accept env dict**
+  - Add `env: Optional[dict[str, str]] = None` parameter
+  - When env is non-empty, wrap `cmd_str` with `env KEY1=VAL1 KEY2=VAL2 <cmd_str>`
+  - Use `shlex.quote()` on both keys and values for safety
+  - File: `swarm.py` (~line 3153, `create_tmux_window()`)
+
+- [ ] **2.2 Thread env through callers of `create_tmux_window()`**
+  - `cmd_spawn()` (~line 4190): pass `env_dict` to `create_tmux_window()`
+  - `cmd_ralph_spawn()` / `_do_ralph_spawn()`: pass env if available
+  - `cmd_respawn()`: pass worker's stored env if applicable
+  - File: `swarm.py`
+
+- [ ] **2.3 Add unit tests for env propagation**
+  - Test: `create_tmux_window()` with env wraps command correctly
+  - Test: `create_tmux_window()` with empty/None env leaves command unchanged
+  - Test: values containing spaces/special chars are properly quoted
+  - File: `test_cmd_spawn.py` (extend existing)
+
+### Phase 3: Transactional Rollback in `cmd_spawn()`
+
+- [ ] **3.1 Wrap spawn steps in try/except with rollback**
+  - Refactor `cmd_spawn()` (~line 4105) to track created resources:
+    - `created_worktree: Optional[Path] = None` — set after worktree creation
+    - `created_tmux: Optional[TmuxInfo] = None` — set after tmux window creation
+    - `spawned_pid: Optional[int] = None` — set after process spawn
+  - Wrap tmux/process creation and state add in try/except
+  - On failure, call `_rollback_spawn(created_worktree, created_tmux, spawned_pid)`
+  - File: `swarm.py` (`cmd_spawn()`)
+
+- [ ] **3.2 Implement `_rollback_spawn()` helper**
+  - Reverse-order cleanup:
+    1. Kill tmux window if created (via `tmux kill-window`)
+    2. Kill process if spawned (via `os.kill(pid, signal.SIGTERM)`)
+    3. Remove worktree if created (via `git worktree remove --force`)
+  - Print `"swarm: warning: spawn failed, cleaning up partial state"` before cleanup
+  - Each cleanup step is best-effort (catch exceptions, warn on failure)
+  - File: `swarm.py` (new helper near `cmd_spawn()`)
+
+- [ ] **3.3 Add unit tests for transactional rollback**
+  - Test: tmux failure after worktree → worktree removed, error printed
+  - Test: process failure after worktree → worktree removed, error printed
+  - Test: state update failure → worker killed + worktree removed
+  - Test: rollback failure itself prints warning but still reports original error
+  - Test: successful spawn does not trigger rollback
+  - File: `test_cmd_spawn.py` (extend existing)
+
+### Phase 4: Corrupt State Recovery in `State._load()`
+
+- [ ] **4.1 Add JSONDecodeError handling to `State._load()`**
+  - Wrap `json.load(f)` at line 2774 in try/except JSONDecodeError
   - On error:
-    1. Log warning: `"swarm: warning: corrupt ralph state for '<name>', resetting"`
-    2. Back up corrupted file to `state.json.corrupted`
-    3. Create and return fresh default RalphState (worker_name from param, prompt_file="PROMPT.md")
-    4. Continue execution — do NOT crash
-  - File: `swarm.py` (~line 2604-2619)
+    1. Print `"swarm: warning: corrupt state file, resetting"` to stderr
+    2. Back up file to `~/.swarm/state.json.corrupted` (same pattern as ralph state)
+    3. Set `self.workers = []`
+  - File: `swarm.py` (~line 2764, `State._load()`)
 
-- [x] **2.2 Add unit tests for corrupt state recovery**
-  - Test: corrupted JSON file → returns fresh RalphState + logs warning
-  - Test: corrupted file is backed up to `state.json.corrupted`
-  - Test: empty file → returns fresh RalphState
-  - File: `test_cmd_ralph.py`
+- [ ] **4.2 Add unit tests for corrupt state recovery**
+  - Test: corrupt JSON → workers is empty + warning printed + backup created
+  - Test: empty file → workers is empty + warning printed
+  - Test: valid JSON → works normally (no warning)
+  - File: `test_state_file_locking.py` (extend existing)
 
-### Phase 3: Screen Change Tracking
+### Phase 5: Verify
 
-- [x] **3.1 Add `last_screen_change` field to `RalphState`**
-  - Add field: `last_screen_change: Optional[str] = None` (ISO format timestamp)
-  - Add to `to_dict()` and `from_dict()` serialization
-  - File: `swarm.py` (~line 1997, RalphState dataclass)
+- [ ] **5.1 Run new unit tests**
+  - `python3 -m unittest test_cmd_peek -v`
+  - `python3 -m unittest test_cmd_spawn -v`
+  - `python3 -m unittest test_state_file_locking -v`
 
-- [x] **3.2 Update `detect_inactivity()` to track screen changes**
-  - When screen content hash changes, update `ralph_state.last_screen_change` to current ISO timestamp
-  - Save updated ralph state after change
-  - File: `swarm.py` (~line 5963, `detect_inactivity()`)
+- [ ] **5.2 Verify CLI**
+  - `python3 swarm.py peek --help` → shows name, -n, --all
+  - `python3 swarm.py spawn --help` → unchanged
+  - `python3 swarm.py ralph spawn --help` → unchanged
 
-- [x] **3.3 Display `Last screen change` in `cmd_ralph_status()`**
-  - Calculate seconds since `last_screen_change` and display as `"Last screen change: 5s ago"`
-  - If no screen change recorded yet, display `"Last screen change: (none)"`
-  - File: `swarm.py` (~line 5579, `cmd_ralph_status()`)
-
-- [x] **3.4 Add unit tests for screen change tracking**
-  - Test: `last_screen_change` field serializes/deserializes correctly
-  - Test: status output includes `Last screen change` line
-  - File: `test_cmd_ralph.py`
-
-### Phase 4: Stuck Pattern Detection
-
-- [x] **4.1 Define stuck patterns constant**
-  - Create `STUCK_PATTERNS` dict mapping pattern strings to warning messages:
-    - `"Select login method"` → `"Worker stuck at login prompt. Check auth credentials."`
-    - `"Choose the text style"` → `"Worker stuck at theme picker. Check settings.local.json."`
-    - `"looks best with your terminal"` → `"Worker stuck at theme picker. Check settings.local.json."`
-    - `"Paste code here"` → `"Worker stuck at OAuth code entry. Use ANTHROPIC_API_KEY instead."`
-  - File: `swarm.py` (near module-level constants)
-
-- [x] **4.2 Implement stuck pattern detection in `detect_inactivity()`**
-  - During each 2-second poll cycle, after hashing screen content, check normalized content against `STUCK_PATTERNS`
-  - If a stuck pattern is detected and hasn't been warned about yet this iteration:
-    - Log `[WARN]` to iterations.log: `"2026-02-12T13:24:30 [WARN] iteration 1: Worker stuck at login prompt. Check auth credentials."`
-    - Track warned patterns in a set to avoid log spam (once per pattern per iteration)
-  - File: `swarm.py` (~line 5963, `detect_inactivity()`)
-
-- [x] **4.3 Add unit tests for stuck pattern detection**
-  - Test: stuck pattern in screen content triggers `[WARN]` log entry
-  - Test: same stuck pattern only warned once per iteration (no spam)
-  - Test: different stuck patterns each trigger their own warning
-  - File: `test_cmd_ralph.py`
-
-### Phase 5: Stuck Detection in Status Output
-
-- [x] **5.1 Show "(possibly stuck)" in status when screen unchanged >60s**
-  - In `cmd_ralph_status()`, if `last_screen_change` is older than 60 seconds:
-    - Append `(possibly stuck — no output change for <N>s)` to the Status line
-    - Display last 5 lines of terminal output under `"Last output:"` section
-    - Use `tmux_capture_pane()` to get current terminal content
-  - File: `swarm.py` (~line 5579, `cmd_ralph_status()`)
-
-- [x] **5.2 Add unit tests for stuck detection in status**
-  - Test: status shows `(possibly stuck)` when screen unchanged >60s
-  - Test: status includes last 5 terminal lines when stuck
-  - Test: status does NOT show stuck when screen changed recently
-  - File: `test_cmd_ralph.py`
-
-### Phase 6: Pre-flight Validation
-
-- [x] **6.1 Implement pre-flight check after iteration 1 prompt injection**
-  - After `send_prompt_to_worker()` on iteration 1 only:
-    1. Wait 10 seconds
-    2. Capture terminal output via `tmux_capture_pane()`
-    3. Check against `STUCK_PATTERNS`
-    4. If stuck pattern detected:
-       - Log `[ERROR]` to iterations.log
-       - Print actionable error to stderr: `"swarm: error: pre-flight check failed — <warning>.\n  fix: <fix instructions>"`
-       - Kill worker and exit with code 1
-    5. If no stuck pattern, continue normal monitoring
-  - File: `swarm.py` (in ralph monitoring loop, after first `send_prompt_to_worker()`)
-
-- [x] **6.2 Add unit tests for pre-flight validation**
-  - Test: stuck pattern on iteration 1 → `[ERROR]` log + exit code 1
-  - Test: no stuck pattern on iteration 1 → continues normally
-  - Test: pre-flight only runs on iteration 1, not subsequent iterations
-  - File: `test_cmd_ralph.py`
-
-### Phase 7: `--foreground` Flag for Ralph Spawn
-
-- [x] **7.1 Add `--foreground` argument to ralph spawn parser**
-  - Add `--foreground` flag (default: False) to ralph spawn argparse
-  - File: `swarm.py` (in `main()` argparse setup, ralph spawn subparser)
-
-- [x] **7.2 Implement non-blocking default / foreground option in `cmd_ralph_spawn()`**
-  - When `--foreground` is False (default) and `--no-run` is False:
-    - Start monitoring loop as a background subprocess (e.g., `subprocess.Popen` running `swarm ralph run <name>`)
-    - Print status + monitoring commands (peek, status, logs, kill)
-    - Return immediately
-  - When `--foreground` is True:
-    - Call monitoring loop directly (blocking, current behavior)
-  - When `--no-run` is True:
-    - Skip starting the loop entirely (current behavior)
-  - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
-
-- [x] **7.3 Update spawn output to include monitoring commands**
-  - After spawning with non-blocking default, print:
-    ```
-    spawned <name> (tmux: <session>:<window>) [ralph mode: iteration 1/100]
-
-    Monitor:
-      swarm ralph status <name>    # loop progress
-      swarm peek <name>            # terminal output
-      swarm ralph logs <name>      # iteration history
-      swarm kill <name>            # stop worker
-    ```
-  - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
-
-- [x] **7.4 Update `--replace` to terminate monitoring loop process**
-  - When `--replace` is specified and an existing worker has a running ralph monitoring loop:
-    - Find the monitoring loop process (store PID in ralph state or find by process name)
-    - Send SIGTERM to terminate it
-    - Then proceed with existing cleanup (kill worker, remove worktree, remove ralph state)
-  - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
-
-- [x] **7.5 Add unit tests for `--foreground` flag**
-  - Test: default spawn without `--foreground` prints monitoring commands
-  - Test: `--foreground` flag accepted by parser
-  - Test: `--no-run` still works (no loop started)
-  - File: `test_cmd_ralph.py`
-
-### Phase 8: Verify
-
-- [x] **8.1 Run unit tests**
-  - `python3 -m unittest test_cmd_ralph -v`
-  - `python3 -m unittest test_ready_patterns -v`
-
-- [x] **8.2 Verify CLI**
-  - `python3 swarm.py ralph spawn --help` → shows `--foreground` flag
-  - `python3 swarm.py ralph status --help` → works
-
-- [x] **8.3 Run full test suite**
+- [ ] **5.3 Run full test suite**
   - `python3 -m unittest discover -s . -p 'test_*.py' -v`
   - Note: may crash swarm workers per CLAUDE.md caveat — run in isolation
 
@@ -188,89 +147,27 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 | File | Change |
 |------|--------|
-| `swarm.py` | Login/OAuth not-ready patterns, corrupt state recovery, screen change tracking, stuck patterns, pre-flight validation, `--foreground` flag, non-blocking spawn default, monitoring command output, `--replace` monitor termination |
-| `test_cmd_ralph.py` | Tests for corrupt state, screen change tracking, stuck detection, pre-flight, `--foreground` |
-| `test_ready_patterns.py` | Tests for login/OAuth not-ready patterns |
+| `swarm.py` | New `cmd_peek()`, env propagation in `create_tmux_window()`, transactional rollback in `cmd_spawn()`, corrupt state recovery in `State._load()` |
+| `test_cmd_peek.py` | New file — peek command unit tests |
+| `test_cmd_spawn.py` | Extended — env propagation + rollback tests |
+| `test_state_file_locking.py` | Extended — corrupt state recovery tests |
 
 ---
 
 ## Spec References
 
-All spec changes are already committed in `58f9955`:
-- `specs/ralph-loop.md` — Stuck Pattern Detection, Pre-flight Validation, Corrupt State Recovery, `--foreground` flag, non-blocking default, screen change tracking, stuck status output
-- `specs/ready-detection.md` — Login/OAuth not-ready patterns
-- `specs/spawn.md` — Environment propagation chain docs
+- `specs/peek.md` — Full peek command spec (P1)
+- `specs/spawn.md` — Transactional Spawn + Environment Propagation Chain sections
+- `specs/state-management.md` — Corrupt State Recovery section
 
 ---
 
 ## Complexity Notes
 
-- **Phase 1 (login/OAuth patterns)**: Trivial — 2 pattern additions, 30 min
-- **Phase 2 (corrupt state)**: Low — try/except + backup, 30 min
-- **Phase 3 (screen change tracking)**: Low-Medium — new field + plumbing, 45 min
-- **Phase 4 (stuck pattern detection)**: Medium — detection in poll loop + logging, 1 hour
-- **Phase 5 (stuck status output)**: Low-Medium — conditional status display, 45 min
-- **Phase 6 (pre-flight validation)**: Medium — timing + error handling, 1 hour
-- **Phase 7 (`--foreground` flag)**: Medium — background process management + output changes, 1.5 hours
-- **Phase 8 (verify)**: Trivial — run tests, 15 min
+- **Phase 1 (peek)**: Low — CLI wiring + thin wrapper around existing `tmux_capture_pane()`, ~1 hour
+- **Phase 2 (env propagation)**: Low — `env` prefix wrapper in `create_tmux_window()`, ~30 min
+- **Phase 3 (transactional rollback)**: Medium — try/except refactor of `cmd_spawn()` with reverse-order cleanup, ~1 hour
+- **Phase 4 (corrupt state)**: Trivial — add try/except to `State._load()`, ~15 min
+- **Phase 5 (verify)**: Trivial — run tests, ~15 min
 
-**Total estimated: ~6 hours of worker time, ~8-12 iterations**
-
----
-
-## Execution Results
-
-**Status**: COMPLETE
-**Runner**: `loop.sh` with `SANDBOX=1` (Docker-sandboxed, `claude -p` pipe mode)
-**Completed**: 2026-02-12
-
-### Timeline
-
-| Event | Time (UTC) |
-|-------|------------|
-| Epic kicked off | 14:29 |
-| First attempt (ralph spawn, 180s timeout) | 14:29–14:51 — **failed** (7 iterations lost to inactivity timeout) |
-| Second attempt (ralph spawn, 600s timeout) | 14:51 — killed, switched to loop.sh |
-| Third attempt (loop.sh SANDBOX=1, tmux) | 14:53 — success |
-| Phase 1 complete (login/OAuth patterns) | 14:55 |
-| Phase 2 complete (corrupt state recovery) | 14:59 |
-| Phase 3 complete (screen change tracking) | 15:11 |
-| Phase 4 complete (stuck pattern detection) | 15:19 |
-| Phase 5 complete (stuck status output) | 15:27 |
-| Phase 6 complete (pre-flight validation) | 15:33 |
-| Phase 7 complete (--foreground flag) | 15:47 |
-| Phase 8 complete (verification) | 15:55 |
-| Done signal emitted | 15:57 |
-
-### Stats
-
-| Metric | Value |
-|--------|-------|
-| Total wall time (successful run) | ~65 min (14:53–15:58) |
-| Productive iterations | 8 (phases 1–8, one commit each) |
-| Post-done iterations | 12 (iterations 9–20, worker re-confirmed done) |
-| Total iterations used | 20/20 |
-| Commits | 8 (7 feature + 1 verification) |
-| Lines changed | +5,623 / -4,032 across 3 files |
-| Files modified | `swarm.py` (+208), `test_cmd_ralph.py` (+5,367), `test_ready_patterns.py` (+48) |
-| Test coverage | 95% (pre-commit hook) |
-
-### Commits
-
-| Commit | Phase | Description |
-|--------|-------|-------------|
-| `2cdc152` | 1 | feat: add login/OAuth not-ready patterns to wait_for_agent_ready() |
-| `1e03f07` | 2 | feat: add corrupt ralph state recovery in load_ralph_state() |
-| `31109b0` | 3 | feat: add screen change tracking to ralph status and detect_inactivity() |
-| `949ad06` | 4 | feat: add stuck pattern detection to detect_inactivity() |
-| `561c9d5` | 5 | feat: add stuck detection display to ralph status output |
-| `c65cede` | 6 | feat: add pre-flight validation to ralph monitoring loop |
-| `603db0e` | 7 | feat: add --foreground flag and background-default spawn to ralph |
-| `05135f3` | 8 | chore: mark Phase 8 verification tasks complete in implementation plan |
-
-### Lessons Learned
-
-- **`swarm ralph spawn` with 180s inactivity timeout is too short for Docker-sandboxed workers** — Docker startup + Claude reasoning + pre-commit test suite exceeds it. Use `--inactivity-timeout 600` or higher.
-- **`loop.sh` with `SANDBOX=1` is more reliable than `swarm ralph spawn` for Docker sandboxes** — no inactivity timeout to tune, `claude -p` pipe mode waits for completion naturally.
-- **`loop.sh` needs a tmux session** — `docker run -it` requires a TTY, so `nohup` backgrounding fails. Use `tmux new-session -d` instead.
-- **Done pattern mismatch**: `loop.sh` checks for `/done` but PROMPT.md uses `SWARM_DONE_X9K`. Worker completed but loop didn't stop — burned 12 extra iterations confirming done. Align patterns next time.
+**Total estimated: ~3 hours of worker time, ~4-6 iterations**

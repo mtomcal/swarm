@@ -3,29 +3,26 @@ Read CLAUDE.md, then read IMPLEMENTATION_PLAN.md and pick ONE incomplete task (m
 RULES:
 
 - Verify by reading actual code/files before changing anything
-- Tightly coupled tasks within the same phase MAY be combined in a single iteration (e.g., 3.1+3.2+3.3, 4.1+4.2, 7.1+7.2+7.3)
+- Tightly coupled tasks within the same phase MAY be combined in a single iteration (e.g., 1.1+1.2, 2.1+2.2, 3.1+3.2)
 - Mark each completed task `[x]` in IMPLEMENTATION_PLAN.md
 - Commit and push when done
 - Do NOT run `make test` — it crashes swarm workers
 
 PHASE-SPECIFIC NOTES:
 
-- Phase 1 (login/OAuth patterns): Add `Select login method` and `Paste code here` to the `not_ready_patterns` list in `wait_for_agent_ready()` (~line 3279). They join existing theme picker patterns. Then tests in `test_ready_patterns.py`.
-- Phase 2 (corrupt state): Wrap `json.load()` in `load_ralph_state()` (~line 2604) with try/except for `json.JSONDecodeError`. On error: log warning, back up to `state.json.corrupted`, return fresh RalphState. Then tests.
-- Phase 3 (screen change tracking): Add `last_screen_change: Optional[str] = None` to `RalphState` (~line 1997). In `detect_inactivity()` (~line 5963), when screen hash changes, set `ralph_state.last_screen_change = datetime.now(timezone.utc).isoformat()` and save state. In `cmd_ralph_status()` (~line 5579), parse the ISO timestamp and display `Last screen change: Ns ago`. Tasks 3.1-3.3 are tightly coupled — combine them.
-- Phase 4 (stuck patterns): Define `STUCK_PATTERNS` dict near module constants. In `detect_inactivity()`, check screen content against stuck patterns each poll cycle and log `[WARN]` once per pattern per iteration. Tasks 4.1+4.2 are tightly coupled — combine them.
-- Phase 5 (stuck status): In `cmd_ralph_status()`, if `last_screen_change` is >60s ago, append `(possibly stuck)` to Status line and show last 5 terminal lines. Depends on Phase 3.
-- Phase 6 (pre-flight): After `send_prompt_to_worker()` on iteration 1 only, wait 10s, peek terminal, check against `STUCK_PATTERNS`. If stuck: log `[ERROR]`, print actionable error, kill worker, exit 1. Depends on Phase 4.
-- Phase 7 (`--foreground`): Add `--foreground` arg. Default (no flag): start monitoring loop as background subprocess via `subprocess.Popen(['python3', 'swarm.py', 'ralph', 'run', name], start_new_session=True)`, print monitoring commands, return immediately. `--foreground`: block (current behavior). Store monitor PID in ralph state as `monitor_pid` for `--replace` cleanup. Tasks 7.1-7.4 are tightly coupled — combine them.
+- Phase 1 (`swarm peek`): The underlying helpers already exist. `tmux_capture_pane()` is at ~line 3200, `tmux_window_exists()` at ~line 3196, `State.get_worker()` at ~line 2801. Follow the pattern of `cmd_status()` for error handling and exit codes. Add `peek_p = subparsers.add_parser("peek", ...)` after the `status` parser (~line 3601). Implement `cmd_peek(args)` near the other `cmd_*` functions. For `--all`, filter to running tmux workers and print `=== worker-name ===` headers. Exit codes: 0=success, 1=error, 2=not found. Tasks 1.1+1.2 are tightly coupled — combine them.
+- Phase 2 (env propagation): In `create_tmux_window()` (~line 3153), add an `env: Optional[dict[str, str]] = None` parameter. When env is non-empty, prepend `env KEY1=VAL1 KEY2=VAL2` to `cmd_str` using `shlex.quote()` on keys and values. Then thread env through callers: `cmd_spawn()` (~line 4190), `_do_ralph_spawn()`, `cmd_respawn()`. Tasks 2.1+2.2 are tightly coupled — combine them.
+- Phase 3 (transactional rollback): See `_rollback_ralph_spawn()` (~line 5203) for the pattern. Track `created_worktree`, `created_tmux`, `spawned_pid` as local vars in `cmd_spawn()`. Wrap tmux/process creation and state add in try/except. On failure, call `_rollback_spawn()` which cleans in reverse order: kill window/process, remove worktree. Print `"swarm: warning: spawn failed, cleaning up partial state"`. Tasks 3.1+3.2 are tightly coupled — combine them.
+- Phase 4 (corrupt state): Wrap `json.load(f)` in `State._load()` (~line 2774) with try/except `json.JSONDecodeError`. On error: print `"swarm: warning: corrupt state file, resetting"` to stderr, back up to `~/.swarm/state.json.corrupted`, set `self.workers = []`. Same pattern as `load_ralph_state()` corrupt recovery (~line 2643).
 
 TESTING:
 
-- After Phase 1 changes: `python3 -m unittest test_ready_patterns -v`
-- After Phase 2 changes: `python3 -m unittest test_cmd_ralph -v`
-- After Phase 3-6 changes: `python3 -m unittest test_cmd_ralph -v`
-- After Phase 7 changes: `python3 -m unittest test_cmd_ralph -v`
-- Phase 8 verification: `python3 -m unittest test_cmd_ralph test_ready_patterns test_cmd_spawn test_cmd_kill test_cmd_init test_cmd_heartbeat -v`
+- After Phase 1 changes: `python3 -m unittest test_cmd_peek -v`
+- After Phase 2 changes: `python3 -m unittest test_cmd_spawn -v`
+- After Phase 3 changes: `python3 -m unittest test_cmd_spawn -v`
+- After Phase 4 changes: `python3 -m unittest test_state_file_locking -v`
+- Phase 5 verification: `python3 -m unittest test_cmd_peek test_cmd_spawn test_state_file_locking test_cmd_ralph test_cmd_kill test_cmd_init test_cmd_heartbeat -v`
 
 DONE SIGNAL:
 
-If ALL tasks in IMPLEMENTATION_PLAN.md are `[x]`, output SWARM_DONE_X9K on its own line and stop.
+If ALL tasks in IMPLEMENTATION_PLAN.md are `[x]`, output /done on its own line and stop.
