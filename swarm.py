@@ -2811,7 +2811,20 @@ class State:
             ensure_dirs()
             if STATE_FILE.exists():
                 with open(STATE_FILE, "r") as f:
-                    data = json.load(f)
+                    try:
+                        data = json.load(f)
+                    except json.JSONDecodeError:
+                        print("swarm: warning: corrupt state file, resetting",
+                              file=sys.stderr)
+                        # Back up corrupted file
+                        corrupted_path = STATE_FILE.parent / "state.json.corrupted"
+                        try:
+                            import shutil
+                            shutil.copy2(STATE_FILE, corrupted_path)
+                        except OSError:
+                            pass  # Best-effort backup
+                        self.workers = []
+                        return
                     self.workers = [Worker.from_dict(w) for w in data.get("workers", [])]
             else:
                 self.workers = []

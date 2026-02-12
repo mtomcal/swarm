@@ -1,7 +1,7 @@
 # Implementation Plan: Round 4 — Spec Compliance Gaps
 
 **Created**: 2026-02-12
-**Status**: PENDING
+**Status**: COMPLETE
 **Goal**: Close the remaining gaps between specs and implementation — `swarm peek` command, environment propagation for tmux workers, transactional rollback in `cmd_spawn()`, and corrupt state warning for `State._load()`.
 
 ---
@@ -111,7 +111,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 
 ### Phase 4: Corrupt State Recovery in `State._load()`
 
-- [ ] **4.1 Add JSONDecodeError handling to `State._load()`**
+- [x] **4.1 Add JSONDecodeError handling to `State._load()`**
   - Wrap `json.load(f)` at line 2774 in try/except JSONDecodeError
   - On error:
     1. Print `"swarm: warning: corrupt state file, resetting"` to stderr
@@ -119,7 +119,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
     3. Set `self.workers = []`
   - File: `swarm.py` (~line 2764, `State._load()`)
 
-- [ ] **4.2 Add unit tests for corrupt state recovery**
+- [x] **4.2 Add unit tests for corrupt state recovery**
   - Test: corrupt JSON → workers is empty + warning printed + backup created
   - Test: empty file → workers is empty + warning printed
   - Test: valid JSON → works normally (no warning)
@@ -127,17 +127,17 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 
 ### Phase 5: Verify
 
-- [ ] **5.1 Run new unit tests**
+- [x] **5.1 Run new unit tests**
   - `python3 -m unittest test_cmd_peek -v`
   - `python3 -m unittest test_cmd_spawn -v`
   - `python3 -m unittest test_state_file_locking -v`
 
-- [ ] **5.2 Verify CLI**
+- [x] **5.2 Verify CLI**
   - `python3 swarm.py peek --help` → shows name, -n, --all
   - `python3 swarm.py spawn --help` → unchanged
   - `python3 swarm.py ralph spawn --help` → unchanged
 
-- [ ] **5.3 Run full test suite**
+- [x] **5.3 Run full test suite**
   - `python3 -m unittest discover -s . -p 'test_*.py' -v`
   - Note: may crash swarm workers per CLAUDE.md caveat — run in isolation
 

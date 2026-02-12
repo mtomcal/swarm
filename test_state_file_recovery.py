@@ -65,8 +65,8 @@ class TestStateFileRecovery(unittest.TestCase):
     def test_corrupted_json(self):
         """Test ls command when state.json contains invalid JSON.
 
-        Expected behavior: Should handle gracefully with error message or recovery.
-        Tests that malformed JSON doesn't crash the application.
+        Expected behavior: Should recover gracefully — reset to empty workers,
+        print a warning to stderr, and back up the corrupt file.
         """
         # Create .swarm directory
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -77,12 +77,16 @@ class TestStateFileRecovery(unittest.TestCase):
         # Run ls command
         result = run_swarm('ls', env=self.env)
 
-        # Document actual behavior: currently fails with JSONDecodeError
-        # The swarm.py State._load() will raise an exception
-        self.assertNotEqual(result.returncode, 0,
-                           "Currently expected to fail with corrupted JSON")
-        self.assertIn('Expecting', result.stderr,
-                     "Should show JSON decode error message")
+        # Should succeed after recovery
+        self.assertEqual(result.returncode, 0,
+                        f"ls should succeed after corrupt state recovery. stderr: {result.stderr}")
+        # Should print warning to stderr
+        self.assertIn('corrupt state file', result.stderr,
+                     "Should show corrupt state file warning")
+        # Backup file should be created
+        corrupted_path = self.state_file.parent / "state.json.corrupted"
+        self.assertTrue(corrupted_path.exists(),
+                       "Should back up corrupt file to state.json.corrupted")
 
     def test_missing_fields(self):
         """Test ls command when state.json has missing required fields.

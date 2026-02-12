@@ -11,9 +11,11 @@ Test coverage:
 - Exclusive lock prevents simultaneous file access
 - Concurrent state updates preserve all changes
 - Lock is released even if exception occurs
+- Corrupt state file recovery (backup + reset)
 """
 
 import fcntl
+import io
 import json
 import os
 import tempfile
@@ -21,6 +23,9 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import swarm
 
 
 class TestStateLocking(unittest.TestCase):
@@ -195,6 +200,84 @@ class TestStateLocking(unittest.TestCase):
             "Second thread is still blocked, lock was not released after exception"
         )
         self.assertEqual(len(acquired), 1, "Second thread failed to acquire lock")
+
+
+class TestCorruptStateRecovery(unittest.TestCase):
+    """Test corrupt state file recovery in State._load()."""
+
+    def setUp(self):
+        """Create temporary directory and patch swarm constants."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_file = Path(self.temp_dir) / "state.json"
+        self.logs_dir = Path(self.temp_dir) / "logs"
+        self.logs_dir.mkdir(exist_ok=True)
+
+        self.swarm_dir_patch = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patch = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.state_lock_file_patch = patch.object(swarm, 'STATE_LOCK_FILE', Path(self.temp_dir) / "state.lock")
+        self.logs_dir_patch = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+
+        self.swarm_dir_patch.start()
+        self.state_file_patch.start()
+        self.state_lock_file_patch.start()
+        self.logs_dir_patch.start()
+
+    def tearDown(self):
+        """Clean up patches and temporary files."""
+        self.swarm_dir_patch.stop()
+        self.state_file_patch.stop()
+        self.state_lock_file_patch.stop()
+        self.logs_dir_patch.stop()
+
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def test_corrupt_json_resets_workers_and_warns(self):
+        """Corrupt JSON in state file results in empty workers, warning, and backup."""
+        corrupt_content = "{invalid json content!!"
+        with open(self.state_file, "w") as f:
+            f.write(corrupt_content)
+
+        with patch('sys.stderr', new_callable=io.StringIO) as mock_stderr:
+            state = swarm.State()
+
+        self.assertEqual(state.workers, [])
+        self.assertIn("swarm: warning: corrupt state file, resetting", mock_stderr.getvalue())
+
+        # Verify backup was created
+        corrupted_path = Path(self.temp_dir) / "state.json.corrupted"
+        self.assertTrue(corrupted_path.exists())
+        with open(corrupted_path, "r") as f:
+            self.assertEqual(f.read(), corrupt_content)
+
+    def test_empty_file_resets_workers_and_warns(self):
+        """Empty state file results in empty workers and warning."""
+        with open(self.state_file, "w") as f:
+            f.write("")
+
+        with patch('sys.stderr', new_callable=io.StringIO) as mock_stderr:
+            state = swarm.State()
+
+        self.assertEqual(state.workers, [])
+        self.assertIn("swarm: warning: corrupt state file, resetting", mock_stderr.getvalue())
+
+    def test_valid_json_loads_normally(self):
+        """Valid JSON state file loads workers without warning."""
+        state_data = {"workers": [
+            {"name": "test-worker", "status": "running", "cmd": ["echo"],
+             "started": "2026-01-01T00:00:00", "cwd": "/tmp",
+             "tmux": None, "worktree": None,
+             "pid": 1234, "metadata": {}}
+        ]}
+        with open(self.state_file, "w") as f:
+            json.dump(state_data, f)
+
+        with patch('sys.stderr', new_callable=io.StringIO) as mock_stderr:
+            state = swarm.State()
+
+        self.assertEqual(len(state.workers), 1)
+        self.assertEqual(state.workers[0].name, "test-worker")
+        self.assertNotIn("warning", mock_stderr.getvalue())
 
 
 if __name__ == "__main__":
