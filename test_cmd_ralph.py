@@ -12,7 +12,7 @@ import time
 import unittest
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import swarm
 
@@ -9425,8 +9425,8 @@ class TestRalphSpawnNoRunBehavior(unittest.TestCase):
         # Verify cmd_ralph_run was NOT called
         mock_run.assert_not_called()
 
-    def test_no_no_run_calls_loop(self):
-        """Test that without --no-run flag, monitoring loop is auto-started."""
+    def test_no_no_run_starts_background_loop(self):
+        """Test that without --no-run flag, monitoring loop is auto-started as background process."""
         args = Namespace(
             ralph_command='spawn',
             name='ralph-autorun',
@@ -9436,6 +9436,7 @@ class TestRalphSpawnNoRunBehavior(unittest.TestCase):
             done_pattern=None,
             check_done_continuous=False,
             no_run=False,  # Critical: auto-start enabled (default)
+            foreground=False,  # Default: background mode
             worktree=False,
             session=None,
             tmux_socket=None,
@@ -9449,17 +9450,24 @@ class TestRalphSpawnNoRunBehavior(unittest.TestCase):
             cmd=['--', 'echo', 'test']
         )
 
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
                 with patch('swarm.send_prompt_to_worker', return_value=""):
-                    with patch('swarm.cmd_ralph_run') as mock_run:
+                    with patch('subprocess.Popen', return_value=mock_proc) as mock_popen:
                         with patch('builtins.print'):
                             swarm.cmd_ralph_spawn(args)
 
-        # Verify cmd_ralph_run WAS called with correct args
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        self.assertEqual(call_args.name, 'ralph-autorun')
+        # Verify subprocess.Popen was called to start background monitoring
+        mock_popen.assert_called_once()
+        call_args = mock_popen.call_args
+        cmd_list = call_args[0][0]
+        self.assertIn('ralph', cmd_list)
+        self.assertIn('run', cmd_list)
+        self.assertIn('ralph-autorun', cmd_list)
+        self.assertTrue(call_args[1].get('start_new_session'))
 
 
 class TestRalphSpawnCheckDoneContinuousArgument(unittest.TestCase):
@@ -11434,6 +11442,448 @@ class TestPreflightValidation(unittest.TestCase):
 
         # Worker should NOT have been killed by pre-flight
         mock_kill.assert_not_called()
+
+
+class TestRalphSpawnForegroundFlag(unittest.TestCase):
+    """Test --foreground flag for ralph spawn command."""
+
+    def test_foreground_argument_exists(self):
+        """Test that --foreground argument is recognized by ralph spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--foreground', result.stdout)
+
+    def test_foreground_default_is_false(self):
+        """Test that --foreground defaults to False (background is default)."""
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--foreground", action="store_true")
+        args = parser.parse_args([])
+        self.assertFalse(args.foreground)
+
+
+class TestRalphSpawnForegroundBehavior(unittest.TestCase):
+    """Test --foreground flag behavior in cmd_ralph_spawn."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        # Override RALPH_DIR and STATE_FILE to use temp directory
+        self.orig_ralph_dir = swarm.RALPH_DIR
+        self.orig_state_file = swarm.STATE_FILE
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        os.chdir(self.temp_dir)
+        # Create a test prompt file
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.RALPH_DIR = self.orig_ralph_dir
+        swarm.STATE_FILE = self.orig_state_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_foreground_calls_cmd_ralph_run_directly(self):
+        """Test that --foreground flag calls cmd_ralph_run directly (blocking)."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-fg',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=False,
+            foreground=True,  # Critical: foreground mode
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('swarm.cmd_ralph_run') as mock_run:
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_spawn(args)
+
+        # Verify cmd_ralph_run WAS called directly (blocking foreground mode)
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        self.assertEqual(call_args.name, 'ralph-fg')
+
+    def test_default_spawn_prints_monitoring_commands(self):
+        """Test that default spawn (background) prints monitoring commands."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-bg',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=False,
+            foreground=False,  # Default: background mode
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('subprocess.Popen', return_value=mock_proc):
+                        with patch('builtins.print') as mock_print:
+                            swarm.cmd_ralph_spawn(args)
+
+        # Verify monitoring commands are printed
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        self.assertTrue(any('swarm ralph status ralph-bg' in call for call in print_calls),
+                        f"Expected 'swarm ralph status' in output, got: {print_calls}")
+        self.assertTrue(any('swarm peek ralph-bg' in call for call in print_calls),
+                        f"Expected 'swarm peek' in output, got: {print_calls}")
+        self.assertTrue(any('swarm ralph logs ralph-bg' in call for call in print_calls),
+                        f"Expected 'swarm ralph logs' in output, got: {print_calls}")
+        self.assertTrue(any('swarm kill ralph-bg' in call for call in print_calls),
+                        f"Expected 'swarm kill' in output, got: {print_calls}")
+
+    def test_default_spawn_does_not_call_cmd_ralph_run(self):
+        """Test that default spawn (background) does NOT call cmd_ralph_run directly."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-bg2',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=False,
+            foreground=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 88888
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('swarm.cmd_ralph_run') as mock_run:
+                        with patch('subprocess.Popen', return_value=mock_proc):
+                            with patch('builtins.print'):
+                                swarm.cmd_ralph_spawn(args)
+
+        # cmd_ralph_run should NOT be called (background mode uses Popen)
+        mock_run.assert_not_called()
+
+    def test_no_run_still_skips_loop(self):
+        """Test that --no-run still works with --foreground flag present."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-norun-fg',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=True,
+            foreground=True,  # foreground set but no_run takes priority
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('swarm.cmd_ralph_run') as mock_run:
+                        with patch('subprocess.Popen') as mock_popen:
+                            with patch('builtins.print'):
+                                swarm.cmd_ralph_spawn(args)
+
+        # Neither cmd_ralph_run nor Popen should be called
+        mock_run.assert_not_called()
+        mock_popen.assert_not_called()
+
+    def test_background_spawn_stores_monitor_pid(self):
+        """Test that background spawn stores monitor PID in ralph state."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='ralph-pid',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=False,
+            foreground=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 77777
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('subprocess.Popen', return_value=mock_proc):
+                        with patch('builtins.print'):
+                            swarm.cmd_ralph_spawn(args)
+
+        # Verify monitor PID is stored in ralph state
+        ralph_state = swarm.load_ralph_state('ralph-pid')
+        self.assertIsNotNone(ralph_state)
+        self.assertEqual(ralph_state.monitor_pid, 77777)
+
+
+class TestRalphSpawnReplaceTerminatesMonitor(unittest.TestCase):
+    """Test that --replace terminates existing monitoring loop process."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        self.orig_ralph_dir = swarm.RALPH_DIR
+        self.orig_state_file = swarm.STATE_FILE
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        os.chdir(self.temp_dir)
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.RALPH_DIR = self.orig_ralph_dir
+        swarm.STATE_FILE = self.orig_state_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_replace_sends_sigterm_to_monitor(self):
+        """Test that --replace sends SIGTERM to existing monitoring loop process."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='existing-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=True,  # Skip starting loop for this test
+            foreground=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=True,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Create existing ralph state with monitor_pid
+        ralph_state_dir = swarm.RALPH_DIR / 'existing-worker'
+        ralph_state_dir.mkdir(parents=True, exist_ok=True)
+        existing_ralph_state = swarm.RalphState(
+            worker_name='existing-worker',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running',
+            monitor_pid=55555,
+        )
+        swarm.save_ralph_state(existing_ralph_state)
+
+        # Mock existing worker
+        mock_tmux = swarm.TmuxInfo(session='swarm-test', window='existing-worker', socket=None)
+        mock_worker = swarm.Worker(
+            name='existing-worker',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=mock_tmux
+        )
+
+        mock_state = swarm.State()
+        mock_state.workers = [mock_worker]
+
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value.returncode = 0
+                with patch.object(swarm, 'create_tmux_window'):
+                    with patch.object(swarm, 'save_ralph_state') as mock_save:
+                        with patch.object(swarm, 'log_ralph_iteration'):
+                            with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
+                                with patch('os.kill') as mock_kill:
+                                    with patch('builtins.print'):
+                                        swarm.cmd_ralph_spawn(args)
+
+        # Verify os.kill was called with SIGTERM for the monitor PID
+        kill_calls = mock_kill.call_args_list
+        # Should have two calls: os.kill(55555, 0) to check alive, os.kill(55555, SIGTERM) to kill
+        sigterm_calls = [c for c in kill_calls if c[0] == (55555, signal.SIGTERM)]
+        self.assertTrue(len(sigterm_calls) > 0,
+                        f"Expected SIGTERM to PID 55555, got calls: {kill_calls}")
+
+    def test_replace_handles_dead_monitor_gracefully(self):
+        """Test that --replace handles already-dead monitoring process gracefully."""
+        args = Namespace(
+            ralph_command='spawn',
+            name='dead-monitor',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=None,
+            check_done_continuous=False,
+            no_run=True,
+            foreground=False,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            replace=True,
+            cmd=['--', 'echo', 'test']
+        )
+
+        # Create existing ralph state with monitor_pid
+        ralph_state_dir = swarm.RALPH_DIR / 'dead-monitor'
+        ralph_state_dir.mkdir(parents=True, exist_ok=True)
+        existing_ralph_state = swarm.RalphState(
+            worker_name='dead-monitor',
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            current_iteration=1,
+            status='running',
+            monitor_pid=66666,
+        )
+        swarm.save_ralph_state(existing_ralph_state)
+
+        mock_tmux = swarm.TmuxInfo(session='swarm-test', window='dead-monitor', socket=None)
+        mock_worker = swarm.Worker(
+            name='dead-monitor',
+            status='running',
+            cmd=['echo'],
+            started='2024-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=mock_tmux
+        )
+
+        mock_state = swarm.State()
+        mock_state.workers = [mock_worker]
+
+        def kill_side_effect(pid, sig):
+            raise OSError("No such process")
+
+        with patch.object(swarm, 'State', return_value=mock_state):
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value.returncode = 0
+                with patch.object(swarm, 'create_tmux_window'):
+                    with patch.object(swarm, 'save_ralph_state'):
+                        with patch.object(swarm, 'log_ralph_iteration'):
+                            with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
+                                with patch('os.kill', side_effect=kill_side_effect):
+                                    with patch('builtins.print'):
+                                        # Should NOT raise an exception
+                                        swarm.cmd_ralph_spawn(args)
+
+
+class TestRalphStateMonitorPid(unittest.TestCase):
+    """Test monitor_pid field in RalphState."""
+
+    def test_monitor_pid_serialization(self):
+        """Test that monitor_pid field serializes/deserializes correctly."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+            monitor_pid=12345,
+        )
+        d = state.to_dict()
+        self.assertEqual(d['monitor_pid'], 12345)
+
+        restored = swarm.RalphState.from_dict(d)
+        self.assertEqual(restored.monitor_pid, 12345)
+
+    def test_monitor_pid_default_none(self):
+        """Test that monitor_pid defaults to None."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='PROMPT.md',
+            max_iterations=10,
+        )
+        self.assertIsNone(state.monitor_pid)
+
+    def test_monitor_pid_backwards_compatible(self):
+        """Test that missing monitor_pid in dict defaults to None."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': 'PROMPT.md',
+            'max_iterations': 10,
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertIsNone(state.monitor_pid)
 
 
 if __name__ == "__main__":

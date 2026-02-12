@@ -1408,16 +1408,21 @@ See: https://github.com/ghuntley/how-to-ralph-wiggum
 RALPH_SPAWN_HELP_DESCRIPTION = """\
 Spawn a new worker with ralph loop mode enabled.
 
-By default, spawns the worker AND starts the monitoring loop (blocking).
-Use --no-run to spawn without starting the loop. Use --replace to
+By default, spawns the worker AND starts the monitoring loop as a background
+process, then returns immediately. Use --foreground to block while the loop
+runs. Use --no-run to spawn without starting the loop. Use --replace to
 auto-clean an existing worker before respawning, or --clean-state to
 reset iteration count without killing the worker.
 """
 
 RALPH_SPAWN_HELP_EPILOG = """\
 Examples:
-  # Basic autonomous loop (blocks while running)
+  # Basic autonomous loop (background, returns immediately)
   swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 -- claude --dangerously-skip-permissions
+
+  # Foreground mode (blocks while running)
+  swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
+    --foreground -- claude --dangerously-skip-permissions
 
   # With isolated git worktree
   swarm ralph spawn --name feature --prompt-file PROMPT.md --max-iterations 20 \\
@@ -2005,6 +2010,7 @@ class RalphState:
     exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
     prompt_baseline_content: str = ""  # Pane content snapshot after prompt injection, for done-pattern baseline filtering
     last_screen_change: Optional[str] = None  # ISO format timestamp of last screen content change
+    monitor_pid: Optional[int] = None  # PID of background monitoring loop process
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -2026,6 +2032,7 @@ class RalphState:
             "exit_reason": self.exit_reason,
             "prompt_baseline_content": self.prompt_baseline_content,
             "last_screen_change": self.last_screen_change,
+            "monitor_pid": self.monitor_pid,
         }
 
     @classmethod
@@ -2049,6 +2056,7 @@ class RalphState:
             exit_reason=d.get("exit_reason"),
             prompt_baseline_content=d.get("prompt_baseline_content", ""),
             last_screen_change=d.get("last_screen_change"),
+            monitor_pid=d.get("monitor_pid"),
         )
 
 
@@ -3926,8 +3934,11 @@ def main() -> None:
                                help="Check done pattern continuously during monitoring, not just after agent exit. "
                                     "Use when the done signal may appear mid-iteration.")
     ralph_spawn_p.add_argument("--no-run", action="store_true",
-                               help="Spawn worker only, don't start monitoring loop. Default: auto-start (blocking). "
+                               help="Spawn worker only, don't start monitoring loop. "
                                     "Use 'swarm ralph run <name>' to start the loop later.")
+    ralph_spawn_p.add_argument("--foreground", action="store_true",
+                               help="Run monitoring loop in the foreground (blocking). "
+                                    "Default: start monitoring loop as a background process and return immediately.")
     ralph_spawn_p.add_argument("--replace", action="store_true",
                                help="Auto-clean existing worker, worktree, and ralph state before spawning. "
                                     "Saves the manual kill/clean/rm dance when respawning.")
@@ -5307,6 +5318,18 @@ def cmd_ralph_spawn(args) -> None:
                 if not success:
                     print(f"swarm: warning: cannot remove worktree for '{args.name}': {msg}", file=sys.stderr)
 
+            # Stop ralph monitoring loop if running
+            try:
+                existing_ralph_state = load_ralph_state(args.name)
+                if existing_ralph_state and existing_ralph_state.monitor_pid:
+                    try:
+                        os.kill(existing_ralph_state.monitor_pid, 0)  # Check if alive
+                        os.kill(existing_ralph_state.monitor_pid, signal.SIGTERM)
+                    except OSError:
+                        pass  # Process not running
+            except (KeyError, TypeError):
+                pass  # Malformed state, skip monitor cleanup
+
             # Remove ralph state if present
             ralph_state_dir = RALPH_DIR / args.name
             if ralph_state_dir.exists():
@@ -5500,6 +5523,9 @@ def cmd_ralph_spawn(args) -> None:
         if not wait_for_agent_ready(tmux_info.session, tmux_info.window, args.ready_timeout, socket):
             print(f"swarm: warning: agent '{args.name}' did not become ready within {args.ready_timeout}s", file=sys.stderr)
 
+    # Determine launch mode
+    foreground = getattr(args, 'foreground', False)
+
     # Print success message
     msg = f"spawned {args.name} (tmux: {tmux_info.session}:{tmux_info.window})"
     msg += f" [ralph mode: iteration 1/{args.max_iterations}]"
@@ -5564,11 +5590,34 @@ def cmd_ralph_spawn(args) -> None:
     # Auto-start the monitoring loop unless --no-run is specified
     # Note: We check hasattr to maintain backwards compatibility with existing tests
     # that don't include no_run in their args. CLI usage will always have no_run set.
-    if hasattr(args, 'no_run') and not args.no_run:
-        # Create a simple args object with just the name for the loop
-        from argparse import Namespace
-        loop_args = Namespace(name=args.name)
-        cmd_ralph_run(loop_args)
+    should_start_loop = hasattr(args, 'no_run') and not args.no_run
+    if should_start_loop:
+        if foreground:
+            # Foreground mode: block while running (original behavior)
+            from argparse import Namespace
+            loop_args = Namespace(name=args.name)
+            cmd_ralph_run(loop_args)
+        else:
+            # Background mode (default): start monitoring loop as a background process
+            monitor_proc = subprocess.Popen(
+                [sys.executable, os.path.abspath('swarm.py'), 'ralph', 'run', args.name],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+            # Store monitor PID in ralph state for --replace cleanup
+            ralph_state = load_ralph_state(args.name)
+            if ralph_state:
+                ralph_state.monitor_pid = monitor_proc.pid
+                save_ralph_state(ralph_state)
+
+            # Print monitoring commands
+            print(f"\nMonitor:")
+            print(f"  swarm ralph status {args.name}    # loop progress")
+            print(f"  swarm peek {args.name}            # terminal output")
+            print(f"  swarm ralph logs {args.name}      # iteration history")
+            print(f"  swarm kill {args.name}            # stop worker")
 
 
 def cmd_ralph_init(args) -> None:

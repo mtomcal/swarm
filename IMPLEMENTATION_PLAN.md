@@ -127,11 +127,11 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 7: `--foreground` Flag for Ralph Spawn
 
-- [ ] **7.1 Add `--foreground` argument to ralph spawn parser**
+- [x] **7.1 Add `--foreground` argument to ralph spawn parser**
   - Add `--foreground` flag (default: False) to ralph spawn argparse
   - File: `swarm.py` (in `main()` argparse setup, ralph spawn subparser)
 
-- [ ] **7.2 Implement non-blocking default / foreground option in `cmd_ralph_spawn()`**
+- [x] **7.2 Implement non-blocking default / foreground option in `cmd_ralph_spawn()`**
   - When `--foreground` is False (default) and `--no-run` is False:
     - Start monitoring loop as a background subprocess (e.g., `subprocess.Popen` running `swarm ralph run <name>`)
     - Print status + monitoring commands (peek, status, logs, kill)
@@ -142,7 +142,7 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
     - Skip starting the loop entirely (current behavior)
   - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
 
-- [ ] **7.3 Update spawn output to include monitoring commands**
+- [x] **7.3 Update spawn output to include monitoring commands**
   - After spawning with non-blocking default, print:
     ```
     spawned <name> (tmux: <session>:<window>) [ralph mode: iteration 1/100]
@@ -155,14 +155,14 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
     ```
   - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
 
-- [ ] **7.4 Update `--replace` to terminate monitoring loop process**
+- [x] **7.4 Update `--replace` to terminate monitoring loop process**
   - When `--replace` is specified and an existing worker has a running ralph monitoring loop:
     - Find the monitoring loop process (store PID in ralph state or find by process name)
     - Send SIGTERM to terminate it
     - Then proceed with existing cleanup (kill worker, remove worktree, remove ralph state)
   - File: `swarm.py` (~line 5218, `cmd_ralph_spawn()`)
 
-- [ ] **7.5 Add unit tests for `--foreground` flag**
+- [x] **7.5 Add unit tests for `--foreground` flag**
   - Test: default spawn without `--foreground` prints monitoring commands
   - Test: `--foreground` flag accepted by parser
   - Test: `--no-run` still works (no loop started)
