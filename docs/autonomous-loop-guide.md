@@ -2,6 +2,16 @@
 
 How to set up sandboxed, autonomous Claude Code loops for any project using swarm.
 
+## Prerequisites
+
+Before starting, set up network lockdown to restrict container network access:
+
+```bash
+sudo ./setup-sandbox-network.sh    # iptables allowlist (does not survive reboot)
+```
+
+See [Network Lockdown](#network-lockdown) below for details.
+
 ## The Pattern
 
 ```
@@ -39,9 +49,6 @@ vim ORCHESTRATOR.md       # Write your task plan
 # Run sandboxed with ralph
 swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \
     -- ./sandbox.sh --dangerously-skip-permissions
-
-# Or run sandboxed with loop.sh
-SANDBOX=1 ./loop.sh 30
 ```
 
 ## Layer 1: Run Config
@@ -114,7 +121,7 @@ exec docker run --rm \
 
 **Why a script instead of a swarm flag**: Unix philosophy. Swarm manages processes; Docker wraps processes. Keeping them separate means:
 - You can version `sandbox.sh` per project (different toolchains need different images)
-- You can use it with `loop.sh`, `swarm ralph`, or any other orchestrator
+- Swarm's `-- command` accepts any executable — `sandbox.sh` is just an executable that runs Claude inside Docker
 - No swarm code changes needed when Docker flags evolve
 
 ### Dockerfile.sandbox
@@ -294,22 +301,6 @@ A checklist that persists across iterations. Claude reads it to find the next ta
 - [ ] Add unit tests for feature X
 - [ ] Add integration tests for feature Y
 ```
-
-## Choosing: loop.sh vs swarm ralph
-
-Both orchestrate autonomous loops. Choose based on your needs:
-
-| | `loop.sh` | `swarm ralph` |
-|---|---|---|
-| Sandbox support | Built-in (`SANDBOX=1`) | Via `-- ./sandbox.sh` |
-| State tracking | Log files | `~/.swarm/ralph/<name>/state.json` |
-| Monitoring | `tail` log files | `swarm ralph status`, `swarm logs` |
-| Pause/resume | Kill and restart | `swarm ralph pause/resume` |
-| Multiple workers | Run multiple loop.sh | `swarm ralph spawn` per worker |
-| ETA display | No | Yes (`swarm ralph status`) |
-| Best for | Simple single loops | Multi-worker orchestration |
-
-**Both work with `sandbox.sh`**. Ralph just passes it as the command; loop.sh uses `SANDBOX=1` env var internally.
 
 ## OOM Behavior
 

@@ -385,37 +385,25 @@ Claude Code normally prompts for confirmation before running commands, editing f
 
 Always use `--worktree`. Each agent works in its own directory and branch, limiting blast radius.
 
-**2. Claude's Native Sandbox (Recommended)**
+**2. Docker Isolation (Recommended)**
 
-Claude Code has built-in OS-level sandboxing:
-
-```bash
-# Configure sandbox once (interactive)
-claude
-> /sandbox
-
-# Workers inherit sandbox settings
-swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
-```
-
-Uses Seatbelt (macOS) or bubblewrap (Linux) for filesystem/network isolation.
-
-**3. Docker Isolation**
+Use `sandbox.sh` to run workers inside Docker containers with resource limits and network lockdown:
 
 ```bash
-# Docker Desktop Sandboxes (4.50+)
-docker sandbox run --image claude-code-sandbox -- \
-  swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
+# Scaffold sandbox files
+swarm init --with-sandbox
+
+# Build image and set up network
+docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) \
+    -t sandbox-loop -f Dockerfile.sandbox .
+sudo ./setup-sandbox-network.sh    # iptables allowlist (does not survive reboot)
+
+# Run sandboxed worker
+swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \
+    -- ./sandbox.sh --dangerously-skip-permissions
 ```
 
-**4. Restricted Tools**
-
-Disable bash entirely:
-
-```bash
-swarm spawn --name agent --tmux --worktree -- \
-  claude --dangerously-skip-permissions --allowedTools "Edit Read Grep Glob"
-```
+Provides hard memory caps (OOM kills container, not host), network allowlist, and filesystem isolation.
 
 ### Best Practices
 

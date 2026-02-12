@@ -233,7 +233,7 @@ With `--with-sandbox`, the following files are scaffolded from module-level temp
 | Dockerfile.sandbox | `DOCKERFILE_SANDBOX_TEMPLATE` | No | Container image |
 | setup-sandbox-network.sh | `SETUP_SANDBOX_NETWORK_TEMPLATE` | Yes | Network lockdown |
 | teardown-sandbox-network.sh | `TEARDOWN_SANDBOX_NETWORK_TEMPLATE` | Yes | Network teardown |
-| ORCHESTRATOR.md | `ORCHESTRATOR_TEMPLATE` | No | Loop monitoring template |
+| ORCHESTRATOR.md | `ORCHESTRATOR_TEMPLATE` | No | Director runbook template |
 | PROMPT.md | `SANDBOX_PROMPT_TEMPLATE` | No | Worker prompt for each iteration |
 
 Each file is created only if it doesn't already exist (never overwritten). This allows users to customize files without risk of `swarm init` clobbering changes.

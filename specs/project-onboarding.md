@@ -2,11 +2,11 @@
 
 ## Overview
 
-Standard operating procedure for setting up a new project with the beads-ralph-sandbox autonomous development stack. Covers the full setup from zero to a self-healing ralph loop consuming a beads task queue, with optional Docker sandboxing for workers and native sandbox for a director. This spec is project-agnostic — it produces project-specific config files customized to the target project's toolchain.
+Standard operating procedure for setting up a new project with the beads-ralph-sandbox autonomous development stack. Covers the full setup from zero to a self-healing ralph loop consuming a beads task queue, with optional Docker sandboxing for workers. This spec is project-agnostic — it produces project-specific config files customized to the target project's toolchain.
 
 ## Dependencies
 
-- External: `swarm` CLI (ralph, heartbeat), `bd` CLI (beads), `git`, `tmux`, `docker` (optional, for sandboxing), `bubblewrap` (optional, for director sandbox)
+- External: `swarm` CLI (ralph, heartbeat), `bd` CLI (beads), `git`, `tmux`, `docker` (optional, for sandboxing)
 - Internal: `ralph-loop.md`, `heartbeat.md`, `spawn.md`, `worktree-isolation.md`
 
 ## Artifacts Produced
@@ -21,10 +21,8 @@ The onboarding process generates these files in the target project:
 | `sandbox.sh` | No (sandboxing) | Wrapper that runs `claude` inside Docker container |
 | `setup-sandbox-network.sh` | No (sandboxing) | iptables allowlist for container network |
 | `teardown-sandbox-network.sh` | No (sandboxing) | Cleanup for network rules |
-| `ORCHESTRATOR.md` | No (director) | Monitoring runbook and progress log for director |
-| `DIRECTOR_PROMPT.md` | No (director) | Ralph prompt for the autonomous director |
+| `ORCHESTRATOR.md` | No (director) | Director runbook and progress log |
 | `start-worker.sh` | Yes | Launch script for ralph worker(s) |
-| `start-director.sh` | No (director) | Launch script for autonomous director |
 
 ## Behavior
 
@@ -320,86 +318,7 @@ swarm ralph spawn --name "$NAME" \
     -- ./sandbox.sh --dangerously-skip-permissions
 ```
 
-#### start-director.sh (Optional)
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# If already running, attach
-if swarm ralph list 2>/dev/null | grep -q "director.*running"; then
-    echo "Director already running, attaching..."
-    swarm attach director
-    exit 0
-fi
-
-swarm ralph spawn --name director \
-    --prompt-file ./DIRECTOR_PROMPT.md \
-    --max-iterations 200 \
-    --inactivity-timeout 14400 \
-    --heartbeat 30m \
-    --heartbeat-expire 48h \
-    -- claude --dangerously-skip-permissions
-```
-
-### Phase 7: Generate Director Files (Optional)
-
-**Description**: Create the autonomous director's prompt and orchestrator runbook.
-
-#### DIRECTOR_PROMPT.md
-
-```markdown
-Read ORCHESTRATOR.md. You are the director.
-
-FIRST: run `swarm ralph list` and `swarm ls` to see what's already running.
-- If workers exist and are running, monitor them. Do NOT spawn duplicates.
-- If no workers exist, spawn them per ORCHESTRATOR.md instructions.
-- If a worker is stuck (same task for 2+ iterations in `swarm ralph logs`), intervene.
-- If `bd ready` returns nothing and no tasks are in_progress, all work is done — output /done.
-
-Check progress: `bd stats`, `bd list --status=in_progress`, `git log --oneline -5`.
-Before exiting, update ORCHESTRATOR.md with a progress note and commit.
-```
-
-#### ORCHESTRATOR.md
-
-```markdown
-# [Project Name] — Director Runbook
-
-## Workers
-
-| Name | Type | Prompt | Notes |
-|------|------|--------|-------|
-| worker | ralph + beads queue | PROMPT.md | Main implementation worker |
-
-### Spawn Command
-
-\`\`\`bash
-./start-worker.sh
-\`\`\`
-
-### Monitor
-
-\`\`\`bash
-swarm ralph status worker
-swarm ralph logs worker
-bd stats
-bd list --status=in_progress
-git log --oneline -10
-\`\`\`
-
-### Intervene When Stuck
-
-- Worker loops on same task 2+ iterations → read the task (`bd show <id>`), update notes with hints (`bd update <id> --notes "Try approach X"`)
-- Worker OOM (exit 137) → bump memory: `MEMORY_LIMIT=12g`
-- Worker rate limited → heartbeat should recover; if not, `swarm ralph pause worker` and wait
-
-## Progress Log
-
-<!-- Director appends progress notes here each iteration -->
-```
-
-### Phase 8: Load Initial Tasks
+### Phase 7: Load Initial Tasks
 
 **Description**: Create beads issues for the work to be done. This is project-specific and done by the human or a planning agent.
 
@@ -421,7 +340,7 @@ bd create --title "Add weapon pickup collision detection" \
 
 Tasks with no phase labels are automatically expanded by `next-task.py` into the 3-phase pipeline (implement → code-review → test-review) when they reach the front of the queue.
 
-### Phase 9: Verify Setup
+### Phase 8: Verify Setup
 
 **Description**: Dry-run verification before launching the full autonomous loop.
 
@@ -469,17 +388,6 @@ Check: `bd list --status=closed` shows the task was closed. `git log --oneline -
   - `start-worker.sh` uses `./sandbox.sh` instead of bare `claude`
   - Docker image builds successfully
   - Network rules can be applied
-
-### Scenario: Full autonomous stack (director + workers)
-
-- **Given**: A project set up per the sandboxed scenario
-- **When**: Director files are also generated
-- **Then**:
-  - `DIRECTOR_PROMPT.md` and `ORCHESTRATOR.md` are generated
-  - `start-director.sh` launches the director as a ralph loop
-  - Director checks for existing workers before spawning
-  - Director monitors worker progress and intervenes if stuck
-  - Both director and workers have heartbeat for rate limit recovery
 
 ### Scenario: Task expansion cascade
 

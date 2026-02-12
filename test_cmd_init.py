@@ -640,9 +640,10 @@ class TestCmdInitWithSandbox(unittest.TestCase):
         content = Path('ORCHESTRATOR.md').read_text()
         self.assertIn('swarm ralph', content)
         self.assertIn('sandbox.sh', content)
-        # Orchestrator Responsibilities section
-        self.assertIn('Orchestrator Responsibilities', content)
-        self.assertIn('Monitor progress every ~5 minutes', content)
+        # Prerequisites section
+        self.assertIn('Prerequisites', content)
+        self.assertIn('setup-sandbox-network.sh', content)
+        self.assertIn('gh auth login', content)
         # Operational Learnings section
         self.assertIn('Operational Learnings', content)
         self.assertIn('Docker Monitoring', content)

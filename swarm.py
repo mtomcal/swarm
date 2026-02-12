@@ -320,7 +320,29 @@ fi
 """.lstrip()
 
 ORCHESTRATOR_TEMPLATE = """\
-# Orchestrator
+# Director Runbook
+
+The director is you (a human using an interactive Claude session). Workers run autonomously inside Docker containers via `sandbox.sh`.
+
+## Prerequisites
+
+```bash
+# 1. Network lockdown (does not survive reboot)
+sudo ./setup-sandbox-network.sh
+
+# 2. Build Docker image
+docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) \\
+    -t sandbox-loop -f Dockerfile.sandbox .
+
+# 3. Git auth (token passed to container, no SSH keys)
+gh auth login
+```
+
+Verify lockdown:
+```bash
+docker run --rm --network=sandbox-net sandbox-loop curl -v --max-time 5 https://example.com
+# Should fail with "Connection refused"
+```
 
 ## Quick Status
 ```bash
@@ -330,27 +352,13 @@ grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Tasks done
 grep -cE '^\\s*-\\s*\\[ \\]' IMPLEMENTATION_PLAN.md   # Tasks remaining
 ```
 
-## Orchestrator Responsibilities
-
-As the orchestrator (human or Claude), you should:
-
-1. **Start the loop** with the spawn command below
-2. **Monitor progress every ~5 minutes** — check task counts, commits, and container memory
-3. **Intervene on stuck iterations** — if the same task fails across multiple iterations, investigate logs and update PROMPT.md or IMPLEMENTATION_PLAN.md to unblock the worker
-4. **Adjust resources** if OOM or timeout errors are frequent
-5. **Verify completion** — when all tasks are `[x]`, confirm tests pass and no stale references remain
-6. **Report to the user proactively** — don't wait to be asked. Summarize what changed, what's stuck, and what you're doing about it
-
-## Start
+## Start Worker
 ```bash
 swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \\
     -- ./sandbox.sh --dangerously-skip-permissions
 ```
 
 ## Monitor
-
-Run these checks every ~5 minutes. Use `sleep 300` between checks — don't rely on background scripts.
-
 ```bash
 # Task progress
 grep -cE '^\\s*-\\s*\\[x\\]' IMPLEMENTATION_PLAN.md  # Done
@@ -363,11 +371,9 @@ git log --oneline -5
 docker ps --filter "ancestor=sandbox-loop" --format '{{.Names}}'
 docker stats <exact-container-name> --no-stream
 
-# Loop process alive?
-pgrep -f "loop.sh" || echo "loop.sh not running!"
-
-# Latest iteration log
-ls -t .loop-logs/iteration-*.log 2>/dev/null | head -1 | xargs tail -3
+# Ralph iteration progress
+swarm ralph status dev
+swarm ralph logs dev
 ```
 
 ## Stop / Restart
@@ -546,8 +552,8 @@ Tips:
 
 Security Note:
   The --dangerously-skip-permissions flag is required for autonomous operation.
-  Consider using Claude's native sandbox (/sandbox) or Docker Sandboxes for
-  isolation. See README.md for sandboxing options.
+  Consider using Docker isolation (sandbox.sh) for unattended workers.
+  See README.md for sandboxing options.
 
 See Also:
   swarm ls --help        List workers
@@ -1430,8 +1436,8 @@ Tips:
 
 Security Note:
   The --dangerously-skip-permissions flag is required for autonomous operation.
-  For overnight/unattended work, consider using Claude's native sandbox (/sandbox)
-  or Docker Sandboxes for isolation. See README.md for sandboxing options.
+  For overnight/unattended work, consider using Docker isolation (sandbox.sh)
+  for unattended workers. See README.md for sandboxing options.
 
 See Also:
   swarm ralph status --help    Check iteration progress and ETA

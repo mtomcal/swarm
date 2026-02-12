@@ -9,31 +9,17 @@ Swarm workers require `--dangerously-skip-permissions` to operate autonomously. 
 swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
 ```
 
-### Sandboxing Mitigations
+### Sandboxing (Docker)
 
-For production or unattended use, enable sandboxing to limit what agents can access:
+For unattended workers, use Docker isolation via `sandbox.sh`:
 
-**Option 1: Claude's Native Sandbox** (recommended)
 ```bash
-# Configure sandbox before spawning (run interactively once)
-claude
-> /sandbox   # Enable auto-allow mode with filesystem/network isolation
-
-# Workers inherit sandbox settings
-swarm spawn --name agent --tmux --worktree -- claude --dangerously-skip-permissions
-```
-
-**Option 2: Docker Sandboxes**
-```bash
-# Run swarm inside Docker Desktop Sandboxes (4.50+)
-docker sandbox run --image claude-code-sandbox -- swarm spawn ...
-```
-
-**Option 3: Restricted Tools**
-```bash
-# Limit to file operations only (no bash)
-swarm spawn --name agent --tmux --worktree -- \
-  claude --dangerously-skip-permissions --allowedTools "Edit Read Grep Glob"
+swarm init --with-sandbox                     # Scaffold sandbox files
+docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) \
+  -t sandbox-loop -f Dockerfile.sandbox .     # Build image
+sudo ./setup-sandbox-network.sh               # Network lockdown (does not survive reboot)
+swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \
+  -- ./sandbox.sh --dangerously-skip-permissions
 ```
 
 See [README.md Security Considerations](README.md#security-considerations) for details.

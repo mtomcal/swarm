@@ -195,8 +195,7 @@ git log --oneline -10
 
 ## Sandboxing
 
-This pattern works with all sandboxing approaches described in the [Autonomous Loop Guide](autonomous-loop-guide.md) and [Sandboxed Director Guide](sandboxed-director-guide.md). The only additional requirement is that `bd` (beads CLI) must be available inside the sandbox:
+This pattern works with Docker sandboxing described in the [Autonomous Loop Guide](autonomous-loop-guide.md) and [Director Guide](sandboxed-director-guide.md). The only additional requirement is that `bd` (beads CLI) must be available inside the sandbox:
 
 - **Docker sandbox**: Add `bd` to `Dockerfile.sandbox`
-- **Native sandbox**: `bd` is already available (runs on host)
 - **No sandbox**: Works as-is
