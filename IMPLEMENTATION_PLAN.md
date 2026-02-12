@@ -83,7 +83,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
 
 ### Phase 3: Transactional Rollback in `cmd_spawn()`
 
-- [ ] **3.1 Wrap spawn steps in try/except with rollback**
+- [x] **3.1 Wrap spawn steps in try/except with rollback**
   - Refactor `cmd_spawn()` (~line 4105) to track created resources:
     - `created_worktree: Optional[Path] = None` — set after worktree creation
     - `created_tmux: Optional[TmuxInfo] = None` — set after tmux window creation
@@ -92,7 +92,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
   - On failure, call `_rollback_spawn(created_worktree, created_tmux, spawned_pid)`
   - File: `swarm.py` (`cmd_spawn()`)
 
-- [ ] **3.2 Implement `_rollback_spawn()` helper**
+- [x] **3.2 Implement `_rollback_spawn()` helper**
   - Reverse-order cleanup:
     1. Kill tmux window if created (via `tmux kill-window`)
     2. Kill process if spawned (via `os.kill(pid, signal.SIGTERM)`)
@@ -101,7 +101,7 @@ A full spec-vs-implementation audit revealed 3 missing features and 1 incomplete
   - Each cleanup step is best-effort (catch exceptions, warn on failure)
   - File: `swarm.py` (new helper near `cmd_spawn()`)
 
-- [ ] **3.3 Add unit tests for transactional rollback**
+- [x] **3.3 Add unit tests for transactional rollback**
   - Test: tmux failure after worktree → worktree removed, error printed
   - Test: process failure after worktree → worktree removed, error printed
   - Test: state update failure → worker killed + worktree removed

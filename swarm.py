@@ -4168,9 +4168,69 @@ def main() -> None:
         cmd_heartbeat(args)
 
 
+def _rollback_spawn(
+    worktree_path: Optional[Path],
+    tmux_info: Optional[TmuxInfo],
+    pid: Optional[int],
+    worker_name: Optional[str],
+    state: Optional["State"],
+) -> None:
+    """Rollback resources created during spawn on failure.
+
+    Cleans up resources in reverse order of creation to ensure no orphaned state.
+    Rollback failures are logged as warnings but don't override the original error.
+
+    Args:
+        worktree_path: Path to worktree if created, None otherwise
+        tmux_info: TmuxInfo if tmux window created, None otherwise
+        pid: Process ID if background process spawned, None otherwise
+        worker_name: Worker name if added to state, None otherwise
+        state: State instance for removing worker, None if not added
+    """
+    # Remove worker from state (last created)
+    if worker_name and state:
+        try:
+            state.remove_worker(worker_name)
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not remove worker state: {e}", file=sys.stderr)
+
+    # Kill tmux window
+    if tmux_info:
+        try:
+            cmd_prefix = tmux_cmd_prefix(tmux_info.socket)
+            subprocess.run(
+                cmd_prefix + ["kill-window", "-t", f"{tmux_info.session}:{tmux_info.window}"],
+                capture_output=True
+            )
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not kill tmux window: {e}", file=sys.stderr)
+
+    # Kill background process
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not kill process {pid}: {e}", file=sys.stderr)
+
+    # Remove worktree (first created)
+    if worktree_path and worktree_path.exists():
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree_path)],
+                capture_output=True,
+                text=True,
+            )
+        except Exception as e:
+            print(f"swarm: warning: rollback failed: could not remove worktree: {e}", file=sys.stderr)
+
+
 # Command stubs - to be implemented in subsequent tasks
 def cmd_spawn(args) -> None:
-    """Spawn a new worker."""
+    """Spawn a new worker.
+
+    Uses transactional semantics: if any step fails after resources are created,
+    all previously created resources are cleaned up via _rollback_spawn().
+    """
     # Parse command from args.cmd (strip leading '--' if present)
     cmd = args.cmd
     if cmd and cmd[0] == "--":
@@ -4187,54 +4247,6 @@ def cmd_spawn(args) -> None:
         print(f"swarm: error: worker '{args.name}' already exists", file=sys.stderr)
         sys.exit(1)
 
-    # Determine working directory
-    cwd = Path.cwd()
-    worktree_info = None
-
-    if args.worktree:
-        # Fix core.bare misconfiguration before checking git root
-        _check_and_fix_core_bare()
-
-        # Get git root
-        try:
-            git_root = get_git_root()
-        except subprocess.CalledProcessError:
-            print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
-            sys.exit(1)
-
-        # Compute worktree path relative to git root
-        if args.worktree_dir is None:
-            # Default: <repo-name>-worktrees as sibling to repo
-            worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
-        else:
-            worktree_dir = Path(args.worktree_dir)
-            if not worktree_dir.is_absolute():
-                worktree_dir = git_root.parent / worktree_dir
-
-        worktree_path = worktree_dir / args.name
-
-        # Determine branch name
-        branch = args.branch if args.branch else args.name
-
-        # Create worktree
-        try:
-            create_worktree(worktree_path, branch)
-        except subprocess.CalledProcessError as e:
-            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        # Set cwd to worktree
-        cwd = worktree_path
-
-        # Store worktree info
-        worktree_info = WorktreeInfo(
-            path=str(worktree_path),
-            branch=branch,
-            base_repo=str(git_root)
-        )
-    elif args.cwd:
-        cwd = Path(args.cwd)
-
     # Parse environment variables from KEY=VAL format
     env_dict = {}
     for env_str in args.env:
@@ -4244,46 +4256,116 @@ def cmd_spawn(args) -> None:
         key, val = env_str.split("=", 1)
         env_dict[key] = val
 
-    # Spawn the worker
-    tmux_info = None
-    pid = None
+    # Track resources for rollback
+    worktree_path: Optional[Path] = None
+    worktree_info: Optional[WorktreeInfo] = None
+    tmux_info: Optional[TmuxInfo] = None
+    pid: Optional[int] = None
+    worker_added = False
 
-    if args.tmux:
-        # Spawn in tmux
-        # Determine session name (use hash-based default if not specified)
-        session = args.session if args.session else get_default_session_name()
-        socket = args.tmux_socket
-        try:
+    # Determine working directory
+    cwd = Path.cwd()
+
+    try:
+        # Step 1: Create worktree (if requested)
+        if args.worktree:
+            # Fix core.bare misconfiguration before checking git root
+            _check_and_fix_core_bare()
+
+            # Get git root
+            try:
+                git_root = get_git_root()
+            except subprocess.CalledProcessError:
+                print("swarm: error: not in a git repository (required for --worktree)", file=sys.stderr)
+                sys.exit(1)
+
+            # Compute worktree path relative to git root
+            if args.worktree_dir is None:
+                # Default: <repo-name>-worktrees as sibling to repo
+                worktree_dir = git_root.parent / f"{git_root.name}-worktrees"
+            else:
+                worktree_dir = Path(args.worktree_dir)
+                if not worktree_dir.is_absolute():
+                    worktree_dir = git_root.parent / worktree_dir
+
+            worktree_path = worktree_dir / args.name
+
+            # Determine branch name
+            branch = args.branch if args.branch else args.name
+
+            # Create worktree
+            create_worktree(worktree_path, branch)
+
+            # Set cwd to worktree
+            cwd = worktree_path
+
+            # Store worktree info
+            worktree_info = WorktreeInfo(
+                path=str(worktree_path),
+                branch=branch,
+                base_repo=str(git_root)
+            )
+        elif args.cwd:
+            cwd = Path(args.cwd)
+
+        # Step 2: Spawn the worker (tmux or process)
+        if args.tmux:
+            # Spawn in tmux
+            session = args.session if args.session else get_default_session_name()
+            socket = args.tmux_socket
             create_tmux_window(session, args.name, cwd, cmd, socket, env=env_dict)
             tmux_info = TmuxInfo(session=session, window=args.name, socket=socket)
-        except subprocess.CalledProcessError as e:
-            print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        # Spawn as background process
-        log_prefix = LOGS_DIR / args.name
-        try:
+        else:
+            # Spawn as background process
+            log_prefix = LOGS_DIR / args.name
             pid = spawn_process(cmd, cwd, env_dict, log_prefix)
-        except Exception as e:
+
+        # Step 3: Create Worker object and add to state
+        worker = Worker(
+            name=args.name,
+            status="running",
+            cmd=cmd,
+            started=datetime.now().isoformat(),
+            cwd=str(cwd),
+            env=env_dict,
+            tags=args.tags,
+            tmux=tmux_info,
+            worktree=worktree_info,
+            pid=pid,
+        )
+
+        state.add_worker(worker)
+        worker_added = True
+
+    except subprocess.CalledProcessError as e:
+        # Handle worktree or tmux creation failures
+        print("swarm: warning: spawn failed, cleaning up partial state", file=sys.stderr)
+        _rollback_spawn(
+            worktree_path if worktree_info else None,
+            tmux_info,
+            pid,
+            args.name if worker_added else None,
+            state if worker_added else None,
+        )
+        if "worktree" in str(e).lower() or (worktree_path and not worktree_info):
+            print(f"swarm: error: failed to create worktree: {e}", file=sys.stderr)
+        elif args.tmux:
+            print(f"swarm: error: failed to create tmux window: {e}", file=sys.stderr)
+        else:
             print(f"swarm: error: failed to spawn process: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    # Create Worker object
-    worker = Worker(
-        name=args.name,
-        status="running",
-        cmd=cmd,
-        started=datetime.now().isoformat(),
-        cwd=str(cwd),
-        env=env_dict,
-        tags=args.tags,
-        tmux=tmux_info,
-        worktree=worktree_info,
-        pid=pid,
-    )
-
-    # Add to state
-    state.add_worker(worker)
+        sys.exit(1)
+    except Exception as e:
+        # Handle any other unexpected errors
+        print("swarm: warning: spawn failed, cleaning up partial state", file=sys.stderr)
+        _rollback_spawn(
+            worktree_path if worktree_info else None,
+            tmux_info,
+            pid,
+            args.name if worker_added else None,
+            state if worker_added else None,
+        )
+        print(f"swarm: error: spawn failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Wait for agent to be ready if requested
     if args.ready_wait and tmux_info:

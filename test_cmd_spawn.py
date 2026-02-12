@@ -927,5 +927,252 @@ class TestEnvPropagation(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestTransactionalRollback(unittest.TestCase):
+    """Test transactional rollback in cmd_spawn()."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.swarm_dir = Path(self.temp_dir) / ".swarm"
+        self.logs_dir = self.swarm_dir / "logs"
+        self.state_file = self.swarm_dir / "state.json"
+        self.state_lock_file = self.swarm_dir / "state.lock"
+
+        self.patcher_swarm_dir = patch.object(swarm, 'SWARM_DIR', self.swarm_dir)
+        self.patcher_state_file = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.patcher_logs_dir = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+        self.patcher_state_lock_file = patch.object(swarm, 'STATE_LOCK_FILE', self.state_lock_file)
+        self.patcher_swarm_dir.start()
+        self.patcher_state_file.start()
+        self.patcher_logs_dir.start()
+        self.patcher_state_lock_file.start()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        self.patcher_swarm_dir.stop()
+        self.patcher_state_file.stop()
+        self.patcher_logs_dir.stop()
+        self.patcher_state_lock_file.stop()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_args(self, **overrides):
+        """Create a default args Namespace for spawn tests."""
+        defaults = dict(
+            name="test-worker",
+            cmd=["--", "echo", "hello"],
+            tmux=True,
+            session="swarm",
+            tmux_socket=None,
+            ready_wait=False,
+            worktree=False,
+            worktree_dir=None,
+            branch=None,
+            cwd=None,
+            env=[],
+            tags=[],
+            ralph=False,
+            prompt_file=None,
+            max_iterations=None,
+        )
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_tmux_failure_after_worktree_rolls_back_worktree(self):
+        """Test that tmux failure after worktree creation removes the worktree."""
+        import subprocess
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+        worktree_path = mock_git_root.parent / "repo-worktrees" / "test-worker"
+
+        args = self._make_args(worktree=True)
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm._check_and_fix_core_bare'):
+                with patch('swarm.create_worktree') as mock_create_wt:
+                    with patch('swarm.create_tmux_window', side_effect=subprocess.CalledProcessError(1, "tmux")):
+                        with patch('subprocess.run') as mock_subprocess_run:
+                            with patch('sys.stderr') as mock_stderr:
+                                with self.assertRaises(SystemExit) as cm:
+                                    swarm.cmd_spawn(args)
+                                self.assertEqual(cm.exception.code, 1)
+
+                                # Verify worktree was created
+                                mock_create_wt.assert_called_once()
+
+                                # Verify no worker in state
+                                state = swarm.State()
+                                self.assertEqual(len(state.workers), 0)
+
+    def test_process_failure_after_worktree_rolls_back_worktree(self):
+        """Test that process spawn failure after worktree creation removes the worktree."""
+        mock_git_root = Path(self.temp_dir) / "repo"
+
+        args = self._make_args(tmux=False, worktree=True)
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm._check_and_fix_core_bare'):
+                with patch('swarm.create_worktree'):
+                    with patch('swarm.spawn_process', side_effect=Exception("spawn failed")):
+                        with patch('subprocess.run') as mock_subprocess_run:
+                            with patch('sys.stderr'):
+                                with self.assertRaises(SystemExit) as cm:
+                                    swarm.cmd_spawn(args)
+                                self.assertEqual(cm.exception.code, 1)
+
+                                # Verify no worker in state
+                                state = swarm.State()
+                                self.assertEqual(len(state.workers), 0)
+
+    def test_state_update_failure_rolls_back_tmux_and_worktree(self):
+        """Test that state update failure kills tmux window and removes worktree."""
+        import subprocess
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+
+        args = self._make_args(worktree=True)
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm._check_and_fix_core_bare'):
+                with patch('swarm.create_worktree'):
+                    with patch('swarm.create_tmux_window'):
+                        with patch.object(swarm.State, 'add_worker', side_effect=Exception("state write failed")):
+                            with patch('subprocess.run') as mock_subprocess_run:
+                                with patch('sys.stderr'):
+                                    with self.assertRaises(SystemExit) as cm:
+                                        swarm.cmd_spawn(args)
+                                    self.assertEqual(cm.exception.code, 1)
+
+    def test_rollback_prints_warning_message(self):
+        """Test that rollback prints the expected warning before the error."""
+        import subprocess
+        from io import StringIO
+
+        args = self._make_args()
+
+        stderr_output = StringIO()
+
+        with patch('swarm.create_tmux_window', side_effect=subprocess.CalledProcessError(1, "tmux")):
+            with patch('builtins.print', side_effect=lambda *a, **kw:
+                       stderr_output.write(a[0] + '\n') if kw.get('file') else None):
+                with self.assertRaises(SystemExit) as cm:
+                    swarm.cmd_spawn(args)
+                self.assertEqual(cm.exception.code, 1)
+
+                output = stderr_output.getvalue()
+                self.assertIn("swarm: warning: spawn failed, cleaning up partial state", output)
+                self.assertIn("swarm: error: failed to create tmux window", output)
+
+    def test_successful_spawn_does_not_trigger_rollback(self):
+        """Test that successful spawn does not call rollback."""
+        args = self._make_args()
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm._rollback_spawn') as mock_rollback:
+                with patch('builtins.print'):
+                    swarm.cmd_spawn(args)
+                    mock_rollback.assert_not_called()
+
+        # Verify worker was added to state
+        state = swarm.State()
+        self.assertEqual(len(state.workers), 1)
+        self.assertEqual(state.workers[0].name, "test-worker")
+
+    def test_rollback_failure_still_reports_original_error(self):
+        """Test that if rollback itself fails, the original error is still reported."""
+        import subprocess
+        from io import StringIO
+
+        mock_git_root = Path(self.temp_dir) / "repo"
+        args = self._make_args(worktree=True)
+
+        stderr_output = StringIO()
+
+        with patch('swarm.get_git_root', return_value=mock_git_root):
+            with patch('swarm._check_and_fix_core_bare'):
+                with patch('swarm.create_worktree'):
+                    with patch('swarm.create_tmux_window', side_effect=subprocess.CalledProcessError(1, "tmux")):
+                        # Make rollback worktree removal also fail
+                        with patch('subprocess.run', side_effect=Exception("rollback also failed")):
+                            with patch('builtins.print', side_effect=lambda *a, **kw:
+                                       stderr_output.write(a[0] + '\n') if kw.get('file') else None):
+                                with self.assertRaises(SystemExit) as cm:
+                                    swarm.cmd_spawn(args)
+                                self.assertEqual(cm.exception.code, 1)
+
+                                output = stderr_output.getvalue()
+                                # Original error should still be reported
+                                self.assertIn("swarm: error: failed to create tmux window", output)
+
+
+class TestRollbackSpawnHelper(unittest.TestCase):
+    """Test _rollback_spawn() helper function directly."""
+
+    def test_rollback_removes_worker_from_state(self):
+        """Test that rollback removes worker from state."""
+        mock_state = Mock()
+        swarm._rollback_spawn(None, None, None, "test-worker", mock_state)
+        mock_state.remove_worker.assert_called_once_with("test-worker")
+
+    def test_rollback_kills_tmux_window(self):
+        """Test that rollback kills tmux window."""
+        tmux_info = swarm.TmuxInfo(session="swarm", window="test", socket=None)
+
+        with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+            with patch('subprocess.run') as mock_run:
+                swarm._rollback_spawn(None, tmux_info, None, None, None)
+                mock_run.assert_called_once()
+                call_args = mock_run.call_args[0][0]
+                self.assertIn("kill-window", call_args)
+                self.assertIn("swarm:test", call_args)
+
+    def test_rollback_kills_background_process(self):
+        """Test that rollback kills background process."""
+        with patch('os.kill') as mock_kill:
+            swarm._rollback_spawn(None, None, 12345, None, None)
+            mock_kill.assert_called_once_with(12345, swarm.signal.SIGTERM)
+
+    def test_rollback_removes_worktree(self):
+        """Test that rollback removes worktree if it exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wt_path = Path(tmpdir) / "worktree"
+            wt_path.mkdir()
+
+            with patch('subprocess.run') as mock_run:
+                swarm._rollback_spawn(wt_path, None, None, None, None)
+                mock_run.assert_called_once()
+                call_args = mock_run.call_args[0][0]
+                self.assertEqual(call_args, ["git", "worktree", "remove", "--force", str(wt_path)])
+
+    def test_rollback_skips_nonexistent_worktree(self):
+        """Test that rollback skips worktree removal if path doesn't exist."""
+        wt_path = Path("/nonexistent/worktree/path")
+
+        with patch('subprocess.run') as mock_run:
+            swarm._rollback_spawn(wt_path, None, None, None, None)
+            mock_run.assert_not_called()
+
+    def test_rollback_handles_all_failures_gracefully(self):
+        """Test that rollback logs warnings but doesn't raise on cleanup failures."""
+        tmux_info = swarm.TmuxInfo(session="swarm", window="test", socket=None)
+        mock_state = Mock()
+        mock_state.remove_worker.side_effect = Exception("state error")
+
+        with patch('swarm.tmux_cmd_prefix', return_value=["tmux"]):
+            with patch('subprocess.run', side_effect=Exception("tmux error")):
+                with patch('os.kill', side_effect=Exception("kill error")):
+                    with patch('sys.stderr'):
+                        # Should not raise
+                        swarm._rollback_spawn(None, tmux_info, 12345, "test", mock_state)
+
+    def test_rollback_with_no_resources_is_noop(self):
+        """Test that rollback with all None args is a no-op."""
+        with patch('subprocess.run') as mock_run:
+            with patch('os.kill') as mock_kill:
+                swarm._rollback_spawn(None, None, None, None, None)
+                mock_run.assert_not_called()
+                mock_kill.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
