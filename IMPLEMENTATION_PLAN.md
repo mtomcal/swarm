@@ -215,3 +215,62 @@ All spec changes are already committed in `58f9955`:
 - **Phase 8 (verify)**: Trivial — run tests, 15 min
 
 **Total estimated: ~6 hours of worker time, ~8-12 iterations**
+
+---
+
+## Execution Results
+
+**Status**: COMPLETE
+**Runner**: `loop.sh` with `SANDBOX=1` (Docker-sandboxed, `claude -p` pipe mode)
+**Completed**: 2026-02-12
+
+### Timeline
+
+| Event | Time (UTC) |
+|-------|------------|
+| Epic kicked off | 14:29 |
+| First attempt (ralph spawn, 180s timeout) | 14:29–14:51 — **failed** (7 iterations lost to inactivity timeout) |
+| Second attempt (ralph spawn, 600s timeout) | 14:51 — killed, switched to loop.sh |
+| Third attempt (loop.sh SANDBOX=1, tmux) | 14:53 — success |
+| Phase 1 complete (login/OAuth patterns) | 14:55 |
+| Phase 2 complete (corrupt state recovery) | 14:59 |
+| Phase 3 complete (screen change tracking) | 15:11 |
+| Phase 4 complete (stuck pattern detection) | 15:19 |
+| Phase 5 complete (stuck status output) | 15:27 |
+| Phase 6 complete (pre-flight validation) | 15:33 |
+| Phase 7 complete (--foreground flag) | 15:47 |
+| Phase 8 complete (verification) | 15:55 |
+| Done signal emitted | 15:57 |
+
+### Stats
+
+| Metric | Value |
+|--------|-------|
+| Total wall time (successful run) | ~65 min (14:53–15:58) |
+| Productive iterations | 8 (phases 1–8, one commit each) |
+| Post-done iterations | 12 (iterations 9–20, worker re-confirmed done) |
+| Total iterations used | 20/20 |
+| Commits | 8 (7 feature + 1 verification) |
+| Lines changed | +5,623 / -4,032 across 3 files |
+| Files modified | `swarm.py` (+208), `test_cmd_ralph.py` (+5,367), `test_ready_patterns.py` (+48) |
+| Test coverage | 95% (pre-commit hook) |
+
+### Commits
+
+| Commit | Phase | Description |
+|--------|-------|-------------|
+| `2cdc152` | 1 | feat: add login/OAuth not-ready patterns to wait_for_agent_ready() |
+| `1e03f07` | 2 | feat: add corrupt ralph state recovery in load_ralph_state() |
+| `31109b0` | 3 | feat: add screen change tracking to ralph status and detect_inactivity() |
+| `949ad06` | 4 | feat: add stuck pattern detection to detect_inactivity() |
+| `561c9d5` | 5 | feat: add stuck detection display to ralph status output |
+| `c65cede` | 6 | feat: add pre-flight validation to ralph monitoring loop |
+| `603db0e` | 7 | feat: add --foreground flag and background-default spawn to ralph |
+| `05135f3` | 8 | chore: mark Phase 8 verification tasks complete in implementation plan |
+
+### Lessons Learned
+
+- **`swarm ralph spawn` with 180s inactivity timeout is too short for Docker-sandboxed workers** — Docker startup + Claude reasoning + pre-commit test suite exceeds it. Use `--inactivity-timeout 600` or higher.
+- **`loop.sh` with `SANDBOX=1` is more reliable than `swarm ralph spawn` for Docker sandboxes** — no inactivity timeout to tune, `claude -p` pipe mode waits for completion naturally.
+- **`loop.sh` needs a tmux session** — `docker run -it` requires a TTY, so `nohup` backgrounding fails. Use `tmux new-session -d` instead.
+- **Done pattern mismatch**: `loop.sh` checks for `/done` but PROMPT.md uses `SWARM_DONE_X9K`. Worker completed but loop didn't stop — burned 12 extra iterations confirming done. Align patterns next time.
