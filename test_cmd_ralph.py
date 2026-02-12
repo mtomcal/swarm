@@ -990,7 +990,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
                 with patch.object(swarm, 'create_tmux_window'):
                     with patch.object(swarm, 'save_ralph_state'):
                         with patch.object(swarm, 'log_ralph_iteration'):
-                            with patch.object(swarm, 'send_prompt_to_worker'):
+                            with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
                                 with patch('builtins.print') as mock_print:
                                     swarm.cmd_ralph_spawn(args)
 
@@ -1051,7 +1051,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
                     with patch.object(swarm, 'create_tmux_window'):
                         with patch.object(swarm, 'save_ralph_state'):
                             with patch.object(swarm, 'log_ralph_iteration'):
-                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
                                     with patch('builtins.print'):
                                         swarm.cmd_ralph_spawn(args)
 
@@ -1109,7 +1109,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
                     with patch.object(swarm, 'create_tmux_window'):
                         with patch.object(swarm, 'save_ralph_state'):
                             with patch.object(swarm, 'log_ralph_iteration'):
-                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
                                     with patch('builtins.print'):
                                         swarm.cmd_ralph_spawn(args)
 
@@ -1161,7 +1161,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
                     with patch.object(swarm, 'create_tmux_window'):
                         with patch.object(swarm, 'save_ralph_state'):
                             with patch.object(swarm, 'log_ralph_iteration'):
-                                with patch.object(swarm, 'send_prompt_to_worker'):
+                                with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
                                     with patch('builtins.print') as mock_print:
                                         swarm.cmd_ralph_spawn(args)
 
@@ -1217,7 +1217,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
                 with patch.object(swarm, 'create_tmux_window'):
                     with patch.object(swarm, 'save_ralph_state'):
                         with patch.object(swarm, 'log_ralph_iteration'):
-                            with patch.object(swarm, 'send_prompt_to_worker'):
+                            with patch.object(swarm, 'send_prompt_to_worker', return_value=""):
                                 with patch('builtins.print') as mock_print:
                                     # Should not raise any errors
                                     swarm.cmd_ralph_spawn(args)
@@ -1284,7 +1284,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1320,7 +1320,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1356,7 +1356,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1391,7 +1391,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window') as mock_create_tmux:
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1425,7 +1425,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add_worker:
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1492,7 +1492,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1560,7 +1560,7 @@ class TestRalphSpawnValidation(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window') as mock_tmux:
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1682,7 +1682,7 @@ class TestRalphSpawnWorktree(unittest.TestCase):
                     with patch('swarm.create_worktree') as mock_wt:
                         with patch('swarm.create_tmux_window'):
                             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                                with patch('swarm.send_prompt_to_worker'):
+                                with patch('swarm.send_prompt_to_worker', return_value=""):
                                     with patch('builtins.print'):
                                         swarm.cmd_ralph_spawn(args)
 
@@ -1725,7 +1725,7 @@ class TestRalphSpawnWorktree(unittest.TestCase):
                     with patch('swarm.create_worktree') as mock_wt:
                         with patch('swarm.create_tmux_window'):
                             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                                with patch('swarm.send_prompt_to_worker'):
+                                with patch('swarm.send_prompt_to_worker', return_value=""):
                                     with patch('builtins.print'):
                                         swarm.cmd_ralph_spawn(args)
 
@@ -1760,7 +1760,7 @@ class TestRalphSpawnWorktree(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('swarm.wait_for_agent_ready', return_value=True) as mock_wait:
                                 with patch('builtins.print'):
                                     swarm.cmd_ralph_spawn(args)
@@ -1794,7 +1794,7 @@ class TestRalphSpawnWorktree(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('swarm.wait_for_agent_ready', return_value=False):
                                 with patch('builtins.print') as mock_print:
                                     swarm.cmd_ralph_spawn(args)
@@ -1891,7 +1891,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1934,7 +1934,7 @@ class TestRalphSpawnScenarios(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker') as mock_add:
                 with patch('swarm.create_tmux_window') as mock_tmux:
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 swarm.cmd_ralph_spawn(args)
 
@@ -1991,7 +1991,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 # Should not raise
                                 swarm.cmd_ralph_spawn(args)
@@ -2025,7 +2025,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 # Should not raise
                                 swarm.cmd_ralph_spawn(args)
@@ -2058,7 +2058,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print'):
                                 # Should not raise - empty file is allowed
                                 swarm.cmd_ralph_spawn(args)
@@ -2091,7 +2091,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -2127,7 +2127,7 @@ class TestRalphSpawnEdgeCases(unittest.TestCase):
             with patch.object(swarm.State, 'add_worker'):
                 with patch('swarm.create_tmux_window'):
                     with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('builtins.print') as mock_print:
                                 swarm.cmd_ralph_spawn(args)
 
@@ -2223,7 +2223,7 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -2258,7 +2258,7 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -2293,7 +2293,7 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print') as mock_print:
                         swarm.cmd_ralph_spawn(args)
 
@@ -2351,7 +2351,7 @@ class TestRalphStateCreation(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -3731,7 +3731,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -3795,7 +3795,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -3830,7 +3830,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -3862,7 +3862,7 @@ class TestRalphSpawnMetadata(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -4435,8 +4435,9 @@ class TestContinuousDonePatternDetection(unittest.TestCase):
         )
         self.assertEqual(result, "done_pattern",
             "Done pattern match should return immediately, not wait for timeout")
-        # Should have only made one capture call before returning
-        self.assertEqual(mock_capture.call_count, 1)
+        # Should have made two capture calls before returning:
+        # one visible-only for screen hashing, one with scrollback for done-pattern
+        self.assertEqual(mock_capture.call_count, 2)
 
     def test_detect_inactivity_done_pattern_regex_match(self):
         """Test done pattern uses regex matching."""
@@ -4679,7 +4680,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
         # Mock the loop to exit after first check
         with patch('swarm.refresh_worker_status', return_value='stopped'):
             with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch.object(swarm.State, 'add_worker'):
                         with patch('builtins.print'):
                             # Mock spawn to return a valid worker
@@ -4785,7 +4786,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
             return 'stopped'
 
         inactivity_count = [0]
-        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             inactivity_count[0] += 1
             if inactivity_count[0] == 1:
                 return "inactive"  # First check shows inactivity
@@ -4795,7 +4796,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
             with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
                 with patch('swarm.kill_worker_for_ralph') as mock_kill:
                     with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch.object(swarm.State, 'add_worker'):
                                 with patch.object(swarm.State, 'remove_worker'):
                                     with patch('builtins.print') as mock_print:
@@ -4900,7 +4901,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
 
         with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
             with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch.object(swarm.State, 'add_worker'):
                         with patch.object(swarm.State, 'remove_worker'):
                             with patch('swarm.detect_inactivity', return_value="exited"):
@@ -5695,8 +5696,8 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         sig = inspect.signature(swarm.detect_inactivity)
         params = list(sig.parameters.keys())
         self.assertNotIn('mode', params, "mode parameter should be removed")
-        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous', 'prompt_baseline_lines'],
-                         "Should have worker, timeout, done_pattern, check_done_continuous, and prompt_baseline_lines params")
+        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous', 'prompt_baseline_content'],
+                         "Should have worker, timeout, done_pattern, check_done_continuous, and prompt_baseline_content params")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
@@ -5873,7 +5874,7 @@ class TestRalphSpawnWithDefaultTimeout(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -6634,6 +6635,7 @@ class TestRalphSpawnSendsPrompt(unittest.TestCase):
                 'content': content,
                 'has_tmux': worker.tmux is not None
             })
+            return ""
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
@@ -6698,6 +6700,7 @@ class TestRalphSpawnSendsPrompt(unittest.TestCase):
 
         def capture_content(worker, content):
             captured_content.append(content)
+            return ""
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
@@ -6809,7 +6812,7 @@ class TestRalphRunIntegration(unittest.TestCase):
         try:
             with patch('swarm.refresh_worker_status', return_value='stopped'):
                 with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
-                    with patch('swarm.send_prompt_to_worker'):
+                    with patch('swarm.send_prompt_to_worker', return_value=""):
                         with patch.object(swarm.State, 'add_worker'):
                             with patch.object(swarm.State, 'remove_worker'):
                                 with patch('builtins.print'):
@@ -6867,7 +6870,7 @@ class TestRalphRunIntegration(unittest.TestCase):
 
         detect_calls = []
 
-        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             """Capture detect_inactivity calls."""
             detect_calls.append({
                 'worker_name': worker.name,
@@ -7209,12 +7212,13 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
                 'content': content,
                 'iteration': swarm.load_ralph_state('inactivity-test-worker').current_iteration
             })
+            return ""
 
         # Simulate detect_inactivity behavior:
         # - First call: return "inactive" (inactivity detected) - triggers kill then restart
         # - Second call: return "exited" (worker exited) - loop completes
         detect_call_count = [0]
-        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             detect_call_count[0] += 1
             operations.append({
                 'op': 'detect_inactivity',
@@ -7368,7 +7372,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
             )
 
         detect_count = [0]
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             detect_count[0] += 1
             if detect_count[0] == 1:
                 return "inactive"  # Trigger restart on first call
@@ -7393,7 +7397,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
                 with patch('swarm.detect_inactivity', side_effect=mock_detect):
                     with patch('swarm.kill_worker_for_ralph', side_effect=mock_kill):
                         with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
-                            with patch('swarm.send_prompt_to_worker'):
+                            with patch('swarm.send_prompt_to_worker', return_value=""):
                                 with patch.object(swarm.State, 'add_worker'):
                                     with patch.object(swarm.State, 'remove_worker'):
                                         with patch('swarm.check_done_pattern', return_value=False):
@@ -7852,7 +7856,7 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
         # Then on iteration 2, max_iterations is reached, loop exits
         detect_calls = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             detect_calls[0] += 1
             # Always return "exited" (worker exited) to advance iterations
             return "exited"
@@ -7875,7 +7879,7 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
             with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
                 with patch('swarm.detect_inactivity', side_effect=mock_detect):
                     with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch('swarm.check_done_pattern', return_value=False):
                                 with patch.object(swarm.State, 'add_worker'):
                                     with patch.object(swarm.State, 'remove_worker'):
@@ -8084,6 +8088,7 @@ class TestRalphPromptRereadIntegration(unittest.TestCase):
                 'iteration': swarm.load_ralph_state('reread-test-worker').current_iteration,
                 'content': content
             })
+            return ""
 
         def mock_refresh(worker):
             """Worker is stopped on each iteration to trigger respawn."""
@@ -8191,7 +8196,7 @@ class TestRalphPromptRereadIntegration(unittest.TestCase):
         try:
             with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
                 with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
-                    with patch('swarm.send_prompt_to_worker'):
+                    with patch('swarm.send_prompt_to_worker', return_value=""):
                         with patch.object(swarm.State, 'add_worker'):
                             with patch.object(swarm.State, 'remove_worker'):
                                 with patch('builtins.print') as mock_print:
@@ -8314,7 +8319,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_calls = []
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             """Simulate detect_inactivity with blocking and return 'exited' (worker exit)."""
             detect_calls.append({
                 'worker': worker.name,
@@ -8363,7 +8368,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
                 with patch('swarm.detect_inactivity', side_effect=mock_detect):
                     with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
                         with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
-                            with patch('swarm.send_prompt_to_worker'):
+                            with patch('swarm.send_prompt_to_worker', return_value=""):
                                 with patch.object(swarm.State, 'add_worker'):
                                     with patch.object(swarm.State, 'remove_worker'):
                                         with patch('swarm.check_done_pattern', return_value=False):
@@ -8428,7 +8433,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_call_count = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             """Return 'inactive' on first call (inactivity), 'exited' on second (exit)."""
             detect_call_count[0] += 1
             time.sleep(0.1)  # Brief blocking for realism
@@ -8479,7 +8484,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
                 with patch('swarm.detect_inactivity', side_effect=mock_detect):
                     with patch('swarm.kill_worker_for_ralph', side_effect=actual_kill):
                         with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
-                            with patch('swarm.send_prompt_to_worker'):
+                            with patch('swarm.send_prompt_to_worker', return_value=""):
                                 with patch.object(swarm.State, 'add_worker'):
                                     with patch.object(swarm.State, 'remove_worker'):
                                         with patch('swarm.check_done_pattern', return_value=False):
@@ -8544,7 +8549,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         detect_start_times = []
         detect_end_times = []
 
-        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             """Simulate detect_inactivity that blocks for 0.5 seconds."""
             detect_start_times.append(time.time())
             # This simulates the blocking behavior of real detect_inactivity
@@ -8583,7 +8588,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
             with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
                 with patch('swarm.detect_inactivity', side_effect=mock_detect_with_blocking):
                     with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
-                        with patch('swarm.send_prompt_to_worker'):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
                             with patch.object(swarm.State, 'add_worker'):
                                 with patch.object(swarm.State, 'remove_worker'):
                                     with patch('swarm.check_done_pattern', return_value=False):
@@ -8693,7 +8698,7 @@ class TestRalphSpawnNoRunBehavior(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('swarm.cmd_ralph_run') as mock_run:
                         with patch('builtins.print'):
                             swarm.cmd_ralph_spawn(args)
@@ -8727,7 +8732,7 @@ class TestRalphSpawnNoRunBehavior(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('swarm.cmd_ralph_run') as mock_run:
                         with patch('builtins.print'):
                             swarm.cmd_ralph_spawn(args)
@@ -8808,7 +8813,7 @@ class TestRalphSpawnCheckDoneContinuous(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -8843,7 +8848,7 @@ class TestRalphSpawnCheckDoneContinuous(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.get_default_session_name', return_value='swarm-test'):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -8978,7 +8983,7 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         args = Namespace(name='flag-test-worker')
         detect_calls = []
 
-        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_lines=0):
+        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
             detect_calls.append({
                 'timeout': timeout,
                 'done_pattern': done_pattern,
@@ -9175,7 +9180,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.start_heartbeat_monitor', return_value=9999) as mock_hb_monitor:
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -9226,7 +9231,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.start_heartbeat_monitor', return_value=9999):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print', side_effect=lambda *a, **kw:
                                stderr_output.write(a[0] + '\n') if kw.get('file') else None):
                         swarm.cmd_ralph_spawn(args)
@@ -9262,7 +9267,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
         )
 
         with patch('swarm.create_tmux_window'):
-            with patch('swarm.send_prompt_to_worker'):
+            with patch('swarm.send_prompt_to_worker', return_value=""):
                 with self.assertRaises(SystemExit) as cm:
                     swarm.cmd_ralph_spawn(args)
                 self.assertEqual(cm.exception.code, 1)
@@ -9294,7 +9299,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
         )
 
         with patch('swarm.create_tmux_window'):
-            with patch('swarm.send_prompt_to_worker'):
+            with patch('swarm.send_prompt_to_worker', return_value=""):
                 with self.assertRaises(SystemExit) as cm:
                     swarm.cmd_ralph_spawn(args)
                 self.assertEqual(cm.exception.code, 1)
@@ -9327,7 +9332,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.start_heartbeat_monitor', return_value=8888):
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print') as mock_print:
                         swarm.cmd_ralph_spawn(args)
 
@@ -9373,7 +9378,7 @@ class TestRalphSpawnHeartbeat(unittest.TestCase):
 
         with patch('swarm.create_tmux_window'):
             with patch('swarm.start_heartbeat_monitor') as mock_hb_monitor:
-                with patch('swarm.send_prompt_to_worker'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
                     with patch('builtins.print'):
                         swarm.cmd_ralph_spawn(args)
 
@@ -10269,127 +10274,117 @@ class TestRalphCleanCLI(unittest.TestCase):
 class TestDonePatternBaseline(unittest.TestCase):
     """Test done-pattern baseline filtering to prevent self-match against prompt text."""
 
-    def test_done_pattern_in_prompt_does_not_match_with_baseline(self):
-        """Test that done pattern in prompt text (before baseline) does NOT trigger a match."""
-        worker = swarm.Worker(
-            name='test-worker',
+    def _make_worker(self, name='test-worker'):
+        return swarm.Worker(
+            name=name,
             status='running',
             cmd=['echo', 'test'],
             started='2024-01-15T10:30:00',
             cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test')
+            tmux=swarm.TmuxInfo(session='swarm', window=name)
         )
 
-        # Simulate pane content where the done pattern appears in the prompt (first 5 lines)
-        # but NOT in agent output (after baseline)
-        pane_content = (
+    def _mock_capture(self, visible_content, scrollback_content):
+        """Return a mock that returns visible_content for visible-only calls
+        and scrollback_content for history_lines calls."""
+        def capture(*args, **kwargs):
+            if kwargs.get('history_lines', 0) > 0:
+                return scrollback_content
+            return visible_content
+        return capture
+
+    def test_done_pattern_in_prompt_does_not_match_with_baseline(self):
+        """Test that done pattern in prompt text (baseline prefix) does NOT trigger a match."""
+        worker = self._make_worker()
+
+        # Baseline content captured after prompt injection (contains done pattern)
+        baseline = (
             "line 1\n"
             "line 2\n"
-            "When done, output /done on its own line\n"  # done pattern in prompt text
+            "When done, output /done on its own line\n"
             "line 4\n"
             "line 5\n"
-            "Agent is still working...\n"
-            "Processing tasks..."
         )
+        # Full scrollback = baseline + agent output (no done pattern in agent output)
+        scrollback = baseline + "Agent is still working...\nProcessing tasks..."
+        visible = "Agent is still working...\nProcessing tasks..."
 
         call_count = [0]
-        def mock_capture(*args, **kwargs):
+        original_capture = self._mock_capture(visible, scrollback)
+        def counting_capture(*args, **kwargs):
             call_count[0] += 1
-            return pane_content
+            return original_capture(*args, **kwargs)
 
         def mock_refresh(w):
-            # Stop after a few cycles to avoid infinite loop
-            if call_count[0] >= 3:
+            if call_count[0] >= 6:  # 2 captures per cycle, stop after 3 cycles
                 return 'stopped'
             return 'running'
 
         with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-            with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+            with patch('swarm.tmux_capture_pane', side_effect=counting_capture):
                 with patch('time.sleep'):
                     result = swarm.detect_inactivity(
                         worker,
                         timeout=60,
                         done_pattern="/done",
                         check_done_continuous=True,
-                        prompt_baseline_lines=5  # First 5 lines are prompt
+                        prompt_baseline_content=baseline
                     )
-                    # Should NOT match done pattern because it's in the prompt (before baseline)
                     self.assertEqual(result, "exited",
                         "Done pattern in prompt text should not trigger match when baseline is set")
 
     def test_done_pattern_in_agent_output_matches_with_baseline(self):
         """Test that done pattern in agent output (after baseline) DOES trigger a match."""
-        worker = swarm.Worker(
-            name='test-worker',
-            status='running',
-            cmd=['echo', 'test'],
-            started='2024-01-15T10:30:00',
-            cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test')
-        )
+        worker = self._make_worker()
 
-        # Simulate pane content where the done pattern appears AFTER the baseline
-        pane_content = (
+        baseline = (
             "line 1\n"
             "line 2\n"
-            "When done, output /done on its own line\n"  # done pattern in prompt text
+            "When done, output /done on its own line\n"
             "line 4\n"
             "line 5\n"
-            "Agent working...\n"
-            "/done"  # done pattern in agent output (after baseline)
         )
+        # Full scrollback = baseline + agent output with done pattern
+        scrollback = baseline + "Agent working...\n/done"
+        visible = "Agent working...\n/done"
 
         with patch('swarm.refresh_worker_status', return_value='running'):
-            with patch('swarm.tmux_capture_pane', return_value=pane_content):
+            with patch('swarm.tmux_capture_pane',
+                       side_effect=self._mock_capture(visible, scrollback)):
                 with patch('time.sleep'):
                     result = swarm.detect_inactivity(
                         worker,
                         timeout=60,
                         done_pattern="/done",
                         check_done_continuous=True,
-                        prompt_baseline_lines=5  # First 5 lines are prompt
+                        prompt_baseline_content=baseline
                     )
                     self.assertEqual(result, "done_pattern",
                         "Done pattern in agent output (after baseline) should trigger match")
 
     def test_done_pattern_without_baseline_matches_anywhere(self):
         """Test that done pattern matches anywhere when no baseline is set (backward compat)."""
-        worker = swarm.Worker(
-            name='test-worker',
-            status='running',
-            cmd=['echo', 'test'],
-            started='2024-01-15T10:30:00',
-            cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test')
-        )
+        worker = self._make_worker()
 
-        pane_content = "line 1\n/done\nline 3"
+        content = "line 1\n/done\nline 3"
 
         with patch('swarm.refresh_worker_status', return_value='running'):
-            with patch('swarm.tmux_capture_pane', return_value=pane_content):
+            with patch('swarm.tmux_capture_pane', return_value=content):
                 with patch('time.sleep'):
                     result = swarm.detect_inactivity(
                         worker,
                         timeout=60,
                         done_pattern="/done",
                         check_done_continuous=True,
-                        prompt_baseline_lines=0  # No baseline
+                        prompt_baseline_content=""
                     )
                     self.assertEqual(result, "done_pattern",
-                        "Done pattern should match anywhere when baseline is 0")
+                        "Done pattern should match anywhere when baseline is empty")
 
     def test_baseline_recorded_after_prompt_injection(self):
-        """Test that send_prompt_to_worker returns pane line count for baseline."""
-        worker = swarm.Worker(
-            name='test-worker',
-            status='running',
-            cmd=['echo', 'test'],
-            started='2024-01-15T10:30:00',
-            cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
-        )
+        """Test that send_prompt_to_worker returns pane content string for baseline."""
+        worker = self._make_worker('test-worker')
 
-        # Simulate pane content with 5 lines after prompt is sent
         pane_after_send = "line 1\nline 2\nline 3\nline 4\nline 5"
 
         with patch('swarm.wait_for_agent_ready'):
@@ -10397,10 +10392,11 @@ class TestDonePatternBaseline(unittest.TestCase):
                 with patch('swarm.tmux_capture_pane', return_value=pane_after_send):
                     baseline = swarm.send_prompt_to_worker(worker, "test prompt")
 
-        self.assertEqual(baseline, 5, "Should return line count of pane after sending prompt")
+        self.assertEqual(baseline, pane_after_send,
+            "Should return pane content string after sending prompt")
 
-    def test_baseline_returns_zero_for_non_tmux_worker(self):
-        """Test that send_prompt_to_worker returns 0 for non-tmux worker."""
+    def test_baseline_returns_empty_for_non_tmux_worker(self):
+        """Test that send_prompt_to_worker returns empty string for non-tmux worker."""
         worker = swarm.Worker(
             name='test-worker',
             status='running',
@@ -10411,18 +10407,11 @@ class TestDonePatternBaseline(unittest.TestCase):
         )
 
         baseline = swarm.send_prompt_to_worker(worker, "test prompt")
-        self.assertEqual(baseline, 0, "Should return 0 for non-tmux worker")
+        self.assertEqual(baseline, "", "Should return empty string for non-tmux worker")
 
-    def test_baseline_returns_zero_on_capture_error(self):
-        """Test that send_prompt_to_worker returns 0 if pane capture fails."""
-        worker = swarm.Worker(
-            name='test-worker',
-            status='running',
-            cmd=['echo', 'test'],
-            started='2024-01-15T10:30:00',
-            cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test-worker')
-        )
+    def test_baseline_returns_empty_on_capture_error(self):
+        """Test that send_prompt_to_worker returns empty string if pane capture fails."""
+        worker = self._make_worker('test-worker')
 
         with patch('swarm.wait_for_agent_ready'):
             with patch('swarm.tmux_send'):
@@ -10430,85 +10419,104 @@ class TestDonePatternBaseline(unittest.TestCase):
                            side_effect=subprocess.CalledProcessError(1, 'tmux')):
                     baseline = swarm.send_prompt_to_worker(worker, "test prompt")
 
-        self.assertEqual(baseline, 0, "Should return 0 on capture error")
+        self.assertEqual(baseline, "", "Should return empty string on capture error")
 
-    def test_ralph_state_has_prompt_baseline_lines_field(self):
-        """Test RalphState has prompt_baseline_lines field with correct default."""
+    def test_ralph_state_has_prompt_baseline_content_field(self):
+        """Test RalphState has prompt_baseline_content field with correct default."""
         state = swarm.RalphState(
             worker_name='test',
             prompt_file='/path/to/prompt.md',
             max_iterations=10
         )
-        self.assertEqual(state.prompt_baseline_lines, 0,
-            "prompt_baseline_lines should default to 0")
+        self.assertEqual(state.prompt_baseline_content, "",
+            "prompt_baseline_content should default to empty string")
 
-    def test_ralph_state_prompt_baseline_lines_roundtrip(self):
-        """Test prompt_baseline_lines survives round-trip through dict serialization."""
+    def test_ralph_state_prompt_baseline_content_roundtrip(self):
+        """Test prompt_baseline_content survives round-trip through dict serialization."""
         original = swarm.RalphState(
             worker_name='test',
             prompt_file='/path/to/prompt.md',
             max_iterations=10,
-            prompt_baseline_lines=42
+            prompt_baseline_content="line 1\nline 2\nline 3\n"
         )
         d = original.to_dict()
-        self.assertEqual(d['prompt_baseline_lines'], 42)
+        self.assertEqual(d['prompt_baseline_content'], "line 1\nline 2\nline 3\n")
 
         restored = swarm.RalphState.from_dict(d)
-        self.assertEqual(restored.prompt_baseline_lines, 42)
+        self.assertEqual(restored.prompt_baseline_content, "line 1\nline 2\nline 3\n")
 
     def test_ralph_state_from_dict_defaults_baseline_when_missing(self):
-        """Test from_dict defaults prompt_baseline_lines to 0 for old state files."""
+        """Test from_dict defaults prompt_baseline_content to empty string for old state files."""
         d = {
             'worker_name': 'test',
             'prompt_file': '/path/to/prompt.md',
             'max_iterations': 10,
-            # prompt_baseline_lines is missing (old state format)
+            # prompt_baseline_content is missing (old state format)
         }
         state = swarm.RalphState.from_dict(d)
-        self.assertEqual(state.prompt_baseline_lines, 0,
-            "Should default to 0 when field is missing from old state files")
+        self.assertEqual(state.prompt_baseline_content, "",
+            "Should default to empty string when field is missing from old state files")
 
     def test_done_pattern_baseline_with_regex_pattern(self):
         """Test baseline filtering works with regex done patterns."""
-        worker = swarm.Worker(
-            name='test-worker',
-            status='running',
-            cmd=['echo', 'test'],
-            started='2024-01-15T10:30:00',
-            cwd='/tmp',
-            tmux=swarm.TmuxInfo(session='swarm', window='test')
-        )
+        worker = self._make_worker()
 
-        # Regex pattern appears in prompt (before baseline) but not after
-        pane_content = (
+        baseline = (
             "line 1\n"
-            "Use SWARM_DONE_X9K to signal completion\n"  # Pattern in prompt
+            "Use SWARM_DONE_X9K to signal completion\n"
             "line 3\n"
-            "Agent output here..."
         )
+        # Full scrollback = baseline + agent output (no done pattern after baseline)
+        scrollback = baseline + "Agent output here..."
+        visible = "Agent output here..."
 
         call_count = [0]
-        def mock_capture(*args, **kwargs):
+        original_capture = self._mock_capture(visible, scrollback)
+        def counting_capture(*args, **kwargs):
             call_count[0] += 1
-            return pane_content
+            return original_capture(*args, **kwargs)
 
         def mock_refresh(w):
-            if call_count[0] >= 3:
+            if call_count[0] >= 6:
                 return 'stopped'
             return 'running'
 
         with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-            with patch('swarm.tmux_capture_pane', side_effect=mock_capture):
+            with patch('swarm.tmux_capture_pane', side_effect=counting_capture):
                 with patch('time.sleep'):
                     result = swarm.detect_inactivity(
                         worker,
                         timeout=60,
                         done_pattern=r"SWARM_DONE_\w+",
                         check_done_continuous=True,
-                        prompt_baseline_lines=3  # First 3 lines are prompt
+                        prompt_baseline_content=baseline
                     )
                     self.assertEqual(result, "exited",
                         "Regex done pattern in prompt should not match with baseline filtering")
+
+    def test_done_pattern_terminal_cleared_checks_full_content(self):
+        """Test that when terminal is cleared (baseline not a prefix), full content is checked."""
+        worker = self._make_worker()
+
+        # Baseline captured at prompt injection time
+        baseline = "prompt line 1\nprompt line 2\n"
+        # Terminal was cleared, so scrollback no longer starts with baseline
+        scrollback = "completely different content\n/done\nmore output"
+        visible = scrollback
+
+        with patch('swarm.refresh_worker_status', return_value='running'):
+            with patch('swarm.tmux_capture_pane',
+                       side_effect=self._mock_capture(visible, scrollback)):
+                with patch('time.sleep'):
+                    result = swarm.detect_inactivity(
+                        worker,
+                        timeout=60,
+                        done_pattern="/done",
+                        check_done_continuous=True,
+                        prompt_baseline_content=baseline
+                    )
+                    self.assertEqual(result, "done_pattern",
+                        "When terminal cleared (baseline not prefix), should check full content")
 
 
 if __name__ == "__main__":

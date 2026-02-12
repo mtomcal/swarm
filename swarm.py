@@ -1952,7 +1952,7 @@ class RalphState:
     inactivity_timeout: int = 180
     check_done_continuous: bool = False
     exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
-    prompt_baseline_lines: int = 0  # Pane line count after prompt injection, for done-pattern baseline filtering
+    prompt_baseline_content: str = ""  # Pane content snapshot after prompt injection, for done-pattern baseline filtering
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -1972,7 +1972,7 @@ class RalphState:
             "inactivity_timeout": self.inactivity_timeout,
             "check_done_continuous": self.check_done_continuous,
             "exit_reason": self.exit_reason,
-            "prompt_baseline_lines": self.prompt_baseline_lines,
+            "prompt_baseline_content": self.prompt_baseline_content,
         }
 
     @classmethod
@@ -1994,7 +1994,7 @@ class RalphState:
             inactivity_timeout=d.get("inactivity_timeout", 180),
             check_done_continuous=d.get("check_done_continuous", False),
             exit_reason=d.get("exit_reason"),
-            prompt_baseline_lines=d.get("prompt_baseline_lines", 0),
+            prompt_baseline_content=d.get("prompt_baseline_content", ""),
         )
 
 
@@ -5385,13 +5385,10 @@ def cmd_ralph_spawn(args) -> None:
 
         # Step 6: Send the prompt to the worker for the first iteration
         prompt_content = Path(args.prompt_file).read_text()
-        baseline_lines = send_prompt_to_worker(worker, prompt_content)
+        baseline_content = send_prompt_to_worker(worker, prompt_content)
 
-        # Record baseline line count for done-pattern self-match mitigation
-        try:
-            ralph_state.prompt_baseline_lines = int(baseline_lines)
-        except (TypeError, ValueError):
-            ralph_state.prompt_baseline_lines = 0
+        # Record baseline content for done-pattern self-match mitigation
+        ralph_state.prompt_baseline_content = baseline_content
         save_ralph_state(ralph_state)
 
     except subprocess.CalledProcessError as e:
@@ -5926,7 +5923,7 @@ def detect_inactivity(
     timeout: int,
     done_pattern: Optional[str] = None,
     check_done_continuous: bool = False,
-    prompt_baseline_lines: int = 0
+    prompt_baseline_content: str = ""
 ) -> str:
     """Detect if a worker has become inactive using screen-stable detection.
 
@@ -5946,9 +5943,9 @@ def detect_inactivity(
         timeout: Seconds of screen stability before restart
         done_pattern: Optional regex pattern to check for completion
         check_done_continuous: If True, check done pattern during monitoring
-        prompt_baseline_lines: Number of pane lines at prompt injection time.
-            When > 0, done pattern is only checked against lines after this baseline,
-            preventing self-match against the prompt text itself.
+        prompt_baseline_content: Pane content snapshot captured after prompt injection.
+            When non-empty, done pattern is only checked against content after this
+            baseline prefix, preventing self-match against the prompt text itself.
 
     Returns:
         String indicating why monitoring ended:
@@ -6004,13 +6001,24 @@ def detect_inactivity(
 
             # Check done pattern continuously if enabled
             if done_regex:
-                # If baseline is set, only check lines after the baseline
-                # to avoid self-matching against the prompt text
-                if prompt_baseline_lines > 0:
-                    lines = current_output.split('\n')
-                    check_content = '\n'.join(lines[prompt_baseline_lines:])
+                # Capture with scrollback for done-pattern checking
+                try:
+                    full_output = tmux_capture_pane(
+                        worker.tmux.session,
+                        worker.tmux.window,
+                        history_lines=2000,
+                        socket=socket
+                    )
+                except subprocess.CalledProcessError:
+                    full_output = current_output
+
+                # Strip baseline prefix to avoid self-matching against prompt text
+                if prompt_baseline_content and full_output.startswith(prompt_baseline_content):
+                    check_content = full_output[len(prompt_baseline_content):]
                 else:
-                    check_content = current_output
+                    # Baseline isn't a prefix (terminal cleared or no baseline) — check full content
+                    check_content = full_output if not prompt_baseline_content else full_output
+
                 if done_regex.search(check_content):
                     return "done_pattern"
 
@@ -6156,7 +6164,7 @@ def spawn_worker_for_ralph(
     return worker
 
 
-def send_prompt_to_worker(worker: Worker, prompt_content: str) -> int:
+def send_prompt_to_worker(worker: Worker, prompt_content: str) -> str:
     """Send prompt content to a worker.
 
     Args:
@@ -6164,11 +6172,12 @@ def send_prompt_to_worker(worker: Worker, prompt_content: str) -> int:
         prompt_content: The prompt content to send
 
     Returns:
-        Number of lines in the pane after sending the prompt (baseline for done-pattern filtering).
-        Returns 0 if the worker has no tmux info.
+        Pane content snapshot (with scrollback) after sending the prompt,
+        used as baseline for done-pattern filtering. Returns "" if the
+        worker has no tmux info or capture fails.
     """
     if not worker.tmux:
-        return 0
+        return ""
 
     socket = worker.tmux.socket
 
@@ -6189,16 +6198,17 @@ def send_prompt_to_worker(worker: Worker, prompt_content: str) -> int:
         socket=socket
     )
 
-    # Capture pane line count after prompt injection for done-pattern baseline
+    # Capture pane content (with scrollback) after prompt injection for done-pattern baseline
     try:
         pane_content = tmux_capture_pane(
             worker.tmux.session,
             worker.tmux.window,
+            history_lines=2000,
             socket=socket
         )
-        return len(pane_content.split('\n'))
+        return pane_content
     except subprocess.CalledProcessError:
-        return 0
+        return ""
 
 
 def cmd_ralph_run(args) -> None:
@@ -6453,13 +6463,10 @@ def _run_ralph_loop_inner(
                 state.add_worker(worker)
 
                 # Send prompt to the worker
-                baseline_lines = send_prompt_to_worker(worker, prompt_content)
+                baseline_content = send_prompt_to_worker(worker, prompt_content)
 
-                # Record baseline line count for done-pattern self-match mitigation
-                try:
-                    ralph_state.prompt_baseline_lines = int(baseline_lines)
-                except (TypeError, ValueError):
-                    ralph_state.prompt_baseline_lines = 0
+                # Record baseline content for done-pattern self-match mitigation
+                ralph_state.prompt_baseline_content = baseline_content
                 save_ralph_state(ralph_state)
 
             except Exception as e:
@@ -6496,7 +6503,7 @@ def _run_ralph_loop_inner(
             ralph_state.inactivity_timeout,
             done_pattern=ralph_state.done_pattern,
             check_done_continuous=ralph_state.check_done_continuous,
-            prompt_baseline_lines=ralph_state.prompt_baseline_lines
+            prompt_baseline_content=ralph_state.prompt_baseline_content
         )
 
         # Reload ralph state (could have been paused while monitoring)
