@@ -1995,6 +1995,7 @@ class RalphState:
     check_done_continuous: bool = False
     exit_reason: Optional[str] = None  # done_pattern, max_iterations, killed, failed, monitor_disconnected
     prompt_baseline_content: str = ""  # Pane content snapshot after prompt injection, for done-pattern baseline filtering
+    last_screen_change: Optional[str] = None  # ISO format timestamp of last screen content change
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -2015,6 +2016,7 @@ class RalphState:
             "check_done_continuous": self.check_done_continuous,
             "exit_reason": self.exit_reason,
             "prompt_baseline_content": self.prompt_baseline_content,
+            "last_screen_change": self.last_screen_change,
         }
 
     @classmethod
@@ -2037,6 +2039,7 @@ class RalphState:
             check_done_continuous=d.get("check_done_continuous", False),
             exit_reason=d.get("exit_reason"),
             prompt_baseline_content=d.get("prompt_baseline_content", ""),
+            last_screen_change=d.get("last_screen_change"),
         )
 
 
@@ -5654,6 +5657,21 @@ def cmd_ralph_status(args) -> None:
     print(f"Total failures: {ralph_state.total_failures}")
     print(f"Inactivity timeout: {ralph_state.inactivity_timeout}s")
 
+    # Display last screen change timestamp
+    if ralph_state.last_screen_change:
+        try:
+            last_change_dt = datetime.fromisoformat(ralph_state.last_screen_change)
+            now = datetime.now(timezone.utc)
+            # Ensure last_change_dt is timezone-aware for comparison
+            if last_change_dt.tzinfo is None:
+                last_change_dt = last_change_dt.replace(tzinfo=timezone.utc)
+            seconds_ago = int((now - last_change_dt).total_seconds())
+            print(f"Last screen change: {seconds_ago}s ago")
+        except (ValueError, TypeError):
+            print("Last screen change: (unknown)")
+    else:
+        print("Last screen change: (none)")
+
     if ralph_state.done_pattern:
         print(f"Done pattern: {ralph_state.done_pattern}")
 
@@ -5986,7 +6004,8 @@ def detect_inactivity(
     timeout: int,
     done_pattern: Optional[str] = None,
     check_done_continuous: bool = False,
-    prompt_baseline_content: str = ""
+    prompt_baseline_content: str = "",
+    ralph_state: Optional["RalphState"] = None
 ) -> str:
     """Detect if a worker has become inactive using screen-stable detection.
 
@@ -6009,6 +6028,7 @@ def detect_inactivity(
         prompt_baseline_content: Pane content snapshot captured after prompt injection.
             When non-empty, done pattern is only checked against content after this
             baseline prefix, preventing self-match against the prompt text itself.
+        ralph_state: Optional RalphState to update last_screen_change timestamp
 
     Returns:
         String indicating why monitoring ended:
@@ -6094,6 +6114,10 @@ def detect_inactivity(
                 # Screen changed, reset timer
                 last_hash = current_hash
                 stable_start = None
+                # Track screen change timestamp in ralph state
+                if ralph_state is not None:
+                    ralph_state.last_screen_change = datetime.now(timezone.utc).isoformat()
+                    save_ralph_state(ralph_state)
             else:
                 # Screen unchanged
                 if stable_start is None:
@@ -6566,7 +6590,8 @@ def _run_ralph_loop_inner(
             ralph_state.inactivity_timeout,
             done_pattern=ralph_state.done_pattern,
             check_done_continuous=ralph_state.check_done_continuous,
-            prompt_baseline_content=ralph_state.prompt_baseline_content
+            prompt_baseline_content=ralph_state.prompt_baseline_content,
+            ralph_state=ralph_state
         )
 
         # Reload ralph state (could have been paused while monitoring)

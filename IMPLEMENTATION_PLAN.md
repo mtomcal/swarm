@@ -47,22 +47,22 @@ Round 3 feedback from directing a Docker-sandboxed ralph session surfaced severa
 
 ### Phase 3: Screen Change Tracking
 
-- [ ] **3.1 Add `last_screen_change` field to `RalphState`**
+- [x] **3.1 Add `last_screen_change` field to `RalphState`**
   - Add field: `last_screen_change: Optional[str] = None` (ISO format timestamp)
   - Add to `to_dict()` and `from_dict()` serialization
   - File: `swarm.py` (~line 1997, RalphState dataclass)
 
-- [ ] **3.2 Update `detect_inactivity()` to track screen changes**
+- [x] **3.2 Update `detect_inactivity()` to track screen changes**
   - When screen content hash changes, update `ralph_state.last_screen_change` to current ISO timestamp
   - Save updated ralph state after change
   - File: `swarm.py` (~line 5963, `detect_inactivity()`)
 
-- [ ] **3.3 Display `Last screen change` in `cmd_ralph_status()`**
+- [x] **3.3 Display `Last screen change` in `cmd_ralph_status()`**
   - Calculate seconds since `last_screen_change` and display as `"Last screen change: 5s ago"`
   - If no screen change recorded yet, display `"Last screen change: (none)"`
   - File: `swarm.py` (~line 5579, `cmd_ralph_status()`)
 
-- [ ] **3.4 Add unit tests for screen change tracking**
+- [x] **3.4 Add unit tests for screen change tracking**
   - Test: `last_screen_change` field serializes/deserializes correctly
   - Test: status output includes `Last screen change` line
   - File: `test_cmd_ralph.py`

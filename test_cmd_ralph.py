@@ -2933,6 +2933,236 @@ class TestCmdRalphStatus(unittest.TestCase):
         self.assertIn('Worker status: running', output)
 
 
+class TestScreenChangeTracking(unittest.TestCase):
+    """Test screen change tracking in RalphState and status display."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_last_screen_change_default_is_none(self):
+        """Test last_screen_change defaults to None."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10
+        )
+        self.assertIsNone(state.last_screen_change)
+
+    def test_last_screen_change_serializes_in_to_dict(self):
+        """Test last_screen_change is included in to_dict output."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            last_screen_change='2024-01-15T12:30:00+00:00'
+        )
+        d = state.to_dict()
+        self.assertEqual(d['last_screen_change'], '2024-01-15T12:30:00+00:00')
+
+    def test_last_screen_change_serializes_none_in_to_dict(self):
+        """Test last_screen_change=None is included in to_dict output."""
+        state = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10
+        )
+        d = state.to_dict()
+        self.assertIn('last_screen_change', d)
+        self.assertIsNone(d['last_screen_change'])
+
+    def test_last_screen_change_deserializes_from_dict(self):
+        """Test last_screen_change is loaded from dict."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/path/to/prompt.md',
+            'max_iterations': 10,
+            'last_screen_change': '2024-01-15T12:30:00+00:00'
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertEqual(state.last_screen_change, '2024-01-15T12:30:00+00:00')
+
+    def test_last_screen_change_defaults_none_when_missing_from_dict(self):
+        """Test last_screen_change defaults to None when missing from dict."""
+        d = {
+            'worker_name': 'test',
+            'prompt_file': '/path/to/prompt.md',
+            'max_iterations': 10
+        }
+        state = swarm.RalphState.from_dict(d)
+        self.assertIsNone(state.last_screen_change)
+
+    def test_last_screen_change_roundtrip(self):
+        """Test last_screen_change survives round-trip through dict."""
+        original = swarm.RalphState(
+            worker_name='test',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10,
+            last_screen_change='2024-01-15T12:30:00+00:00'
+        )
+        d = original.to_dict()
+        restored = swarm.RalphState.from_dict(d)
+        self.assertEqual(original.last_screen_change, restored.last_screen_change)
+
+    def test_status_shows_last_screen_change_none(self):
+        """Test status shows (none) when no screen change recorded."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            started='2024-01-15T10:30:00'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('Last screen change: (none)', output)
+
+    def test_status_shows_last_screen_change_seconds_ago(self):
+        """Test status shows seconds ago when screen change recorded."""
+        from datetime import datetime, timezone, timedelta
+
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp'
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Set last_screen_change to 30 seconds ago
+        now = datetime.now(timezone.utc)
+        thirty_secs_ago = (now - timedelta(seconds=30)).isoformat()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=100,
+            current_iteration=1,
+            status='running',
+            started='2024-01-15T10:30:00',
+            last_screen_change=thirty_secs_ago
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        with patch('builtins.print') as mock_print:
+            swarm.cmd_ralph_status(args)
+
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('Last screen change:', output)
+        # Should show approximately 30s ago (allow some variance)
+        self.assertRegex(output, r'Last screen change: \d+s ago')
+        # Should NOT show (none)
+        self.assertNotIn('(none)', output)
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_updates_last_screen_change_on_change(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test detect_inactivity updates ralph_state.last_screen_change when screen changes."""
+        mock_refresh.return_value = 'running'
+        # Iter 1: 'output 1' (new vs None → change)
+        # Iter 2: 'output 2' (different → change)
+        # Iter 3: 'output 2' (same → stable_start set)
+        # Iter 4: 'output 2' (same → timeout reached)
+        mock_capture.side_effect = ['output 1', 'output 2', 'output 2', 'output 2']
+        # time.time() called: iter 3 sets stable_start, iter 4 checks timeout
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker',
+            prompt_file='/path/to/prompt.md',
+            max_iterations=10
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+        # last_screen_change should have been set (not None)
+        self.assertIsNotNone(ralph_state.last_screen_change)
+        # save_ralph_state should have been called when screen changed
+        self.assertTrue(mock_save.called)
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_detect_inactivity_without_ralph_state_still_works(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test detect_inactivity works without ralph_state (backward compatible)."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = 'same stable content\nline 2\nline 3'
+        mock_time.side_effect = [0, 0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        # Call without ralph_state (default None)
+        result = swarm.detect_inactivity(worker, timeout=1)
+        self.assertEqual(result, "inactive")
+        # save_ralph_state should NOT have been called
+        self.assertFalse(mock_save.called)
+
+
 class TestCheckMonitorDisconnect(unittest.TestCase):
     """Test _check_monitor_disconnect function (B5)."""
 
@@ -4883,7 +5113,7 @@ class TestRalphRunMainLoop(unittest.TestCase):
             return 'stopped'
 
         inactivity_count = [0]
-        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             inactivity_count[0] += 1
             if inactivity_count[0] == 1:
                 return "inactive"  # First check shows inactivity
@@ -5793,8 +6023,8 @@ class TestScreenStableInactivityDetection(unittest.TestCase):
         sig = inspect.signature(swarm.detect_inactivity)
         params = list(sig.parameters.keys())
         self.assertNotIn('mode', params, "mode parameter should be removed")
-        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous', 'prompt_baseline_content'],
-                         "Should have worker, timeout, done_pattern, check_done_continuous, and prompt_baseline_content params")
+        self.assertEqual(params, ['worker', 'timeout', 'done_pattern', 'check_done_continuous', 'prompt_baseline_content', 'ralph_state'],
+                         "Should have worker, timeout, done_pattern, check_done_continuous, prompt_baseline_content, and ralph_state params")
 
     @patch('swarm.refresh_worker_status')
     @patch('swarm.tmux_capture_pane')
@@ -6967,7 +7197,7 @@ class TestRalphRunIntegration(unittest.TestCase):
 
         detect_calls = []
 
-        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def capture_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             """Capture detect_inactivity calls."""
             detect_calls.append({
                 'worker_name': worker.name,
@@ -7315,7 +7545,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
         # - First call: return "inactive" (inactivity detected) - triggers kill then restart
         # - Second call: return "exited" (worker exited) - loop completes
         detect_call_count = [0]
-        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect_inactivity(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             detect_call_count[0] += 1
             operations.append({
                 'op': 'detect_inactivity',
@@ -7469,7 +7699,7 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
             )
 
         detect_count = [0]
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             detect_count[0] += 1
             if detect_count[0] == 1:
                 return "inactive"  # Trigger restart on first call
@@ -7953,7 +8183,7 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
         # Then on iteration 2, max_iterations is reached, loop exits
         detect_calls = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             detect_calls[0] += 1
             # Always return "exited" (worker exited) to advance iterations
             return "exited"
@@ -8416,7 +8646,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_calls = []
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             """Simulate detect_inactivity with blocking and return 'exited' (worker exit)."""
             detect_calls.append({
                 'worker': worker.name,
@@ -8530,7 +8760,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         kill_calls = []
         detect_call_count = [0]
 
-        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             """Return 'inactive' on first call (inactivity), 'exited' on second (exit)."""
             detect_call_count[0] += 1
             time.sleep(0.1)  # Brief blocking for realism
@@ -8646,7 +8876,7 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         detect_start_times = []
         detect_end_times = []
 
-        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def mock_detect_with_blocking(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             """Simulate detect_inactivity that blocks for 0.5 seconds."""
             detect_start_times.append(time.time())
             # This simulates the blocking behavior of real detect_inactivity
@@ -9080,7 +9310,7 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         args = Namespace(name='flag-test-worker')
         detect_calls = []
 
-        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content=""):
+        def capture_detect(worker, timeout, done_pattern=None, check_done_continuous=False, prompt_baseline_content="", ralph_state=None):
             detect_calls.append({
                 'timeout': timeout,
                 'done_pattern': done_pattern,
