@@ -6562,7 +6562,10 @@ def detect_inactivity(
                         )
 
             # Check for fatal patterns (compaction, etc.) — immediate kill required
-            if any(p in normalized for p in FATAL_PATTERNS):
+            # Use full pane content (ANSI-stripped) instead of normalized (last 20 lines)
+            # because the fatal text may not be in the last 20 visible lines
+            full_clean = ansi_escape.sub('', current_output)
+            if any(p in full_clean for p in FATAL_PATTERNS):
                 return "compaction"
 
             # Check context percentage if max_context is set

@@ -291,7 +291,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #1 — Compaction detection kills iteration
 
-- [ ] **10.1 Smoke test: compaction detection**
+- [x] **10.1 Smoke test: compaction detection**
   - Write and run a test script that:
     1. Creates a minimal prompt file: `echo "just exit" > /tmp/fb1-prompt.md`
     2. Runs: `python3 swarm.py ralph spawn --name smoke-fb1 --prompt-file /tmp/fb1-prompt.md --max-iterations 3 --no-worktree -- bash -c 'echo "$ ready"; sleep 5; echo "Compacting conversation"; sleep 120'`
