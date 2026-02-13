@@ -304,7 +304,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #2 — Done pattern terminates agent promptly
 
-- [ ] **10.2 Smoke test: done-pattern auto-kills**
+- [x] **10.2 Smoke test: done-pattern auto-kills**
   - Write and run a test script that:
     1. Creates a minimal prompt file: `echo "just exit" > /tmp/fb2-prompt.md`
     2. Runs: `python3 swarm.py ralph spawn --name smoke-fb2 --prompt-file /tmp/fb2-prompt.md --max-iterations 3 --done-pattern "ALL_DONE" --no-worktree -- bash -c 'echo "$ ready"; sleep 5; echo "ALL_DONE"; sleep 300'`
