@@ -329,7 +329,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #4 — Ralph monitor detects dead worker
 
-- [ ] **10.4 Smoke test: ralph detects window loss**
+- [x] **10.4 Smoke test: ralph detects window loss**
   - Write and run a test script that:
     1. Creates a minimal prompt file: `echo "just exit" > /tmp/fb4-prompt.md`
     2. Runs: `python3 swarm.py ralph spawn --name smoke-fb4 --prompt-file /tmp/fb4-prompt.md --max-iterations 3 --no-worktree -- bash -c 'echo "$ ready"; sleep 8; exit 0'`
