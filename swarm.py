@@ -39,6 +39,10 @@ STUCK_PATTERNS = {
     "Paste code here": "Worker stuck at OAuth code entry. Use ANTHROPIC_API_KEY instead.",
 }
 
+# Fatal patterns: screen content substrings that indicate the worker has hit an
+# unrecoverable state and should be immediately killed and restarted.
+FATAL_PATTERNS = ["Compacting conversation"]
+
 # Agent instructions template for AGENTS.md/CLAUDE.md injection
 # Marker string 'Process Management (swarm)' used for idempotent detection
 SWARM_INSTRUCTIONS = """
@@ -6340,6 +6344,7 @@ def detect_inactivity(
         - "exited": Worker exited on its own
         - "inactive": Inactivity timeout reached
         - "done_pattern": Done pattern matched (only if check_done_continuous)
+        - "compaction": Fatal pattern detected (e.g. "Compacting conversation")
     """
     import hashlib
     import re
@@ -6426,6 +6431,10 @@ def detect_inactivity(
                             ralph_state.worker_name, "WARN",
                             message=f"iteration {ralph_state.current_iteration}: {stuck_msg}"
                         )
+
+            # Check for fatal patterns (compaction, etc.) — immediate kill required
+            if any(p in normalized for p in FATAL_PATTERNS):
+                return "compaction"
 
             # Compare hashes
             if current_hash != last_hash:
@@ -6993,7 +7002,24 @@ def _run_ralph_loop_inner(
                 kill_worker_for_ralph(worker, state)
             return
 
-        if monitor_result == "inactive":
+        if monitor_result == "compaction":
+            # Fatal pattern detected (e.g. "Compacting conversation") — kill and restart
+            print(f"[ralph] {args.name}: compaction detected, killing iteration {ralph_state.current_iteration}")
+            log_ralph_iteration(
+                args.name,
+                "FATAL",
+                iteration=ralph_state.current_iteration,
+                message=f"iteration {ralph_state.current_iteration} -- compaction detected, killing"
+            )
+            ralph_state.exit_reason = "compaction"
+            save_ralph_state(ralph_state)
+
+            # Kill the worker — do NOT count as consecutive failure
+            if worker:
+                kill_worker_for_ralph(worker, state)
+            # Proceed to next iteration (continue the while loop)
+
+        elif monitor_result == "inactive":
             # Worker went inactive - restart it
             print(f"[ralph] {args.name}: inactivity timeout ({ralph_state.inactivity_timeout}s), restarting")
             log_ralph_iteration(

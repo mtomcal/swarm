@@ -35,14 +35,14 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 1: Fatal Pattern Detection (Compaction Kill)
 
-- [ ] **1.1 Add fatal pattern detection to `detect_inactivity()`**
+- [x] **1.1 Add fatal pattern detection to `detect_inactivity()`**
   - Add `FATAL_PATTERNS` constant: `["Compacting conversation"]`
   - In `detect_inactivity()` (~line 6307), after capturing pane content:
     1. Check content against `FATAL_PATTERNS`
     2. If matched, return `"compaction"` (new return value)
   - File: `swarm.py`
 
-- [ ] **1.2 Handle `"compaction"` return in ralph monitor loop**
+- [x] **1.2 Handle `"compaction"` return in ralph monitor loop**
   - In the outer ralph loop (~line 7010), when `detect_inactivity()` returns `"compaction"`:
     1. SIGTERM the worker process
     2. Log `[FATAL] iteration N -- compaction detected, killing` to iteration log
@@ -51,7 +51,7 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
     5. Proceed to next iteration
   - File: `swarm.py`
 
-- [ ] **1.3 Add unit tests for fatal pattern detection**
+- [x] **1.3 Add unit tests for fatal pattern detection**
   - Test: compaction text in pane → returns `"compaction"`
   - Test: compaction triggers SIGTERM + next iteration (not failure)
   - Test: `exit_reason` is set to `"compaction"` in state

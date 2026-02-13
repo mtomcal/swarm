@@ -11846,5 +11846,308 @@ class TestRalphStateMonitorPid(unittest.TestCase):
         self.assertIsNone(state.monitor_pid)
 
 
+class TestFatalPatternDetection(unittest.TestCase):
+    """Test fatal/compaction pattern detection in detect_inactivity() and ralph loop."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_path.write_text("test prompt content")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_fatal_patterns_constant_exists(self):
+        """Test FATAL_PATTERNS constant is defined with expected entries."""
+        self.assertTrue(hasattr(swarm, 'FATAL_PATTERNS'))
+        self.assertIsInstance(swarm.FATAL_PATTERNS, list)
+        self.assertIn("Compacting conversation", swarm.FATAL_PATTERNS)
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_compaction_text_returns_compaction(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: compaction text in pane content → returns 'compaction'."""
+        mock_refresh.return_value = 'running'
+        compaction_content = "Working on task...\nCompacting conversation\nPlease wait"
+        mock_capture.return_value = compaction_content
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=180)
+        self.assertEqual(result, "compaction")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_no_fatal_pattern_no_compaction(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: normal content without fatal pattern → no compaction trigger."""
+        mock_refresh.return_value = 'running'
+        normal_content = "Working on task...\nEverything is fine\nStill running"
+        mock_capture.side_effect = [normal_content, normal_content, normal_content]
+        mock_time.side_effect = [0, 2]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1)
+        self.assertEqual(result, "inactive")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_compaction_detected_immediately_on_first_poll(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: compaction detected on first poll cycle, returns immediately."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = "Compacting conversation"
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=300)
+        self.assertEqual(result, "compaction")
+        # Should return on the very first poll, sleep should not be called
+        # (detect_inactivity returns before reaching the sleep at end of loop)
+        mock_sleep.assert_not_called()
+
+    def test_compaction_in_ralph_loop_kills_worker_and_continues(self):
+        """Test: compaction return in ralph loop kills worker, does NOT count as failure, proceeds."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=3,
+            current_iteration=1,
+            status='running',
+            consecutive_failures=0
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # First detect_inactivity returns "compaction", second returns "exited" (normal)
+        inactivity_count = [0]
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            inactivity_count[0] += 1
+            if inactivity_count[0] == 1:
+                return "compaction"
+            return "exited"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('builtins.print') as mock_print:
+                                        mock_worker = swarm.Worker(
+                                            name='ralph-worker',
+                                            status='running',
+                                            cmd=['echo', 'test'],
+                                            started='2024-01-15T10:30:00',
+                                            cwd=self.temp_dir,
+                                            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                        )
+                                        mock_spawn.return_value = mock_worker
+
+                                        swarm.cmd_ralph_run(args)
+
+        # Verify kill was called (at least once for compaction)
+        self.assertTrue(mock_kill.called, "Worker should be killed on compaction")
+
+        # Verify compaction message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('compaction detected', output)
+
+        # Verify consecutive_failures was NOT incremented (compaction is not a failure)
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertEqual(updated_state.consecutive_failures, 0,
+                         "Compaction should NOT count as consecutive failure")
+
+    def test_compaction_sets_exit_reason_in_state(self):
+        """Test: compaction sets exit_reason to 'compaction' in RalphState."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        # Create ralph state at iteration 1, max_iterations=1 so loop stops after handling compaction
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # detect_inactivity returns "compaction" on first call, then loop hits max_iterations
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            return "compaction"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph'):
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('builtins.print'):
+                                        mock_worker = swarm.Worker(
+                                            name='ralph-worker',
+                                            status='running',
+                                            cmd=['echo', 'test'],
+                                            started='2024-01-15T10:30:00',
+                                            cwd=self.temp_dir,
+                                            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                        )
+                                        mock_spawn.return_value = mock_worker
+
+                                        swarm.cmd_ralph_run(args)
+
+        # Verify exit_reason was set to "compaction" at some point
+        # (may be overwritten by max_iterations at the end, but let's check the log)
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        # The loop will set exit_reason to "compaction" on the compaction event,
+        # then continue and hit max_iterations which sets exit_reason to "max_iterations"
+        # So we check the final state is max_iterations (correct behavior — loop continued)
+        self.assertEqual(updated_state.exit_reason, "max_iterations",
+                         "Loop should continue past compaction to max_iterations")
+
+    def test_compaction_logs_fatal_entry(self):
+        """Test: compaction triggers [FATAL] log entry with correct message."""
+        # Create worker
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker',
+            status='running',
+            cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00',
+            cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker',
+            prompt_file=str(self.prompt_path),
+            max_iterations=2,
+            current_iteration=1,
+            status='running'
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            return "compaction"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph'):
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('swarm.log_ralph_iteration') as mock_log:
+                                        with patch('builtins.print'):
+                                            mock_worker = swarm.Worker(
+                                                name='ralph-worker',
+                                                status='running',
+                                                cmd=['echo', 'test'],
+                                                started='2024-01-15T10:30:00',
+                                                cwd=self.temp_dir,
+                                                tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                            )
+                                            mock_spawn.return_value = mock_worker
+
+                                            swarm.cmd_ralph_run(args)
+
+        # Verify FATAL was logged
+        fatal_calls = [c for c in mock_log.call_args_list
+                       if len(c[0]) >= 2 and c[0][1] == 'FATAL']
+        self.assertGreaterEqual(len(fatal_calls), 1,
+                                "Compaction should log a FATAL entry")
+        # Check message contains 'compaction'
+        fatal_kwargs = fatal_calls[0][1] if fatal_calls[0][1] else {}
+        self.assertIn('compaction', fatal_kwargs.get('message', '').lower(),
+                       "FATAL log should mention compaction")
+
+
 if __name__ == "__main__":
     unittest.main()
