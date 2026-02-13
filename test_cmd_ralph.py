@@ -9591,6 +9591,131 @@ class TestRalphSpawnCheckDoneContinuous(unittest.TestCase):
         self.assertFalse(ralph_state.check_done_continuous)
 
 
+class TestDonePatternAutoEnablesContinuous(unittest.TestCase):
+    """Test that --done-pattern auto-enables --check-done-continuous."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir) / ".swarm"
+        swarm.RALPH_DIR = Path(self.temp_dir) / ".swarm" / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / ".swarm" / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / ".swarm" / "state.lock"
+        Path('test_prompt.md').write_text('test prompt content')
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        os.chdir(self.original_cwd)
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_args(self, name, done_pattern=None, check_done_continuous=None):
+        """Helper to create a Namespace with common ralph spawn args."""
+        return Namespace(
+            ralph_command='spawn',
+            name=name,
+            prompt_file='test_prompt.md',
+            max_iterations=10,
+            inactivity_timeout=60,
+            done_pattern=done_pattern,
+            check_done_continuous=check_done_continuous,
+            no_run=True,
+            worktree=False,
+            session=None,
+            tmux_socket=None,
+            branch=None,
+            worktree_dir=None,
+            tags=[],
+            env=[],
+            cwd=None,
+            ready_wait=False,
+            ready_timeout=120,
+            cmd=['--', 'echo', 'test']
+        )
+
+    def test_done_pattern_auto_enables_continuous(self):
+        """--done-pattern without explicit flag auto-enables check_done_continuous."""
+        args = self._make_args('auto-enable', done_pattern='ALL_DONE', check_done_continuous=None)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('auto-enable')
+        self.assertIsNotNone(ralph_state)
+        self.assertTrue(ralph_state.check_done_continuous,
+            "check_done_continuous should be auto-enabled when --done-pattern is set")
+
+    def test_no_check_done_continuous_overrides_auto_enable(self):
+        """--no-check-done-continuous explicitly disables even with --done-pattern."""
+        args = self._make_args('no-override', done_pattern='ALL_DONE', check_done_continuous=False)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('no-override')
+        self.assertIsNotNone(ralph_state)
+        self.assertFalse(ralph_state.check_done_continuous,
+            "check_done_continuous should be False when --no-check-done-continuous is explicit")
+
+    def test_explicit_check_done_continuous_with_done_pattern(self):
+        """--check-done-continuous explicit True with --done-pattern stays True."""
+        args = self._make_args('explicit-true', done_pattern='ALL_DONE', check_done_continuous=True)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('explicit-true')
+        self.assertIsNotNone(ralph_state)
+        self.assertTrue(ralph_state.check_done_continuous,
+            "check_done_continuous should be True when explicitly set")
+
+    def test_no_done_pattern_defaults_to_false(self):
+        """Without --done-pattern, check_done_continuous defaults to False."""
+        args = self._make_args('no-pattern', done_pattern=None, check_done_continuous=None)
+
+        with patch('swarm.create_tmux_window'):
+            with patch('swarm.get_default_session_name', return_value='swarm-test'):
+                with patch('swarm.send_prompt_to_worker', return_value=""):
+                    with patch('builtins.print'):
+                        swarm.cmd_ralph_spawn(args)
+
+        ralph_state = swarm.load_ralph_state('no-pattern')
+        self.assertIsNotNone(ralph_state)
+        self.assertFalse(ralph_state.check_done_continuous,
+            "check_done_continuous should default to False without --done-pattern")
+
+    def test_argparse_boolean_optional_action(self):
+        """Verify argparse recognizes --check-done-continuous and --no-check-done-continuous."""
+        swarm_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'swarm.py')
+        result = subprocess.run(
+            [sys.executable, swarm_py, 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--check-done-continuous', result.stdout)
+        self.assertIn('--no-check-done-continuous', result.stdout)
+
+
 class TestRalphLoopContinuousDonePattern(unittest.TestCase):
     """Test ralph loop handles continuous done pattern checking correctly."""
 

@@ -4012,9 +4012,9 @@ def main() -> None:
     ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
                                help="Regex pattern to stop the loop when matched in output. "
                                     "Default: none. Example: '/done' or 'All tasks complete'.")
-    ralph_spawn_p.add_argument("--check-done-continuous", action="store_true",
+    ralph_spawn_p.add_argument("--check-done-continuous", action=argparse.BooleanOptionalAction, default=None,
                                help="Check done pattern continuously during monitoring, not just after agent exit. "
-                                    "Use when the done signal may appear mid-iteration.")
+                                    "Auto-enabled when --done-pattern is set. Use --no-check-done-continuous to disable.")
     ralph_spawn_p.add_argument("--no-run", action="store_true",
                                help="Spawn worker only, don't start monitoring loop. "
                                     "Use 'swarm ralph run <name>' to start the loop later.")
@@ -5510,6 +5510,13 @@ def cmd_ralph_spawn(args) -> None:
         print(f"swarm: error: prompt file not found: {args.prompt_file}", file=sys.stderr)
         sys.exit(1)
 
+    # Auto-enable --check-done-continuous when --done-pattern is set (unless explicitly disabled)
+    check_done = getattr(args, 'check_done_continuous', None)
+    if args.done_pattern and check_done is None:
+        args.check_done_continuous = True
+    elif check_done is None:
+        args.check_done_continuous = False
+
     # Warn for high iteration count
     if args.max_iterations > 50:
         print("swarm: warning: high iteration count (>50) may consume significant resources", file=sys.stderr)
@@ -5691,7 +5698,7 @@ def cmd_ralph_spawn(args) -> None:
             last_iteration_started=datetime.now().isoformat(),
             inactivity_timeout=args.inactivity_timeout,
             done_pattern=args.done_pattern,
-            check_done_continuous=getattr(args, 'check_done_continuous', False),
+            check_done_continuous=bool(args.check_done_continuous),
         )
         save_ralph_state(ralph_state)
         ralph_state_created = True

@@ -60,7 +60,7 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 2: Done-Pattern Auto-Enables Continuous Check
 
-- [ ] **2.1 Make `--check-done-continuous` default True when `--done-pattern` set**
+- [x] **2.1 Make `--check-done-continuous` default True when `--done-pattern` set**
   - Change `--check-done-continuous` from `store_true` to `BooleanOptionalAction` (~line 4011)
     - This gives both `--check-done-continuous` and `--no-check-done-continuous`
     - Default: `None`
@@ -69,7 +69,7 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
   - If `args.check_done_continuous` is explicitly `False` (via `--no-check-done-continuous`), respect it
   - File: `swarm.py` (argparse setup + `cmd_ralph_spawn()`)
 
-- [ ] **2.2 Add unit tests for auto-enable behavior**
+- [x] **2.2 Add unit tests for auto-enable behavior**
   - Test: `--done-pattern X` without explicit flag → `check_done_continuous` is True
   - Test: `--done-pattern X --no-check-done-continuous` → `check_done_continuous` is False
   - Test: `--done-pattern X --check-done-continuous` → `check_done_continuous` is True
