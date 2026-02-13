@@ -26,16 +26,17 @@ Named after the [Ralph Wiggum technique](https://github.com/ghuntley/how-to-ralp
 
 **Command**:
 ```bash
-swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <command>
+swarm ralph spawn --name <name> --prompt-file <path> -- <command>
 ```
 
 **Inputs**:
 - `--name` (str, required): Unique worker identifier
 - `--prompt-file` (str, required): Path to prompt file read each iteration
-- `--max-iterations` (int, required): Maximum number of loop iterations
+- `--max-iterations` (int, optional): Maximum number of loop iterations (default: 50)
 - `--no-run` (bool, optional): Spawn worker but don't start monitoring loop (default: false)
 - `--replace` (bool, optional): Auto-clean existing worker before spawn (default: false)
 - `--clean-state` (bool, optional): Clear ralph state without affecting worker/worktree (default: false)
+- `--worktree` (bool, optional): Create isolated git worktree (default: true). Use `--no-worktree` to disable.
 - `--tmux` (bool, optional): No-op for consistency with `swarm spawn` (ralph always uses tmux)
 - `-- <command>` (required): Command to spawn (e.g., `claude`)
 
@@ -48,7 +49,7 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
    c. Remove worktree if present
    d. Remove ralph state directory
 4. If `--clean-state` specified: remove ralph state directory (without affecting worker/worktree)
-5. Create worker and ralph state
+5. Create worker and ralph state (worktree created by default; use `--no-worktree` to disable)
 6. Warn if `--max-iterations` exceeds 50
 7. **Auto-start loop**: Unless `--no-run` is specified, automatically start the monitoring loop after spawning
 
@@ -70,8 +71,9 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 
 **Inputs**:
 - `--inactivity-timeout` (int, optional): Seconds of screen stability before restart (default: 180). Increase for repos with slow CI/pre-commit hooks.
-- `--done-pattern` (str, optional): Regex pattern that stops the loop when matched in output
-- `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit (default: false)
+- `--done-pattern` (str, optional): Regex pattern that stops the loop when matched in output. When specified, `--check-done-continuous` is automatically enabled unless explicitly disabled with `--no-check-done-continuous`.
+- `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit. Default: true when `--done-pattern` is set, false otherwise. Use `--no-check-done-continuous` to disable.
+- `--max-context` (int, optional): Context usage percentage threshold (e.g., 60). When reached, nudge agent to commit and exit. At threshold + 15%, force-kill the iteration. Default: none (disabled).
 
 **Behavior**:
 1. **Initialize**: Create ralph state file, set iteration to 0
@@ -81,14 +83,18 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
    c. Spawn agent with prompt content typed into tmux pane after ready detection
    d. Log iteration start with timestamp
 3. **Monitor**:
-   a. Wait for agent to exit OR inactivity timeout
+   a. Wait for agent to exit OR inactivity timeout OR fatal pattern detected
    b. If `--check-done-continuous`, check done pattern every poll cycle
    c. If `--done-pattern` specified (without continuous), check output after exit
+   d. If fatal pattern detected (see Fatal Pattern Detection), SIGTERM agent immediately
+   e. If tmux pane capture fails (CalledProcessError — window gone), treat as agent exit (see Window Loss Handling)
+   f. If `--max-context` specified, check context percentage every poll cycle (see Context Threshold Enforcement)
 4. **Evaluate**:
-   a. If done pattern matched → stop loop, exit 0
+   a. If done pattern matched → SIGTERM agent, stop loop, exit 0
    b. If max iterations reached → stop loop, exit 0
    c. If agent exited → continue to restart
    d. If inactivity timeout → kill agent, continue to restart
+   e. If fatal pattern matched → agent already killed, continue to restart
 5. **Handle Failures**:
    a. Track consecutive failures (non-zero exit codes)
    b. Apply exponential backoff: 1s, 2s, 4s, 8s, ... up to 5 min max
@@ -120,8 +126,10 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 1. Poll screen content every 2 seconds
 2. Compare normalized content hash to previous
 3. If unchanged, accumulate stable time
-4. If changed, reset stable time to 0
+4. If changed, reset stable time to 0 and update `last_change_timestamp` to current time
 5. When stable time >= timeout, trigger restart
+
+**Timestamp Tracking**: The monitor maintains a `last_change_timestamp` (datetime) updated every time the screen hash changes. This is used by `swarm ralph status` to display "Last screen change: Xs ago". Initialized to the iteration start time.
 
 ### Stuck Pattern Detection
 
@@ -129,7 +137,7 @@ swarm ralph spawn --name <name> --prompt-file <path> --max-iterations <n> -- <co
 
 During each 2-second poll cycle, after hashing screen content for inactivity detection, check the normalized content against known stuck patterns. When detected, log a `[WARN]` entry to `iterations.log` immediately (don't wait for timeout).
 
-**Stuck Patterns**:
+**Stuck Patterns** (warn-only):
 
 | Pattern | Warning message |
 |---------|----------------|
@@ -148,6 +156,84 @@ During each 2-second poll cycle, after hashing screen content for inactivity det
 ```
 2026-02-12T13:24:30 [WARN] iteration 1: Worker stuck at login prompt. Check auth credentials.
 ```
+
+### Fatal Pattern Detection
+
+**Description**: Detect patterns that indicate the iteration is irrecoverably broken. Unlike stuck patterns (which warn), fatal patterns trigger an **immediate kill and restart** of the iteration.
+
+**Fatal Patterns**:
+
+| Pattern | Log message | Rationale |
+|---------|-------------|-----------|
+| `Compacting conversation` | `Compaction detected — killing iteration` | After compaction, the agent loses working memory and produces low-quality output. The iteration is effectively dead. |
+
+**Behavior**:
+1. Checked during each 2-second poll cycle, after stuck pattern detection
+2. If a fatal pattern is detected:
+   a. Log `[FATAL]` to iterations.log immediately
+   b. SIGTERM the agent process (same kill mechanism as inactivity timeout)
+   c. Do NOT wait for inactivity timeout — kill immediately
+   d. Continue to next iteration (counts as a normal restart, not a failure)
+3. Only trigger once per iteration (subsequent detections ignored during shutdown)
+
+**Log Format**:
+```
+2026-02-12T13:24:30 [FATAL] iteration 3: Compaction detected — killing iteration
+```
+
+**Design Note**: Fatal patterns are not configurable via CLI flags. They represent conditions where continuing the iteration is strictly wasteful. New fatal patterns can be added to the source code as they are discovered.
+
+### Window Loss Handling
+
+**Description**: Handle the case where the tmux window disappears during monitoring (agent process exited, window was manually killed, etc.).
+
+**Problem**: During the monitor polling loop, `tmux_capture_pane()` raises `CalledProcessError` if the tmux window no longer exists. Without handling this, the monitor crashes instead of proceeding to the next iteration.
+
+**Behavior**:
+1. If `tmux_capture_pane()` raises `CalledProcessError` during the monitor loop:
+   a. Treat as agent exit (iteration complete)
+   b. Log: `[END] iteration N — tmux window lost`
+   c. Check done pattern against the **last successfully captured** pane content
+   d. If done pattern matches → stop loop
+   e. Otherwise → continue to next iteration (normal restart)
+2. The capture failure is NOT counted as a consecutive failure (it's a normal exit path)
+
+**Log Format**:
+```
+2026-02-12T14:05:00 [END] iteration 5 — tmux window lost, checking last output
+```
+
+### Context Threshold Enforcement
+
+**Description**: Enforce a maximum context usage percentage for the agent, independent of the agent's own self-monitoring.
+
+**Command**:
+```bash
+swarm ralph spawn --name dev --prompt-file PROMPT.md --max-context 60 -- claude
+```
+
+**Inputs**:
+- `--max-context` (int, optional): Context usage percentage threshold (1-100). Default: none (disabled).
+
+**Behavior**:
+1. During each 2-second poll cycle, regex-scan the captured pane content for a context percentage indicator (pattern: `(\d+)%` in the status bar area — last 3 lines of pane)
+2. **At threshold**: Send a nudge message to the tmux pane: `"You are at {n}% context. Commit your work and exit now."`
+3. **At threshold + 15%**: SIGTERM the agent immediately (same kill mechanism as inactivity timeout)
+4. Log both the nudge and the kill to iterations.log
+
+**Nudge behavior**:
+- The nudge is sent once per threshold crossing (not repeatedly)
+- Uses `tmux send-keys` with the pre-clear sequence (Escape → Ctrl-U → message → Enter)
+
+**Log Format**:
+```
+2026-02-12T14:10:00 [WARN] iteration 3: Context at 62% (threshold: 60%), sent exit nudge
+2026-02-12T14:15:00 [FATAL] iteration 3: Context at 76% (threshold+15: 75%), killing iteration
+```
+
+**Limitations**:
+- Depends on the agent CLI displaying context percentage in the terminal. If the percentage is not visible in the pane capture, this feature has no effect.
+- The regex `(\d+)%` may match other percentages in the output. Scanning is restricted to the last 3 lines to reduce false positives.
 
 ### Pre-flight Validation
 
@@ -225,8 +311,10 @@ This enables the core ralph pattern: each iteration builds on the previous one's
   "total_failures": 2,
   "done_pattern": "regex|null",
   "inactivity_timeout": 300,
-  "check_done_continuous": false,
-  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|null",
+  "check_done_continuous": true,
+  "max_context": 60,
+  "last_change_timestamp": "2024-01-15T12:46:30.000000",
+  "exit_reason": "done_pattern|max_iterations|killed|failed|monitor_disconnected|compaction|context_threshold|null",
   "prompt_baseline_content": "string (pane content captured after prompt injection, for done-pattern self-match prevention)"
 }
 ```
@@ -319,18 +407,23 @@ swarm ralph logs <name> [--live] [--lines N]
 
 **Inputs**:
 - `--done-pattern` (str, optional): Regex pattern to match
-- `--check-done-continuous` (bool, optional): Check done pattern during monitoring, not just after exit (default: false)
+- `--check-done-continuous` (bool): Check done pattern during monitoring, not just after exit. Default: true when `--done-pattern` is set. Use `--no-check-done-continuous` to disable.
 
-**Default Behavior** (without `--check-done-continuous`):
+**Default Behavior** (with `--no-check-done-continuous`):
 1. After each agent exit, capture recent output
 2. Match regex against output
 3. If matched, stop loop with success
 
-**Continuous Checking** (with `--check-done-continuous`):
+**Continuous Checking** (default when `--done-pattern` is set):
 1. During the inactivity detection polling loop (every 2 seconds)
 2. Check captured output against done pattern
-3. If matched, immediately stop loop (don't wait for exit or timeout)
-4. Useful when you want to stop as soon as "All tasks complete" appears
+3. If matched:
+   a. Log: `"[ralph] <name>: done pattern matched, stopping loop"`
+   b. SIGTERM the agent process immediately (same kill mechanism as inactivity timeout)
+   c. Wait up to 10 seconds for clean exit
+   d. If still alive after 10 seconds, SIGKILL
+   e. Stop loop, exit 0
+4. The agent is actively terminated — ralph does NOT wait for the agent to self-exit
 
 **Self-Match Prevention**: When using `--check-done-continuous`, the done pattern is checked against the tmux pane buffer. Since `send_prompt_to_worker()` types the prompt content into the terminal via `tmux send-keys`, the prompt text itself appears in the pane buffer. Without mitigation, any done pattern that appears literally in the prompt file would self-match immediately.
 
@@ -406,17 +499,23 @@ swarm ralph resume <name>
 
 **Description**: Send messages to the agent during an iteration.
 
-**Command**:
+**Steering Pattern** (recommended for director agents):
+```bash
+swarm interrupt <name>              # Ctrl-C to stop current generation
+swarm send <name> "new instructions"  # Send redirected instructions
+```
+
+**Simple Message** (when agent is idle/waiting for input):
 ```bash
 swarm send <name> "message"
 ```
 
 Since ralph workers are tmux workers, the standard `swarm send` command works. Use this to:
-- Redirect the agent: `swarm send agent "skip that approach, try X instead"`
+- Redirect the agent: `swarm interrupt agent && swarm send agent "skip that approach, try X instead"`
 - Request wrap-up: `swarm send agent "please wrap up and commit your changes"`
 - Provide information: `swarm send agent "the API endpoint changed to /v2/users"`
 
-The message is typed into the tmux pane and becomes part of the agent's input.
+**Important**: If the agent is mid-generation (actively producing output), `swarm send` alone may not work — the agent's CLI may not accept input during generation. Use `swarm interrupt` first to cancel the current generation, then `swarm send` with new instructions. The `send` command automatically clears any pending input (Escape + Ctrl-U) before typing, which handles autocomplete dropdowns.
 
 ### Success Output
 
@@ -674,6 +773,8 @@ Total duration: 5h 0m
 | `killed` | Stopped via `swarm kill` or `swarm ralph pause` |
 | `failed` | 5 consecutive failures |
 | `monitor_disconnected` | Monitor process lost connection (worker may still be running) |
+| `compaction` | Fatal pattern detected (context compaction) |
+| `context_threshold` | Context usage exceeded `--max-context` + 15% |
 
 ### Log Streaming
 
@@ -741,30 +842,32 @@ done
 |----------|------|----------|---------|-------------|
 | `--name` | str | Yes | - | Unique worker identifier |
 | `--prompt-file` | str | Yes | - | Path to prompt file |
-| `--max-iterations` | int | Yes | - | Maximum loop iterations |
+| `--max-iterations` | int | No | 50 | Maximum loop iterations. Values > 50 show a resource warning. |
 | `--inactivity-timeout` | int | No | 180 | Screen stability timeout (seconds). Increase for repos with slow CI hooks. |
-| `--done-pattern` | str | No | null | Regex to stop loop |
-| `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
+| `--done-pattern` | str | No | null | Regex to stop loop. Automatically enables `--check-done-continuous`. |
+| `--check-done-continuous` | bool | No | true (when `--done-pattern` set) | Check done pattern during monitoring. Use `--no-check-done-continuous` to check only after exit. |
+| `--max-context` | int | No | null | Context usage % threshold (1-100). Nudge at threshold, kill at threshold+15%. |
 | `--no-run` | bool | No | false | Spawn only, don't start loop |
 | `--foreground` | bool | No | false | Block while loop runs (for human terminal use) |
 | `--replace` | bool | No | false | Auto-clean existing worker/worktree/state before spawn |
 | `--clean-state` | bool | No | false | Clear ralph state without affecting worker/worktree |
 | `--tmux` | bool | No | (no-op) | Accepted for consistency with `swarm spawn`, but ralph always uses tmux |
-| `--worktree` | bool | No | false | Create isolated git worktree |
+| `--worktree` | bool | No | true | Create isolated git worktree. Use `--no-worktree` to disable (e.g., Docker sandbox). |
 
 ### Ralph Management Subcommands
 
 | Command | Description |
 |---------|-------------|
-| `swarm ralph spawn --name <n> --prompt-file <f> --max-iterations <n> -- <cmd>` | Spawn ralph worker and start loop |
+| `swarm ralph spawn --name <n> --prompt-file <f> -- <cmd>` | Spawn ralph worker and start loop |
 | `swarm ralph spawn --no-run ...` | Spawn ralph worker without starting loop |
 | `swarm ralph run <name>` | Run the monitoring loop for existing worker |
+| `swarm ralph stop <name>` | Alias for `swarm kill <name>`. Kills worker, stops ralph loop. |
 | `swarm ralph pause <name>` | Pause ralph loop |
 | `swarm ralph resume <name>` | Resume ralph loop |
-| `swarm ralph status <name>` | Show ralph loop status |
+| `swarm ralph status <name>` | Show ralph loop status (iteration progress, NOT worker process status — use `swarm status` for that) |
 | `swarm ralph list` | List all ralph workers |
 | `swarm ralph ls` | Alias for `swarm ralph list` (consistency with `swarm ls`) |
-| `swarm ralph logs <name>` | Show iteration history log |
+| `swarm ralph logs <name>` | Show iteration history log (NOT worker terminal output — use `swarm logs` for that) |
 | `swarm ralph logs <name> --live` | Tail iteration log |
 | `swarm ralph logs <name> --lines N` | Show last N entries |
 | `swarm ralph clean <name>` | Remove ralph state for a worker |
@@ -855,12 +958,13 @@ Mounting `~/.claude/.credentials.json` into Docker containers does not reliably 
 
 ### Scenario: Basic ralph loop (auto-start, non-blocking)
 - **Given**: Prompt file exists at `./PROMPT.md`
-- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 10 -- claude`
+- **When**: `swarm ralph spawn --name agent --prompt-file ./PROMPT.md -- claude`
 - **Then**:
-  - Worker spawned in tmux mode
+  - Worker spawned in tmux mode with worktree (default)
+  - Max iterations defaults to 50
   - Monitoring loop starts in background
   - Command returns immediately with status output
-  - Output: "spawned agent (tmux: swarm:agent) [ralph mode: iteration 1/10]"
+  - Output: "spawned agent (tmux: swarm:agent) [ralph mode: iteration 1/50]"
   - Output includes monitoring commands (peek, status, logs, kill)
   - Ralph state created at `~/.swarm/ralph/agent/state.json`
 
@@ -909,13 +1013,16 @@ Mounting `~/.claude/.credentials.json` into Docker containers does not reliably 
   - Loop exits with code 0
   - Ralph state status set to "stopped"
 
-### Scenario: Continuous done pattern checking
-- **Given**: Ralph worker with `--done-pattern "All tasks complete" --check-done-continuous`
+### Scenario: Continuous done pattern checking (default with --done-pattern)
+- **Given**: Ralph worker with `--done-pattern "All tasks complete"`
 - **When**: Agent output contains "All tasks complete" (agent still running)
 - **Then**:
+  - Continuous checking enabled by default (--done-pattern implies --check-done-continuous)
   - Pattern detected during monitoring poll
   - Log: "[ralph] agent: done pattern matched, stopping loop"
-  - Loop exits immediately (doesn't wait for agent exit)
+  - Agent SIGTERM'd immediately
+  - Wait up to 10s for clean exit, SIGKILL if needed
+  - Loop exits with code 0
   - Ralph state status set to "stopped"
 
 ### Scenario: Max iterations reached
@@ -1123,6 +1230,56 @@ Mounting `~/.claude/.credentials.json` into Docker containers does not reliably 
   - tmux window dies silently
   - `send_prompt_to_worker()` fails with exit status 1
 
+### Scenario: Compaction detected kills iteration
+- **Given**: Ralph worker "agent" running, iteration 3/50
+- **When**: Agent's context is compacted; "Compacting conversation" appears in tmux pane
+- **Then**:
+  - Fatal pattern detected during poll cycle
+  - Log: "[FATAL] iteration 3: Compaction detected — killing iteration"
+  - Agent SIGTERM'd immediately (no inactivity timeout wait)
+  - Next iteration starts with fresh context
+  - Exit reason for iteration: `compaction`
+  - NOT counted as a consecutive failure
+
+### Scenario: Tmux window lost during monitoring
+- **Given**: Ralph worker "agent" running, iteration 5/50
+- **When**: Tmux window is killed externally (e.g., `tmux kill-window`)
+- **Then**:
+  - `tmux_capture_pane()` raises CalledProcessError
+  - Log: "[END] iteration 5 — tmux window lost, checking last output"
+  - Done pattern checked against last successfully captured content
+  - If no done pattern match → next iteration starts
+  - NOT counted as a consecutive failure
+
+### Scenario: Context threshold nudge and kill
+- **Given**: Ralph worker with `--max-context 60`, agent at 58% context
+- **When**: Agent reaches 62% context (visible in pane status bar)
+- **Then**:
+  - Log: "[WARN] iteration 3: Context at 62% (threshold: 60%), sent exit nudge"
+  - Nudge message sent: "You are at 62% context. Commit your work and exit now."
+  - Agent continues working
+- **When**: Agent reaches 76% context (threshold + 15% = 75%)
+- **Then**:
+  - Log: "[FATAL] iteration 3: Context at 76% (threshold+15: 75%), killing iteration"
+  - Agent SIGTERM'd immediately
+  - Next iteration starts
+
+### Scenario: Ralph stop alias
+- **Given**: Ralph worker "agent" running
+- **When**: `swarm ralph stop agent`
+- **Then**:
+  - Equivalent to `swarm kill agent`
+  - Worker terminated
+  - Ralph loop stops
+  - Output: "killed agent"
+
+### Scenario: Ralph spawn with --no-worktree (Docker)
+- **Given**: Using Docker sandbox for isolation
+- **When**: `swarm ralph spawn --name agent --prompt-file PROMPT.md --no-worktree -- ./sandbox.sh`
+- **Then**:
+  - Worker spawned without worktree (Docker provides isolation)
+  - Worktree default (true) overridden by --no-worktree
+
 ### Scenario: Docker container hits theme picker
 - **Given**: Fresh Docker container with no Claude Code preferences
 - **When**: `claude` starts inside container
@@ -1138,6 +1295,9 @@ Mounting `~/.claude/.credentials.json` into Docker containers does not reliably 
 - Prompt file can be absolute or relative path (resolved at spawn time)
 - Empty prompt file is allowed (agent receives empty input)
 - `--done-pattern` uses Python regex syntax
+- `--done-pattern` automatically enables `--check-done-continuous` unless `--no-check-done-continuous` is specified
+- `--max-iterations` defaults to 50 if not specified
+- `--worktree` defaults to true for ralph spawn; use `--no-worktree` for Docker sandbox
 - Backoff timer does not count toward inactivity timeout
 - Pausing during backoff wait immediately stops the wait
 - Resume after pause continues iteration count (does not reset)
@@ -1147,6 +1307,9 @@ Mounting `~/.claude/.credentials.json` into Docker containers does not reliably 
 - `--ready-wait` is implicit in ralph mode (always waits for ready)
 - Worktree mode (`--worktree`) is compatible with ralph mode - same worktree reused
 - `--no-run` returns immediately after spawn, useful for scripting
+- Fatal patterns (compaction) trigger immediate kill, not counted as consecutive failure
+- `tmux_capture_pane` failure (window gone) is treated as normal exit, not failure
+- `swarm ralph stop <name>` is an alias for `swarm kill <name>`
 
 ## Recovery Procedures
 
@@ -1287,4 +1450,8 @@ Verify by reading code first. Run tests. Update plan. Commit.
 - **Graceful shutdown**: SIGTERM to the ralph process should pause the loop and allow current agent to complete.
 - **Resource management**: Each iteration creates a fresh agent with a new context window, consuming API tokens.
 - **Auto-start default**: `ralph spawn` starts the loop in the background by default and returns immediately. Use `--foreground` to block. Use `--no-run` to skip starting the loop entirely.
-- **Worktree persistence**: When using `--worktree`, the same worktree is reused across all iterations. Work persists via git commits.
+- **Worktree persistence**: When using `--worktree` (default for ralph), the same worktree is reused across all iterations.
+- **Done-pattern termination**: In continuous mode, done-pattern match triggers SIGTERM → 10s grace → SIGKILL. The agent is not left running.
+- **Fatal pattern kill**: Fatal patterns (compaction) use the same SIGTERM → SIGKILL mechanism. Restarts are normal (not failure backoff).
+- **Window loss recovery**: CalledProcessError from tmux_capture_pane during polling is caught and treated as agent exit.
+- **Ralph stop alias**: `swarm ralph stop <name>` delegates to `cmd_kill()` with the given worker name. Accepts `--rm-worktree` and `--force-dirty` flags. Work persists via git commits.

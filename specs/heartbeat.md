@@ -124,6 +124,7 @@ Stored in `~/.swarm/heartbeats/<worker-name>.json`:
 swarm heartbeat start <worker> --interval <duration> [--expire <duration>] [--message <text>] [--force]
 swarm heartbeat stop <worker>
 swarm heartbeat list
+swarm heartbeat ls                # Alias for list (consistency with swarm ls)
 swarm heartbeat status <worker>
 swarm heartbeat pause <worker>
 swarm heartbeat resume <worker>
@@ -132,7 +133,7 @@ swarm heartbeat resume <worker>
 ### Help Text
 
 ```
-usage: swarm heartbeat [-h] {start,stop,list,status,pause,resume} ...
+usage: swarm heartbeat [-h] {start,stop,list,ls,status,pause,resume} ...
 
 Periodic nudges to help workers recover from rate limits.
 
@@ -142,10 +143,11 @@ recover from API rate limits that renew on fixed intervals (e.g., every
 if the agent is stuck, it retries; if working, it ignores the nudge.
 
 positional arguments:
-  {start,stop,list,status,pause,resume}
+  {start,stop,list,ls,status,pause,resume}
     start               Start heartbeat for a worker
     stop                Stop heartbeat for a worker
     list                List all heartbeats
+    ls                  Alias for list (consistency with swarm ls)
     status              Show heartbeat status
     pause               Pause heartbeat temporarily
     resume              Resume paused heartbeat

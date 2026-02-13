@@ -52,15 +52,16 @@ swarm <command> [options] [arguments]
 | Subcommand | Description |
 |------------|-------------|
 | `ralph spawn` | Spawn a new ralph worker |
-| `ralph status` | Get ralph worker status |
+| `ralph stop` | **Alias for `swarm kill`**. Kills worker and stops ralph loop. |
+| `ralph status` | Get ralph **loop** status (iteration progress, ETA). For **worker process** status, use `swarm status`. |
 | `ralph pause` | Pause ralph loop |
 | `ralph resume` | Resume ralph loop |
-| `ralph logs` | View iteration history log |
+| `ralph logs` | View **iteration history** log. For **worker terminal** output, use `swarm logs`. |
 | `ralph init` | Create PROMPT.md template |
 | `ralph template` | Output template to stdout |
 | `ralph list` | List ralph workers |
 | `ralph ls` | Alias for `ralph list` (consistency with `swarm ls`) |
-| `ralph clean` | Remove ralph state for one or all workers |
+| `ralph clean` | Remove **ralph state** only. For worker cleanup, use `swarm clean`. |
 | `ralph run` | Run ralph loop (internal) |
 
 ### Ralph Spawn Arguments
@@ -73,16 +74,17 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 |----------|------|----------|---------|-------------|
 | `--name` | string | Yes | - | Unique worker identifier |
 | `--prompt-file` | string | Yes | - | Path to prompt file read each iteration |
-| `--max-iterations` | int | Yes | - | Maximum number of loop iterations |
+| `--max-iterations` | int | No | 50 | Maximum number of loop iterations |
 | `--inactivity-timeout` | int | No | 180 | Screen stability timeout (seconds) |
-| `--done-pattern` | string | No | null | Regex pattern to stop loop |
-| `--check-done-continuous` | bool | No | false | Check done pattern during monitoring |
+| `--done-pattern` | string | No | null | Regex pattern to stop loop. Auto-enables `--check-done-continuous`. |
+| `--check-done-continuous` | bool | No | true (with `--done-pattern`) | Check done pattern during monitoring. Use `--no-check-done-continuous` to disable. |
+| `--max-context` | int | No | null | Context usage % threshold (1-100). Nudge at threshold, kill at +15%. |
 | `--no-run` | bool | No | false | Spawn only, don't start loop |
 | `--foreground` | bool | No | false | Block while loop runs (for human terminal use) |
 | `--replace` | bool | No | false | Auto-clean existing worker before spawn |
 | `--clean-state` | bool | No | false | Clear ralph state without affecting worker |
 | `--tmux` | bool | No | (no-op) | Accepted for consistency, ralph always uses tmux |
-| `--worktree` | bool | No | false | Create git worktree |
+| `--worktree` | bool | No | true | Create git worktree. Use `--no-worktree` for Docker sandbox. |
 | `-- <cmd>` | remainder | Yes | - | Command to run |
 
 ### Ralph Logs Arguments
@@ -107,6 +109,25 @@ Ralph spawn accepts most of the same arguments as regular `spawn`, plus ralph-sp
 **`--worktree` + Docker sandbox**: `--worktree` should be omitted when the worker command is a Docker-based sandbox (e.g., `./sandbox.sh`). Docker provides its own filesystem isolation, making worktrees redundant. The worktree path on the host may not map correctly inside the container.
 
 **`--done-pattern` + `--check-done-continuous`**: The prompt text is typed into the tmux pane via `send-keys`. Baseline filtering captures the pane content after prompt injection and excludes it from done-pattern scanning, preventing self-match. Using a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prompt prose is still recommended as a defense-in-depth measure.
+
+### Command Disambiguation
+
+Several commands exist at both the base level and under subcommand groups with **different semantics**. Help text for these commands MUST include a disambiguation note.
+
+| Base Command | Ralph/Heartbeat Equivalent | Difference |
+|---|---|---|
+| `swarm status <name>` | `swarm ralph status <name>` | Base: worker process status (running/stopped). Ralph: loop iteration progress (7/50, ETA). |
+| `swarm logs <name>` | `swarm ralph logs <name>` | Base: worker terminal output (scrollback). Ralph: iteration history (start/stop timestamps). |
+| `swarm clean <name>` | `swarm ralph clean <name>` | Base: remove stopped worker from state registry. Ralph: remove ralph state files only. |
+| `swarm kill <name>` | `swarm ralph stop <name>` | Identical behavior. `ralph stop` is an alias for `swarm kill`. |
+| `swarm ls` | `swarm ralph ls` | Base: all workers. Ralph: only ralph-mode workers with ralph-specific columns. |
+
+**Alias Conventions**:
+- `swarm ralph stop <name>` → delegates to `swarm kill <name>` (accepts `--rm-worktree`, `--force-dirty`)
+- `swarm ralph ls` → alias for `swarm ralph list`
+- `swarm heartbeat ls` → alias for `swarm heartbeat list`
+
+**Help Text Requirement**: Every command that has a parallel version MUST include a "See Also" or inline note pointing to the other version. For example, `swarm logs --help` must mention `swarm ralph logs` and vice versa.
 
 ### Global Exit Codes
 
@@ -181,6 +202,7 @@ swarm: error: worktree has uncommitted changes
 | `--worktree` | Enable worktree isolation |
 | `--ready-wait` | Wait for agent ready |
 | `--no-enter` | Don't append Enter key |
+| `--raw` | Skip pre-clear sequence (Escape + Ctrl-U) |
 | `--all` | Apply to all workers |
 | `--rm-worktree` | Remove worktree on cleanup |
 | `--force-dirty` | Force operation on dirty worktree |

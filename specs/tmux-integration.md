@@ -141,16 +141,24 @@ tmux has-session -t <session>:<window>
 
 #### Send Keys
 
-**Description**: Send text to a tmux window.
+**Description**: Send text to a tmux window, optionally with input pre-clearing.
 
 **Inputs**:
 - `session` (str, required): Session name
 - `window` (str, required): Window name
 - `text` (str, required): Text to send
 - `enter` (bool, optional): Append Enter key (default: True)
+- `pre_clear` (bool, optional): Send Escape + Ctrl-U before text to dismiss autocomplete and clear pending input (default: True)
 - `socket` (str, optional): Tmux socket
 
-**Behavior**:
+**Behavior** (with `pre_clear=True`, the default):
+1. Build target: `<session>:<window>`
+2. Send Escape: `tmux send-keys -t <target> Escape`
+3. Send Ctrl-U: `tmux send-keys -t <target> C-u`
+4. Send text: `tmux send-keys -t <target> -l <text>`
+5. If enter: `tmux send-keys -t <target> Enter`
+
+**Behavior** (with `pre_clear=False`):
 1. Build target: `<session>:<window>`
 2. Send text: `tmux send-keys -t <target> -l <text>`
 3. If enter: `tmux send-keys -t <target> Enter`
@@ -158,8 +166,10 @@ tmux has-session -t <session>:<window>
 **Flags Used**:
 - `-t`: Target window
 - `-l`: Literal mode (send text as-is, no key interpretation)
+- `Escape`: Dismisses autocomplete dropdowns in agent CLIs
+- `C-u`: Clears current input line (readline kill-line)
 
-**Note**: Enter is sent as separate command for reliability.
+**Note**: Enter is sent as separate command for reliability. Escape and Ctrl-U are sent as tmux key names (not literal mode) so they are interpreted as control sequences.
 
 ### Pane Capture
 
@@ -236,17 +246,27 @@ Stored in worker record:
   - Window "worker2" added to existing session
   - Original window "old" unchanged
 
-### Scenario: Send text with Enter
+### Scenario: Send text with Enter (default pre-clear)
 - **Given**: Window "worker1" running agent CLI
 - **When**: `tmux_send("swarm", "worker1", "implement feature X")`
 - **Then**:
+  - Escape sent (dismiss autocomplete)
+  - Ctrl-U sent (clear pending input)
   - Text "implement feature X" appears in pane
   - Enter key pressed, submitting input
+
+### Scenario: Send text without pre-clear (raw)
+- **Given**: Window "worker1" running a bash shell
+- **When**: `tmux_send("swarm", "worker1", "ls -la", pre_clear=False)`
+- **Then**:
+  - Text "ls -la" sent directly (no Escape, no Ctrl-U)
+  - Enter key pressed
 
 ### Scenario: Send text without Enter
 - **Given**: Window "worker1" running
 - **When**: `tmux_send("swarm", "worker1", "partial", enter=False)`
 - **Then**:
+  - Escape and Ctrl-U sent first
   - Text "partial" appears in pane
   - No Enter pressed, cursor remains on same line
 

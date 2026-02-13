@@ -301,6 +301,65 @@ Pattern Format:
     "Task \d+ done"      - With regex
 ```
 
+## Disambiguation for Overlapping Commands
+
+Several commands exist at both the base level (`swarm <cmd>`) and under subcommand groups (`swarm ralph <cmd>`, `swarm heartbeat <cmd>`) with different semantics. These MUST include disambiguation in their help text.
+
+### Required Disambiguation Notes
+
+Commands that share a name with a parallel version must include an inline note in their description AND a "See Also" reference:
+
+**`swarm status` help must include**:
+```
+Shows worker PROCESS status (running/stopped).
+For ralph LOOP status (iteration progress, ETA): swarm ralph status <name>
+```
+
+**`swarm ralph status` help must include**:
+```
+Shows ralph LOOP status (iteration progress, ETA, failures).
+For worker PROCESS status (running/stopped): swarm status <name>
+```
+
+**`swarm logs` help must include**:
+```
+Shows worker TERMINAL output (tmux scrollback buffer).
+For ralph ITERATION history (start/stop timestamps): swarm ralph logs <name>
+```
+
+**`swarm ralph logs` help must include**:
+```
+Shows ralph ITERATION history (start/stop/duration for each iteration).
+For worker TERMINAL output (what the agent is doing now): swarm logs <name>
+```
+
+**`swarm clean` help must include**:
+```
+Removes stopped WORKERS from state registry.
+For ralph STATE cleanup (iterations.log, state.json): swarm ralph clean <name>
+```
+
+### Pattern
+
+For any command with a parallel version, the help description should:
+1. **Emphasize what THIS command shows** (bold/caps the distinguishing word)
+2. **Reference the alternative** with a one-line explanation of when to use it
+3. **Place the reference in See Also** section for discoverability
+
+### Example
+
+```python
+LOGS_HELP_DESCRIPTION = """\
+View worker TERMINAL output (tmux scrollback buffer).
+
+Shows what the agent is currently outputting in its terminal session.
+Use this when you want to see what the agent is doing right now.
+
+NOTE: For ralph iteration history (start/stop timestamps, durations),
+use: swarm ralph logs <name>
+"""
+```
+
 ## Implementation Checklist
 
 When adding or updating a command:
@@ -312,6 +371,7 @@ When adding or updating a command:
 - [ ] Related commands referenced
 - [ ] Warnings for destructive operations
 - [ ] Tips for common patterns
+- [ ] Disambiguation note if a parallel command exists (see above)
 
 ## Scenarios
 

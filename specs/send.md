@@ -52,19 +52,29 @@ The `send` command transmits text input to tmux-based workers. This enables orch
 
 ### Text Transmission
 
-**Description**: Send text to tmux window via send-keys.
+**Description**: Send text to tmux window via send-keys, with input clearing to handle autocomplete and pending input.
 
 **Inputs**:
 - `text` (str, required): Text to send
 - `--no-enter` (flag, optional): Don't append Enter key
+- `--raw` (flag, optional): Skip pre-clear sequence, send text directly via bare `send-keys` (for non-interactive or non-CLI targets)
 
-**Behavior**:
-1. Use `tmux send-keys -t <session>:<window> -l <text>` for literal text
+**Default Behavior** (pre-clear sequence):
+1. Send `Escape` to dismiss autocomplete dropdowns or cancel partial operations
+2. Send `Ctrl-U` to clear any pending input on the current line
+3. Use `tmux send-keys -t <session>:<window> -l <text>` for literal text
+4. Unless `--no-enter`, follow with `tmux send-keys -t <target> Enter`
+
+**Raw Mode** (`--raw`):
+1. Use `tmux send-keys -t <session>:<window> -l <text>` for literal text (no pre-clear)
 2. Unless `--no-enter`, follow with `tmux send-keys -t <target> Enter`
+
+**Why Pre-Clear is Default**: Agent CLIs like Claude Code have autocomplete dropdowns that intercept slash commands (e.g., `/exit` triggers a menu). Without clearing first, the Enter key may select from the autocomplete menu instead of submitting the intended text. The Escape + Ctrl-U sequence reliably dismisses autocomplete and clears any partial input before typing the new text.
 
 **Side Effects**:
 - Text appears in tmux window as if typed
 - Enter key submits the text (unless `--no-enter`)
+- Any previously pending input is cleared (unless `--raw`)
 
 ### Success Output
 
@@ -82,17 +92,28 @@ sent to <name>
 | `name` | str | No* | - | Worker name |
 | `text` | str | Yes | - | Text to send |
 | `--no-enter` | flag | No | false | Don't append Enter key |
+| `--raw` | flag | No | false | Skip pre-clear sequence (Escape + Ctrl-U). Use for non-CLI targets or when pre-clearing is undesirable. |
 | `--all` | flag | No* | false | Send to all tmux workers |
 
 *Either `name` or `--all` must be specified.
 
 ## Scenarios
 
-### Scenario: Send text to single worker
+### Scenario: Send text to single worker (default pre-clear)
 - **Given**: Worker "agent1" running in tmux
 - **When**: `swarm send agent1 "implement the login feature"`
 - **Then**:
+  - Escape sent (dismiss autocomplete)
+  - Ctrl-U sent (clear pending input)
   - Text "implement the login feature" sent to tmux window
+  - Enter key sent after text
+  - Output: "sent to agent1"
+
+### Scenario: Send in raw mode (no pre-clear)
+- **Given**: Worker "agent1" running in tmux
+- **When**: `swarm send agent1 "text" --raw`
+- **Then**:
+  - Text "text" sent directly via send-keys (no Escape, no Ctrl-U)
   - Enter key sent after text
   - Output: "sent to agent1"
 
@@ -100,6 +121,7 @@ sent to <name>
 - **Given**: Worker "agent1" running in tmux
 - **When**: `swarm send agent1 "partial text" --no-enter`
 - **Then**:
+  - Escape and Ctrl-U sent first (pre-clear)
   - Text "partial text" sent to tmux window
   - No Enter key appended
   - Output: "sent to agent1"
@@ -154,15 +176,25 @@ sent to <name>
 - **Then**:
   - Command uses: `tmux -L test-socket send-keys ...`
 
+### Scenario: Steering a mid-generation agent
+- **Given**: Worker "agent1" is actively generating output (mid-response)
+- **When**: Director wants to redirect the agent
+- **Then**:
+  - Use `swarm interrupt agent1` first (sends Ctrl-C to stop generation)
+  - Then `swarm send agent1 "try a different approach using X"`
+  - The pre-clear sequence in send handles any leftover input state
+
 ## Edge Cases
 
-- Empty text string is valid and will be sent
+- Empty text string is valid and will be sent (pre-clear still runs unless `--raw`)
 - Text with special characters sent literally (using `-l` flag)
 - Newlines in text are sent as-is (may cause multiple lines)
 - Tab characters are sent as literal tabs
 - Unicode text is supported
 - Very long text is sent in a single send-keys call
 - Quotes in text are handled correctly via literal mode
+- Pre-clear sequence (Escape + Ctrl-U) is harmless if no autocomplete is active
+- `--raw` combined with `--no-enter` sends bare text only (no pre-clear, no Enter)
 
 ## Recovery Procedures
 
@@ -174,6 +206,23 @@ tmux list-windows -t <session>
 # Check pane is responsive
 swarm attach <name>
 # Try typing manually
+```
+
+### Agent ignoring sent text (mid-generation)
+```bash
+# The agent may be generating output and not reading input
+# Interrupt first, then send
+swarm interrupt <name>
+swarm send <name> "your new instructions"
+```
+
+### Autocomplete eating slash commands
+```bash
+# This should not happen with the default pre-clear sequence
+# If it persists, the Escape key may not be dismissing the menu
+# Try interrupt + send pattern instead:
+swarm interrupt <name>
+swarm send <name> "/exit"
 ```
 
 ### Worker shows running but send fails
@@ -190,7 +239,7 @@ swarm spawn --name <name> --tmux -- <command>
 ### Partial text sent (no Enter)
 ```bash
 # If you forgot --no-enter but wanted it, send escape to clear
-swarm send <name> $'\x03'  # Ctrl-C to cancel current input
+swarm interrupt <name>  # Ctrl-C to cancel
 
 # If you used --no-enter but needed Enter
 swarm send <name> "" # Send empty with Enter
@@ -198,8 +247,12 @@ swarm send <name> "" # Send empty with Enter
 
 ## Implementation Notes
 
-- **Literal mode**: Uses `tmux send-keys -l` to prevent interpretation of special keys
-- **Enter as separate command**: Enter key sent as separate tmux command for reliability
-- **Status refresh**: Status is refreshed before each send to ensure window still exists
-- **Silent skip**: `--all` mode silently skips non-running workers for better orchestration
-- **Socket support**: All tmux commands include socket parameter when worker was created with socket
+- **Pre-clear sequence**: Default sends Escape → Ctrl-U before text. This prevents autocomplete menus from intercepting slash commands and clears any stale input.
+- **Escape key**: Sent as `tmux send-keys Escape` (not literal mode). Dismisses autocomplete dropdowns in Claude Code and similar agent CLIs.
+- **Ctrl-U**: Sent as `tmux send-keys C-u` (not literal mode). Clears the current input line.
+- **Literal mode**: Text itself uses `tmux send-keys -l` to prevent interpretation of special keys.
+- **Enter as separate command**: Enter key sent as separate tmux command for reliability.
+- **Raw mode**: `--raw` skips Escape + Ctrl-U, sending only the literal text + Enter. Use for non-CLI targets (plain bash shells, scripts) where pre-clear may have side effects.
+- **Status refresh**: Status is refreshed before each send to ensure window still exists.
+- **Silent skip**: `--all` mode silently skips non-running workers for better orchestration.
+- **Socket support**: All tmux commands include socket parameter when worker was created with socket.
