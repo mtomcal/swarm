@@ -137,26 +137,26 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 5: CLI Defaults & Aliases
 
-- [ ] **5.1 Change `--max-iterations` to default 50**
+- [x] **5.1 Change `--max-iterations` to default 50**
   - Change from `required=True` to `default=50` (~line 4002)
   - File: `swarm.py`
 
-- [ ] **5.2 Change `--worktree` to default True for ralph spawn**
+- [x] **5.2 Change `--worktree` to default True for ralph spawn**
   - Change from `action="store_true"` to `action=argparse.BooleanOptionalAction, default=True` (~line 4030)
   - This gives `--worktree` (explicit True) and `--no-worktree` (explicit False)
   - File: `swarm.py`
 
-- [ ] **5.3 Add `swarm ralph stop` alias**
+- [x] **5.3 Add `swarm ralph stop` alias**
   - Add `stop` subparser to ralph subparsers that accepts `name`, `--rm-worktree`, `--force-dirty`
   - `cmd_ralph_stop()` delegates to `cmd_kill()` with equivalent args
   - File: `swarm.py`
 
-- [ ] **5.4 Add `swarm heartbeat ls` alias**
+- [x] **5.4 Add `swarm heartbeat ls` alias**
   - Add `ls` subparser as alias for `list` in heartbeat subparsers
   - Route to same handler as `heartbeat list`
   - File: `swarm.py`
 
-- [ ] **5.5 Add unit tests for defaults and aliases**
+- [x] **5.5 Add unit tests for defaults and aliases**
   - Test: ralph spawn without `--max-iterations` uses 50
   - Test: ralph spawn without `--worktree` creates worktree
   - Test: `--no-worktree` skips worktree creation

@@ -12680,5 +12680,226 @@ class TestMaxContextEnforcement(unittest.TestCase):
                          "context_nudge_sent should be reset at start of new iteration")
 
 
+class TestMaxIterationsDefault(unittest.TestCase):
+    """Test that --max-iterations defaults to 50."""
+
+    def test_max_iterations_defaults_to_50(self):
+        """Test ralph spawn without --max-iterations uses default of 50."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        # Help text should show default
+        self.assertIn('50', result.stdout)
+
+    def test_max_iterations_not_required(self):
+        """Test ralph spawn does not require --max-iterations.
+
+        Should fail for missing --prompt-file, NOT missing --max-iterations.
+        The error message should mention --prompt-file as the missing required arg.
+        """
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn',
+             '--name', 'test-no-maxiter', '--no-worktree',
+             '--', 'echo', 'hi'],
+            capture_output=True,
+            text=True
+        )
+        # Should fail because --prompt-file is missing, not --max-iterations
+        self.assertNotEqual(result.returncode, 0)
+        # The error line should mention --prompt-file as required
+        error_lines = [l for l in result.stderr.split('\n') if 'required' in l.lower()]
+        self.assertTrue(len(error_lines) > 0, "Should have a 'required' error line")
+        self.assertIn('--prompt-file', error_lines[0])
+        # --max-iterations should NOT be in the required args error
+        self.assertNotIn('--max-iterations', error_lines[0])
+
+
+class TestWorktreeDefaultTrue(unittest.TestCase):
+    """Test that --worktree defaults to True for ralph spawn."""
+
+    def test_worktree_defaults_to_true_in_help(self):
+        """Test ralph spawn --help shows --worktree with default True."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--no-worktree', result.stdout)
+
+    def test_no_worktree_flag_skips_worktree(self):
+        """Test --no-worktree skips worktree creation."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write('test prompt')
+            prompt_path = f.name
+
+        try:
+            args = Namespace(
+                ralph_command='spawn',
+                name='no-worktree-test',
+                prompt_file=prompt_path,
+                max_iterations=10,
+                inactivity_timeout=60,
+                done_pattern=None,
+                check_done_continuous=None,
+                no_run=True,
+                foreground=False,
+                replace=False,
+                clean_state=False,
+                worktree=False,
+                session=None,
+                tmux_socket=None,
+                branch=None,
+                worktree_dir=None,
+                tags=[],
+                env=[],
+                cwd=None,
+                ready_wait=False,
+                ready_timeout=120,
+                heartbeat=None,
+                heartbeat_expire=None,
+                heartbeat_message='continue',
+                tmux=False,
+                max_context=None,
+                cmd=['--', 'echo', 'hi']
+            )
+
+            with patch('swarm.create_worktree') as mock_create_wt, \
+                 patch('swarm.create_tmux_window'), \
+                 patch('swarm.send_prompt_to_worker', return_value=""), \
+                 patch('swarm.State') as mock_state_cls:
+                mock_state = MagicMock()
+                mock_state.get_worker.return_value = None
+                mock_state_cls.return_value = mock_state
+
+                with patch('swarm.save_ralph_state'):
+                    swarm.cmd_ralph_spawn(args)
+
+                # Worktree should NOT be created
+                mock_create_wt.assert_not_called()
+        finally:
+            os.unlink(prompt_path)
+
+    def test_worktree_true_creates_worktree(self):
+        """Test --worktree (default True) creates worktree."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write('test prompt')
+            prompt_path = f.name
+
+        try:
+            args = Namespace(
+                ralph_command='spawn',
+                name='worktree-test',
+                prompt_file=prompt_path,
+                max_iterations=10,
+                inactivity_timeout=60,
+                done_pattern=None,
+                check_done_continuous=None,
+                no_run=True,
+                foreground=False,
+                replace=False,
+                clean_state=False,
+                worktree=True,
+                session=None,
+                tmux_socket=None,
+                branch=None,
+                worktree_dir=None,
+                tags=[],
+                env=[],
+                cwd=None,
+                ready_wait=False,
+                ready_timeout=120,
+                heartbeat=None,
+                heartbeat_expire=None,
+                heartbeat_message='continue',
+                tmux=False,
+                max_context=None,
+                cmd=['--', 'echo', 'hi']
+            )
+
+            with patch('swarm.create_worktree') as mock_create_wt, \
+                 patch('swarm.create_tmux_window'), \
+                 patch('swarm.send_prompt_to_worker', return_value=""), \
+                 patch('swarm.get_git_root', return_value=Path('/tmp/fake-repo')), \
+                 patch('swarm._check_and_fix_core_bare'), \
+                 patch('swarm.State') as mock_state_cls:
+                mock_state = MagicMock()
+                mock_state.get_worker.return_value = None
+                mock_state_cls.return_value = mock_state
+
+                with patch('swarm.save_ralph_state'):
+                    swarm.cmd_ralph_spawn(args)
+
+                # Worktree SHOULD be created
+                mock_create_wt.assert_called_once()
+        finally:
+            os.unlink(prompt_path)
+
+
+class TestRalphStopSubcommand(unittest.TestCase):
+    """Test that 'swarm ralph stop' subcommand works."""
+
+    def test_ralph_stop_subparser_exists(self):
+        """Test that 'ralph stop' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'stop', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('stop', result.stdout.lower())
+
+    def test_ralph_stop_has_rm_worktree_flag(self):
+        """Test ralph stop accepts --rm-worktree flag."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'stop', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--rm-worktree', result.stdout)
+
+    def test_ralph_stop_has_force_dirty_flag(self):
+        """Test ralph stop accepts --force-dirty flag."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'stop', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--force-dirty', result.stdout)
+
+    def test_ralph_stop_delegates_to_kill(self):
+        """Test ralph stop delegates to cmd_kill."""
+        args = Namespace(
+            ralph_command='stop',
+            name='stop-test-worker',
+            rm_worktree=False,
+            force_dirty=False,
+        )
+
+        with patch('swarm.cmd_kill') as mock_kill:
+            swarm.cmd_ralph_stop(args)
+
+        mock_kill.assert_called_once()
+        kill_args = mock_kill.call_args[0][0]
+        self.assertEqual(kill_args.name, 'stop-test-worker')
+        self.assertFalse(kill_args.rm_worktree)
+        self.assertFalse(kill_args.all)
+
+    def test_ralph_stop_dispatch(self):
+        """Test cmd_ralph dispatches 'stop' to cmd_ralph_stop."""
+        args = Namespace(ralph_command='stop', name='test-worker',
+                         rm_worktree=False, force_dirty=False)
+
+        with patch('swarm.cmd_ralph_stop') as mock_stop:
+            swarm.cmd_ralph(args)
+
+        mock_stop.assert_called_once_with(args)
+
+
 if __name__ == "__main__":
     unittest.main()

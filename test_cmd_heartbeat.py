@@ -2747,5 +2747,37 @@ class TestResumeActiveHeartbeats(unittest.TestCase):
         self.assertEqual(mock_start_monitor.call_count, 3)
 
 
+class TestHeartbeatLsAlias(unittest.TestCase):
+    """Test that 'heartbeat ls' alias works."""
+
+    def test_heartbeat_ls_subcommand_exists(self):
+        """Test that 'heartbeat ls' subcommand is recognized."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'ls', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_heartbeat_ls_has_format_flag(self):
+        """Test heartbeat ls accepts --format flag like list."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'heartbeat', 'ls', '--help'],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--format', result.stdout)
+
+    def test_heartbeat_ls_dispatch(self):
+        """Test cmd_heartbeat dispatches 'ls' to cmd_heartbeat_list."""
+        args = Namespace(heartbeat_command='ls', format='table')
+
+        with patch('swarm.cmd_heartbeat_list') as mock_list:
+            swarm.cmd_heartbeat(args)
+
+        mock_list.assert_called_once_with(args)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -4036,8 +4036,8 @@ def main() -> None:
     ralph_spawn_p.add_argument("--prompt-file", required=True,
                                help="Path to prompt file read at the start of each iteration. "
                                     "Can be modified mid-loop to change agent behavior.")
-    ralph_spawn_p.add_argument("--max-iterations", type=int, required=True,
-                               help="Maximum number of loop iterations before stopping.")
+    ralph_spawn_p.add_argument("--max-iterations", type=int, default=50,
+                               help="Maximum number of loop iterations before stopping. Default: 50.")
     ralph_spawn_p.add_argument("--inactivity-timeout", type=int, default=180,
                                help="Screen stability timeout in seconds. Default: 180. "
                                     "Agent is restarted when tmux screen is unchanged for this duration. "
@@ -4068,8 +4068,9 @@ def main() -> None:
                                help="Tmux session name. Default: hash-based for isolation.")
     ralph_spawn_p.add_argument("--tmux-socket", default=None,
                                help="Tmux socket name for isolation. Used in testing.")
-    ralph_spawn_p.add_argument("--worktree", action="store_true",
+    ralph_spawn_p.add_argument("--worktree", action=argparse.BooleanOptionalAction, default=True,
                                help="Create isolated git worktree for this worker. "
+                                    "Default: True. Use --no-worktree to skip. "
                                     "Worktree created at <repo>-worktrees/<name>/.")
     ralph_spawn_p.add_argument("--branch",
                                help="Branch name for worktree. Default: same as --name.")
@@ -4097,6 +4098,20 @@ def main() -> None:
                                     "Ralph workers always use tmux; this flag has no effect.")
     ralph_spawn_p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- command...",
                                help="Command to run in the worker (after --). Required.")
+
+    # ralph stop - alias for kill
+    ralph_stop_p = ralph_subparsers.add_parser(
+        "stop",
+        help="Stop a ralph worker (alias for 'swarm kill')",
+        description="Stop a ralph worker. This is a convenience alias for 'swarm kill'.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ralph_stop_p.add_argument("name", help="Worker name to stop.")
+    ralph_stop_p.add_argument("--rm-worktree", action="store_true",
+                              help="Remove the git worktree after stopping. "
+                                   "Also removes ralph state (~/.swarm/ralph/<name>/).")
+    ralph_stop_p.add_argument("--force-dirty", action="store_true",
+                              help="Force removal of worktree even with uncommitted changes.")
 
     # heartbeat - periodic nudges to workers
     heartbeat_p = subparsers.add_parser(
@@ -4178,6 +4193,17 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     heartbeat_resume_p.add_argument("worker", help="Worker name")
+
+    # heartbeat ls - alias for list
+    heartbeat_ls_p = heartbeat_subparsers.add_parser(
+        "ls",
+        help="List all heartbeats (alias for 'list')",
+        description=HEARTBEAT_LIST_HELP_DESCRIPTION,
+        epilog=HEARTBEAT_LIST_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    heartbeat_ls_p.add_argument("--format", choices=["table", "json"],
+                                default="table", help="Output format (default: table)")
 
     args = parser.parse_args()
 
@@ -5434,7 +5460,9 @@ def cmd_ralph(args) -> None:
     - run: Run the ralph loop (main outer loop execution)
     - list: List all ralph workers
     - ls: Alias for list
+    - clean: Clean ralph state for a worker
     - logs: Show iteration history log for a worker
+    - stop: Stop a ralph worker (alias for kill)
     """
     if args.ralph_command == "spawn":
         cmd_ralph_spawn(args)
@@ -5458,6 +5486,8 @@ def cmd_ralph(args) -> None:
         cmd_ralph_clean(args)
     elif args.ralph_command == "logs":
         cmd_ralph_logs(args)
+    elif args.ralph_command == "stop":
+        cmd_ralph_stop(args)
 
 
 def _rollback_ralph_spawn(
@@ -6320,6 +6350,24 @@ def cmd_ralph_logs(args) -> None:
             content = f.read()
             if content:
                 print(content, end='')
+
+
+def cmd_ralph_stop(args) -> None:
+    """Stop a ralph worker (alias for 'swarm kill').
+
+    Delegates to cmd_kill() with equivalent arguments.
+
+    Args:
+        args: Namespace with name, rm_worktree, and force_dirty attributes
+    """
+    from argparse import Namespace
+    kill_args = Namespace(
+        name=args.name,
+        rm_worktree=getattr(args, 'rm_worktree', False),
+        force_dirty=getattr(args, 'force_dirty', False),
+        all=False,
+    )
+    cmd_kill(kill_args)
 
 
 def wait_for_worker_exit(worker: Worker, timeout: Optional[int] = None) -> tuple[bool, str]:
@@ -7188,6 +7236,7 @@ def cmd_heartbeat(args) -> None:
     - start: Start heartbeat for a worker
     - stop: Stop heartbeat for a worker
     - list: List all heartbeats
+    - ls: Alias for list
     - status: Show heartbeat status
     - pause: Pause heartbeat temporarily
     - resume: Resume paused heartbeat
@@ -7197,6 +7246,8 @@ def cmd_heartbeat(args) -> None:
     elif args.heartbeat_command == "stop":
         cmd_heartbeat_stop(args)
     elif args.heartbeat_command == "list":
+        cmd_heartbeat_list(args)
+    elif args.heartbeat_command == "ls":
         cmd_heartbeat_list(args)
     elif args.heartbeat_command == "status":
         cmd_heartbeat_status(args)
