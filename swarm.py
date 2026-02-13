@@ -6570,8 +6570,12 @@ def detect_inactivity(
 
             # Check context percentage if max_context is set
             if ralph_state is not None and ralph_state.max_context is not None:
-                # Scan last 3 lines for percentage pattern
-                last_3_lines = normalized.split('\n')[-3:]
+                # Scan last 3 non-empty lines of full pane content for percentage pattern
+                # Use full_clean (not normalized) because normalized only has the last 20 lines,
+                # and in small panes the percentage text may be above that window.
+                # Filter out empty lines since tmux pads panes with trailing blanks.
+                non_empty_lines = [l for l in full_clean.split('\n') if l.strip()]
+                last_3_lines = non_empty_lines[-3:]
                 pct_pattern = re.compile(r'(\d+)%')
                 for line in last_3_lines:
                     match = pct_pattern.search(line)

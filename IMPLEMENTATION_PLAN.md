@@ -353,7 +353,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #6 — `--max-context` nudges and kills
 
-- [ ] **10.6 Smoke test: max-context enforcement**
+- [x] **10.6 Smoke test: max-context enforcement**
   - Write and run a test script that:
     1. Creates a minimal prompt file: `echo "just exit" > /tmp/fb6-prompt.md`
     2. Runs: `python3 swarm.py ralph spawn --name smoke-fb6 --prompt-file /tmp/fb6-prompt.md --max-iterations 2 --max-context 70 --no-worktree -- bash -c 'echo "$ ready"; sleep 5; echo "72%"; sleep 20; echo "87%"; sleep 120'`
