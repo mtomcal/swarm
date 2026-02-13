@@ -280,5 +280,200 @@ class TestCorruptStateRecovery(unittest.TestCase):
         self.assertNotIn("warning", mock_stderr.getvalue())
 
 
+class TestCrashSafeWrites(unittest.TestCase):
+    """Test crash-safe write-to-temp-then-rename for state files."""
+
+    def setUp(self):
+        """Create temporary directory and patch swarm constants."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_file = Path(self.temp_dir) / "state.json"
+        self.logs_dir = Path(self.temp_dir) / "logs"
+        self.logs_dir.mkdir(exist_ok=True)
+
+        self.swarm_dir_patch = patch.object(swarm, 'SWARM_DIR', Path(self.temp_dir))
+        self.state_file_patch = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.state_lock_file_patch = patch.object(swarm, 'STATE_LOCK_FILE', Path(self.temp_dir) / "state.lock")
+        self.logs_dir_patch = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
+
+        self.swarm_dir_patch.start()
+        self.state_file_patch.start()
+        self.state_lock_file_patch.start()
+        self.logs_dir_patch.start()
+
+    def tearDown(self):
+        """Clean up patches and temporary files."""
+        self.swarm_dir_patch.stop()
+        self.state_file_patch.stop()
+        self.state_lock_file_patch.stop()
+        self.logs_dir_patch.stop()
+
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def test_state_save_uses_atomic_rename(self):
+        """State.save() writes to temp file then renames atomically."""
+        # Initialize state file
+        with open(self.state_file, "w") as f:
+            json.dump({"workers": []}, f)
+
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['echo'],
+            started='2026-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=None,
+            worktree=None,
+            pid=1234,
+            metadata={}
+        )
+        state.workers.append(worker)
+
+        # Patch os.replace to verify it's called with temp file
+        original_replace = os.replace
+        replace_calls = []
+
+        def track_replace(src, dst):
+            replace_calls.append((str(src), str(dst)))
+            return original_replace(src, dst)
+
+        with patch('os.replace', side_effect=track_replace):
+            state.save()
+
+        # Verify os.replace was called with .json.tmp -> .json
+        self.assertEqual(len(replace_calls), 1)
+        src, dst = replace_calls[0]
+        self.assertTrue(src.endswith('.json.tmp'))
+        self.assertEqual(dst, str(self.state_file))
+
+        # Verify temp file was cleaned up (replaced)
+        self.assertFalse(Path(src).exists())
+
+        # Verify state was written correctly
+        with open(self.state_file, 'r') as f:
+            data = json.load(f)
+        self.assertEqual(len(data['workers']), 1)
+        self.assertEqual(data['workers'][0]['name'], 'test-worker')
+
+    def test_state_save_unlocked_uses_atomic_rename(self):
+        """State._save_unlocked() also uses atomic temp-then-rename."""
+        with open(self.state_file, "w") as f:
+            json.dump({"workers": []}, f)
+
+        state = swarm.State()
+
+        original_replace = os.replace
+        replace_calls = []
+
+        def track_replace(src, dst):
+            replace_calls.append((str(src), str(dst)))
+            return original_replace(src, dst)
+
+        with patch('os.replace', side_effect=track_replace):
+            state._save_unlocked()
+
+        self.assertEqual(len(replace_calls), 1)
+        src, dst = replace_calls[0]
+        self.assertTrue(src.endswith('.json.tmp'))
+        self.assertEqual(dst, str(self.state_file))
+
+    def test_ralph_state_save_uses_atomic_rename(self):
+        """save_ralph_state() writes via temp file then renames."""
+        ralph_dir = Path(self.temp_dir) / "ralph"
+        with patch.object(swarm, 'RALPH_DIR', ralph_dir):
+            ralph_state = swarm.RalphState(
+                worker_name='test-worker',
+                prompt_file='PROMPT.md',
+                max_iterations=10,
+            )
+
+            original_replace = os.replace
+            replace_calls = []
+
+            def track_replace(src, dst):
+                replace_calls.append((str(src), str(dst)))
+                return original_replace(src, dst)
+
+            with patch('os.replace', side_effect=track_replace):
+                swarm.save_ralph_state(ralph_state)
+
+            self.assertEqual(len(replace_calls), 1)
+            src, dst = replace_calls[0]
+            self.assertTrue(src.endswith('.json.tmp'))
+            self.assertTrue(dst.endswith('state.json'))
+
+            # Verify state was written correctly
+            with open(dst, 'r') as f:
+                data = json.load(f)
+            self.assertEqual(data['worker_name'], 'test-worker')
+
+    def test_heartbeat_state_save_uses_atomic_rename(self):
+        """save_heartbeat_state() writes via temp file then renames."""
+        heartbeats_dir = Path(self.temp_dir) / "heartbeats"
+        heartbeat_lock = Path(self.temp_dir) / "heartbeats.lock"
+        with patch.object(swarm, 'HEARTBEATS_DIR', heartbeats_dir), \
+             patch.object(swarm, 'HEARTBEAT_LOCK_FILE', heartbeat_lock):
+            heartbeat_state = swarm.HeartbeatState(
+                worker_name='test-worker',
+                interval_seconds=3600,
+                expire_at='2026-01-02T00:00:00',
+            )
+
+            original_replace = os.replace
+            replace_calls = []
+
+            def track_replace(src, dst):
+                replace_calls.append((str(src), str(dst)))
+                return original_replace(src, dst)
+
+            with patch('os.replace', side_effect=track_replace):
+                swarm.save_heartbeat_state(heartbeat_state)
+
+            self.assertEqual(len(replace_calls), 1)
+            src, dst = replace_calls[0]
+            self.assertTrue(src.endswith('.json.tmp'))
+            self.assertTrue(dst.endswith('.json'))
+
+            # Verify state was written correctly
+            with open(dst, 'r') as f:
+                data = json.load(f)
+            self.assertEqual(data['worker_name'], 'test-worker')
+
+    def test_interrupted_write_doesnt_corrupt_state(self):
+        """If write is interrupted (os.replace fails), original state file is preserved."""
+        # Write initial valid state
+        initial_data = {"workers": [{"name": "existing-worker", "status": "running",
+                                      "cmd": ["echo"], "started": "2026-01-01T00:00:00",
+                                      "cwd": "/tmp", "tmux": None, "worktree": None,
+                                      "pid": 1234, "metadata": {}}]}
+        with open(self.state_file, "w") as f:
+            json.dump(initial_data, f)
+
+        state = swarm.State()
+        state.workers.append(swarm.Worker(
+            name='new-worker',
+            status='running',
+            cmd=['echo'],
+            started='2026-01-01T00:00:00',
+            cwd='/tmp',
+            tmux=None,
+            worktree=None,
+            pid=5678,
+            metadata={}
+        ))
+
+        # Make os.replace raise an error (simulating interrupted write)
+        with patch('os.replace', side_effect=OSError("Simulated disk error")):
+            with self.assertRaises(OSError):
+                state.save()
+
+        # Original state file should still be intact
+        with open(self.state_file, 'r') as f:
+            data = json.load(f)
+        self.assertEqual(len(data['workers']), 1)
+        self.assertEqual(data['workers'][0]['name'], 'existing-worker')
+
+
 if __name__ == "__main__":
     unittest.main()

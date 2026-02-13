@@ -166,28 +166,28 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 6: Crash-Safe State Writes
 
-- [ ] **6.1 Implement write-to-temp-then-rename for `State._save()`**
+- [x] **6.1 Implement write-to-temp-then-rename for `State._save()`**
   - In `State._save()` (~line 2848):
     1. Write to `STATE_FILE.with_suffix('.json.tmp')`
     2. `os.replace()` temp file to `STATE_FILE` (atomic on POSIX)
   - Apply same pattern to `save_ralph_state()` and `save_heartbeat_state()`
   - File: `swarm.py`
 
-- [ ] **6.2 Add unit tests for crash-safe writes**
+- [x] **6.2 Add unit tests for crash-safe writes**
   - Test: state file is written atomically (temp file created, then renamed)
   - Test: interrupted write doesn't corrupt state file
   - File: `test_state_file_locking.py` (extend existing)
 
 ### Phase 7: Window Loss Done-Pattern Check
 
-- [ ] **7.1 Check done pattern against last captured content on window loss**
+- [x] **7.1 Check done pattern against last captured content on window loss**
   - In `detect_inactivity()`, when `CalledProcessError` is caught:
     1. Check done pattern against `last_content` (the last successfully captured output)
     2. If matched, return `"done"` instead of `"exited"`
     3. Log `[END] iteration N -- tmux window lost`
   - File: `swarm.py`
 
-- [ ] **7.2 Add unit tests for window loss**
+- [x] **7.2 Add unit tests for window loss**
   - Test: window loss with done pattern in last content → returns `"done"`
   - Test: window loss without done pattern → returns `"exited"`
   - File: `test_cmd_ralph.py` (extend existing)

@@ -12901,5 +12901,155 @@ class TestRalphStopSubcommand(unittest.TestCase):
         mock_stop.assert_called_once_with(args)
 
 
+class TestWindowLossDonePatternCheck(unittest.TestCase):
+    """Test done pattern check against last captured content on window loss."""
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_window_loss_with_done_pattern_in_last_content_returns_done(
+            self, mock_sleep, mock_capture, mock_refresh):
+        """Window loss with done pattern in last captured content returns 'done'."""
+        mock_refresh.return_value = 'running'
+        # First call: capture succeeds with content containing done pattern
+        # Second call: window gone (CalledProcessError)
+        # Using check_done_continuous=False so continuous check doesn't catch it first
+        mock_capture.side_effect = [
+            "Working...\nALL_DONE\nfinished",
+            subprocess.CalledProcessError(1, 'tmux')
+        ]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(
+            worker, timeout=180,
+            done_pattern="ALL_DONE",
+            check_done_continuous=False
+        )
+        self.assertEqual(result, "done")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_window_loss_without_done_pattern_returns_exited(
+            self, mock_sleep, mock_capture, mock_refresh):
+        """Window loss without done pattern in last content returns 'exited'."""
+        mock_refresh.return_value = 'running'
+        # First call: capture succeeds with normal content (no done pattern)
+        # Second call: window gone
+        mock_capture.side_effect = [
+            "Working on stuff...\nStill going",
+            subprocess.CalledProcessError(1, 'tmux')
+        ]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(
+            worker, timeout=180,
+            done_pattern="ALL_DONE",
+            check_done_continuous=False
+        )
+        self.assertEqual(result, "exited")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_window_loss_no_done_pattern_configured_returns_exited(
+            self, mock_sleep, mock_capture, mock_refresh):
+        """Window loss with no done pattern configured returns 'exited'."""
+        mock_refresh.return_value = 'running'
+        mock_capture.side_effect = subprocess.CalledProcessError(1, 'tmux')
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=180)
+        self.assertEqual(result, "exited")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_window_loss_no_prior_content_returns_exited(
+            self, mock_sleep, mock_capture, mock_refresh):
+        """Window loss on first poll (no last_content) returns 'exited'."""
+        mock_refresh.return_value = 'running'
+        # Very first capture fails — no prior content captured
+        mock_capture.side_effect = subprocess.CalledProcessError(1, 'tmux')
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(
+            worker, timeout=180,
+            done_pattern="ALL_DONE",
+            check_done_continuous=False
+        )
+        self.assertEqual(result, "exited")
+
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.sleep')
+    def test_window_loss_respects_prompt_baseline(
+            self, mock_sleep, mock_capture, mock_refresh):
+        """Window loss done check strips prompt baseline before matching."""
+        mock_refresh.return_value = 'running'
+        baseline = "Enter your prompt:\nALL_DONE"
+        # Content starts with baseline and includes ALL_DONE only in baseline
+        content_with_baseline_only = baseline + "\nWorking..."
+        mock_capture.side_effect = [
+            content_with_baseline_only,
+            subprocess.CalledProcessError(1, 'tmux')
+        ]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker',
+            status='running',
+            cmd=['claude'],
+            started='2024-01-15T10:30:00',
+            cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+
+        result = swarm.detect_inactivity(
+            worker, timeout=180,
+            done_pattern="ALL_DONE",
+            check_done_continuous=False,
+            prompt_baseline_content=baseline
+        )
+        # ALL_DONE only appears in baseline prefix which is stripped, so no match
+        self.assertEqual(result, "exited")
+
+
 if __name__ == "__main__":
     unittest.main()

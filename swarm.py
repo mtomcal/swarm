@@ -2238,8 +2238,10 @@ def save_heartbeat_state(heartbeat_state: HeartbeatState) -> None:
         HEARTBEATS_DIR.mkdir(parents=True, exist_ok=True)
         state_path = get_heartbeat_state_path(heartbeat_state.worker_name)
 
-        with open(state_path, "w") as f:
+        tmp_path = state_path.with_suffix('.json.tmp')
+        with open(tmp_path, "w") as f:
             json.dump(heartbeat_state.to_dict(), f, indent=2)
+        os.replace(tmp_path, state_path)
 
 
 def delete_heartbeat_state(worker_name: str) -> bool:
@@ -2718,8 +2720,10 @@ def save_ralph_state(ralph_state: RalphState) -> None:
     state_path = get_ralph_state_path(ralph_state.worker_name)
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(state_path, "w") as f:
+    tmp_path = state_path.with_suffix('.json.tmp')
+    with open(tmp_path, "w") as f:
         json.dump(ralph_state.to_dict(), f, indent=2)
+    os.replace(tmp_path, state_path)
 
 
 def get_ralph_iterations_log_path(worker_name: str) -> Path:
@@ -2859,8 +2863,10 @@ class State:
         with state_file_lock():
             ensure_dirs()
             data = {"workers": [w.to_dict() for w in self.workers]}
-            with open(STATE_FILE, "w") as f:
+            tmp_path = STATE_FILE.with_suffix('.json.tmp')
+            with open(tmp_path, "w") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp_path, STATE_FILE)
 
     def get_worker(self, name: str) -> Optional[Worker]:
         """Get a worker by name."""
@@ -2936,8 +2942,10 @@ class State:
         """
         ensure_dirs()
         data = {"workers": [w.to_dict() for w in self.workers]}
-        with open(STATE_FILE, "w") as f:
+        tmp_path = STATE_FILE.with_suffix('.json.tmp')
+        with open(tmp_path, "w") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_path, STATE_FILE)
 
 
 def ensure_dirs() -> None:
@@ -6463,6 +6471,14 @@ def detect_inactivity(
             # Invalid pattern - skip continuous checking
             pass
 
+    # Compile done pattern regex for window loss check (works regardless of check_done_continuous)
+    done_regex_for_window_loss = None
+    if done_pattern:
+        try:
+            done_regex_for_window_loss = re.compile(done_pattern)
+        except re.error:
+            pass
+
     def normalize_content(output: str) -> str:
         """Normalize screen content by taking last 20 lines and stripping ANSI codes."""
         lines = output.split('\n')
@@ -6477,6 +6493,9 @@ def detect_inactivity(
     # Track which stuck patterns have already been warned about this iteration
     warned_stuck_patterns: set = set()
 
+    # Track last successfully captured content for window loss done-pattern check
+    last_content: Optional[str] = None
+
     while True:
         # Check if worker is still running
         if refresh_worker_status(worker) == "stopped":
@@ -6489,6 +6508,7 @@ def detect_inactivity(
                 worker.tmux.window,
                 socket=socket
             )
+            last_content = current_output
 
             # Check done pattern continuously if enabled
             if done_regex:
@@ -6563,7 +6583,14 @@ def detect_inactivity(
                     return "inactive"
 
         except subprocess.CalledProcessError:
-            # Window might have closed
+            # Window might have closed — check done pattern against last content
+            if done_regex_for_window_loss and last_content is not None:
+                if prompt_baseline_content and last_content.startswith(prompt_baseline_content):
+                    check_content = last_content[len(prompt_baseline_content):]
+                else:
+                    check_content = last_content
+                if done_regex_for_window_loss.search(check_content):
+                    return "done"
             return "exited"
 
         time.sleep(2)
@@ -7097,9 +7124,18 @@ def _run_ralph_loop_inner(
         state = State()
         worker = state.get_worker(args.name)
 
-        if monitor_result == "done_pattern":
-            # Done pattern matched during continuous monitoring
-            print(f"[ralph] {args.name}: done pattern matched, stopping loop")
+        if monitor_result == "done_pattern" or monitor_result == "done":
+            # Done pattern matched during continuous monitoring or on window loss
+            if monitor_result == "done":
+                print(f"[ralph] {args.name}: done pattern matched (tmux window lost), stopping loop")
+                log_ralph_iteration(
+                    args.name,
+                    "END",
+                    iteration=ralph_state.current_iteration,
+                    message=f"iteration {ralph_state.current_iteration} -- tmux window lost"
+                )
+            else:
+                print(f"[ralph] {args.name}: done pattern matched, stopping loop")
             log_ralph_iteration(
                 args.name,
                 "DONE",
