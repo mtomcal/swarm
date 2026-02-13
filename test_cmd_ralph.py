@@ -7529,13 +7529,14 @@ class TestRalphRunIntegration(unittest.TestCase):
         signal.alarm(5)  # 5 second timeout
 
         try:
-            with patch('swarm.refresh_worker_status', return_value='stopped'):
-                with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
-                    with patch('swarm.send_prompt_to_worker', return_value=""):
-                        with patch.object(swarm.State, 'add_worker'):
-                            with patch.object(swarm.State, 'remove_worker'):
-                                with patch('builtins.print'):
-                                    swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', return_value='stopped'):
+                    with patch('swarm.spawn_worker_for_ralph', side_effect=capture_spawn):
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('builtins.print'):
+                                        swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)  # Cancel alarm
             signal.signal(signal.SIGALRM, old_handler)
@@ -7613,11 +7614,12 @@ class TestRalphRunIntegration(unittest.TestCase):
             return 'stopped'
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=capture_detect_inactivity):
-                    with patch('swarm.check_done_pattern', return_value=False):
-                        with patch('builtins.print'):
-                            swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=capture_detect_inactivity):
+                        with patch('swarm.check_done_pattern', return_value=False):
+                            with patch('builtins.print'):
+                                swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -7964,16 +7966,17 @@ class TestRalphInactivityRestartIntegration(unittest.TestCase):
         signal.alarm(10)  # 10 second timeout
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=mock_detect_inactivity):
-                    with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
-                        with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
-                            with patch('swarm.send_prompt_to_worker', side_effect=track_send_prompt):
-                                with patch.object(swarm.State, 'add_worker'):
-                                    with patch.object(swarm.State, 'remove_worker'):
-                                        with patch('swarm.check_done_pattern', return_value=False):
-                                            with patch('builtins.print'):
-                                                swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=mock_detect_inactivity):
+                        with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
+                            with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
+                                with patch('swarm.send_prompt_to_worker', side_effect=track_send_prompt):
+                                    with patch.object(swarm.State, 'add_worker'):
+                                        with patch.object(swarm.State, 'remove_worker'):
+                                            with patch('swarm.check_done_pattern', return_value=False):
+                                                with patch('builtins.print'):
+                                                    swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)  # Cancel alarm
             signal.signal(signal.SIGALRM, old_handler)
@@ -8595,15 +8598,16 @@ class TestRalphStateFlowIntegration(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=mock_detect):
-                    with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
-                        with patch('swarm.send_prompt_to_worker', return_value=""):
-                            with patch('swarm.check_done_pattern', return_value=False):
-                                with patch.object(swarm.State, 'add_worker'):
-                                    with patch.object(swarm.State, 'remove_worker'):
-                                        with patch('builtins.print'):
-                                            swarm.cmd_ralph_run(run_args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                        with patch('swarm.spawn_worker_for_ralph', side_effect=track_spawn):
+                            with patch('swarm.send_prompt_to_worker', return_value=""):
+                                with patch('swarm.check_done_pattern', return_value=False):
+                                    with patch.object(swarm.State, 'add_worker'):
+                                        with patch.object(swarm.State, 'remove_worker'):
+                                            with patch('builtins.print'):
+                                                swarm.cmd_ralph_run(run_args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -9083,16 +9087,17 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=mock_detect):
-                    with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
-                        with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
-                            with patch('swarm.send_prompt_to_worker', return_value=""):
-                                with patch.object(swarm.State, 'add_worker'):
-                                    with patch.object(swarm.State, 'remove_worker'):
-                                        with patch('swarm.check_done_pattern', return_value=False):
-                                            with patch('builtins.print'):
-                                                swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                        with patch('swarm.kill_worker_for_ralph', side_effect=track_kill):
+                            with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
+                                with patch('swarm.send_prompt_to_worker', return_value=""):
+                                    with patch.object(swarm.State, 'add_worker'):
+                                        with patch.object(swarm.State, 'remove_worker'):
+                                            with patch('swarm.check_done_pattern', return_value=False):
+                                                with patch('builtins.print'):
+                                                    swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -9199,16 +9204,17 @@ class TestRalphLoopDetectInactivityIntegration(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=mock_detect):
-                    with patch('swarm.kill_worker_for_ralph', side_effect=actual_kill):
-                        with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
-                            with patch('swarm.send_prompt_to_worker', return_value=""):
-                                with patch.object(swarm.State, 'add_worker'):
-                                    with patch.object(swarm.State, 'remove_worker'):
-                                        with patch('swarm.check_done_pattern', return_value=False):
-                                            with patch('builtins.print'):
-                                                swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=mock_detect):
+                        with patch('swarm.kill_worker_for_ralph', side_effect=actual_kill):
+                            with patch('swarm.spawn_worker_for_ralph', side_effect=mock_spawn):
+                                with patch('swarm.send_prompt_to_worker', return_value=""):
+                                    with patch.object(swarm.State, 'add_worker'):
+                                        with patch.object(swarm.State, 'remove_worker'):
+                                            with patch('swarm.check_done_pattern', return_value=False):
+                                                with patch('builtins.print'):
+                                                    swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -9654,12 +9660,13 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', return_value='running'):
-                # detect_inactivity returns "done_pattern" when continuous checking matches
-                with patch('swarm.detect_inactivity', return_value="done_pattern"):
-                    with patch('swarm.kill_worker_for_ralph') as mock_kill:
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', return_value='running'):
+                    # detect_inactivity returns "done_pattern" when continuous checking matches
+                    with patch('swarm.detect_inactivity', return_value="done_pattern"):
+                        with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -9734,11 +9741,12 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
-                with patch('swarm.detect_inactivity', side_effect=capture_detect):
-                    with patch('swarm.check_done_pattern', return_value=False):
-                        with patch('builtins.print'):
-                            swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', side_effect=mock_refresh):
+                    with patch('swarm.detect_inactivity', side_effect=capture_detect):
+                        with patch('swarm.check_done_pattern', return_value=False):
+                            with patch('builtins.print'):
+                                swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -9791,13 +9799,14 @@ class TestRalphLoopContinuousDonePattern(unittest.TestCase):
         signal.alarm(10)
 
         try:
-            with patch('swarm.refresh_worker_status', return_value='running'):
-                # detect_inactivity returns "exited" (not "done_pattern" since continuous is off)
-                with patch('swarm.detect_inactivity', return_value="exited"):
-                    # check_done_pattern should be called after exit
-                    with patch('swarm.check_done_pattern', return_value=True) as mock_check:
-                        with patch('builtins.print') as mock_print:
-                            swarm.cmd_ralph_run(args)
+            with patch('swarm._run_preflight_check'):
+                with patch('swarm.refresh_worker_status', return_value='running'):
+                    # detect_inactivity returns "exited" (not "done_pattern" since continuous is off)
+                    with patch('swarm.detect_inactivity', return_value="exited"):
+                        # check_done_pattern should be called after exit
+                        with patch('swarm.check_done_pattern', return_value=True) as mock_check:
+                            with patch('builtins.print') as mock_print:
+                                swarm.cmd_ralph_run(args)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old_handler)
@@ -11275,11 +11284,11 @@ class TestPreflightValidation(unittest.TestCase):
 
     def test_preflight_stuck_pattern_iteration1_exits(self):
         """Test: stuck pattern on iteration 1 → [ERROR] log + exit code 1."""
-        # Create worker (stopped so loop will spawn new one → iteration 1)
+        # Create running worker with tmux info
         state = swarm.State()
         worker = swarm.Worker(
             name='ralph-worker',
-            status='stopped',
+            status='running',
             cmd=['claude'],
             started='2024-01-15T10:30:00',
             cwd=self.temp_dir,
@@ -11288,40 +11297,24 @@ class TestPreflightValidation(unittest.TestCase):
         state.workers.append(worker)
         state.save()
 
-        # Create ralph state at iteration 0 (will become iteration 1)
+        # Create ralph state at iteration 1 (set by spawn before monitor starts)
         ralph_state = swarm.RalphState(
             worker_name='ralph-worker',
             prompt_file=str(self.prompt_path),
             max_iterations=10,
-            current_iteration=0,
+            current_iteration=1,
             status='running'
         )
         swarm.save_ralph_state(ralph_state)
 
-        args = Namespace(name='ralph-worker')
-
-        mock_worker = swarm.Worker(
-            name='ralph-worker',
-            status='running',
-            cmd=['claude'],
-            started='2024-01-15T10:30:00',
-            cwd=self.temp_dir,
-            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
-        )
-
-        with patch('swarm.refresh_worker_status', return_value='stopped'):
-            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
-                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
-                    with patch.object(swarm.State, 'add_worker'):
-                        with patch('time.sleep'):
-                            # Pre-flight capture returns stuck content
-                            with patch('swarm.tmux_capture_pane',
-                                       return_value="Welcome\nSelect login method\nOption 1"):
-                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
-                                    with patch('swarm.log_ralph_iteration') as mock_log:
-                                        with patch('builtins.print'):
-                                            with self.assertRaises(SystemExit) as ctx:
-                                                swarm.cmd_ralph_run(args)
+        with patch('time.sleep'):
+            with patch('swarm.tmux_capture_pane',
+                       return_value="Welcome\nSelect login method\nOption 1"):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    with patch('swarm.log_ralph_iteration') as mock_log:
+                        with patch('builtins.print'):
+                            with self.assertRaises(SystemExit) as ctx:
+                                swarm._run_preflight_check('ralph-worker')
 
         self.assertEqual(ctx.exception.code, 1)
         mock_kill.assert_called_once()
@@ -11339,12 +11332,12 @@ class TestPreflightValidation(unittest.TestCase):
         self.assertEqual(saved_state.exit_reason, "preflight_failed")
 
     def test_preflight_no_stuck_pattern_continues(self):
-        """Test: no stuck pattern on iteration 1 → continues normally."""
-        # Create worker (stopped so loop will spawn new one → iteration 1)
+        """Test: no stuck pattern on iteration 1 → continues normally (no exit)."""
+        # Create running worker with tmux info
         state = swarm.State()
         worker = swarm.Worker(
             name='ralph-worker',
-            status='stopped',
+            status='running',
             cmd=['claude'],
             started='2024-01-15T10:30:00',
             cwd=self.temp_dir,
@@ -11353,51 +11346,33 @@ class TestPreflightValidation(unittest.TestCase):
         state.workers.append(worker)
         state.save()
 
-        # Create ralph state at iteration 0 (will become iteration 1), max_iterations=1 to exit
+        # Create ralph state at iteration 1
         ralph_state = swarm.RalphState(
             worker_name='ralph-worker',
             prompt_file=str(self.prompt_path),
-            max_iterations=1,
-            current_iteration=0,
+            max_iterations=10,
+            current_iteration=1,
             status='running'
         )
         swarm.save_ralph_state(ralph_state)
 
-        args = Namespace(name='ralph-worker')
-
-        mock_worker = swarm.Worker(
-            name='ralph-worker',
-            status='running',
-            cmd=['claude'],
-            started='2024-01-15T10:30:00',
-            cwd=self.temp_dir,
-            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
-        )
-
-        with patch('swarm.refresh_worker_status', return_value='stopped'):
-            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
-                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
-                    with patch.object(swarm.State, 'add_worker'):
-                        with patch('time.sleep'):
-                            # Pre-flight capture returns normal content (no stuck patterns)
-                            with patch('swarm.tmux_capture_pane',
-                                       return_value="Claude Code v2.1\n> Working on task..."):
-                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
-                                    with patch('builtins.print'):
-                                        # Should NOT exit with error — loop completes normally
-                                        # (max_iterations=1, so it exits after iteration 1)
-                                        swarm.cmd_ralph_run(args)
+        with patch('time.sleep'):
+            with patch('swarm.tmux_capture_pane',
+                       return_value="Claude Code v2.1\n> Working on task..."):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    # Should NOT exit with error — no stuck patterns
+                    swarm._run_preflight_check('ralph-worker')
 
         # Worker should NOT have been killed by pre-flight
         mock_kill.assert_not_called()
 
     def test_preflight_only_runs_on_iteration1(self):
         """Test: pre-flight only runs on iteration 1, not subsequent iterations."""
-        # Create worker (stopped so loop will spawn new one)
+        # Create running worker
         state = swarm.State()
         worker = swarm.Worker(
             name='ralph-worker',
-            status='stopped',
+            status='running',
             cmd=['claude'],
             started='2024-01-15T10:30:00',
             cwd=self.temp_dir,
@@ -11406,42 +11381,27 @@ class TestPreflightValidation(unittest.TestCase):
         state.workers.append(worker)
         state.save()
 
-        # Create ralph state at iteration 1 (next will be iteration 2), max_iterations=2 to exit
+        # Create ralph state at iteration 2 — pre-flight should be skipped
         ralph_state = swarm.RalphState(
             worker_name='ralph-worker',
             prompt_file=str(self.prompt_path),
-            max_iterations=2,
-            current_iteration=1,
+            max_iterations=10,
+            current_iteration=2,
             status='running'
         )
         swarm.save_ralph_state(ralph_state)
 
-        args = Namespace(name='ralph-worker')
-
-        mock_worker = swarm.Worker(
-            name='ralph-worker',
-            status='running',
-            cmd=['claude'],
-            started='2024-01-15T10:30:00',
-            cwd=self.temp_dir,
-            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
-        )
-
-        with patch('swarm.refresh_worker_status', return_value='stopped'):
-            with patch('swarm.spawn_worker_for_ralph', return_value=mock_worker):
-                with patch('swarm.send_prompt_to_worker', return_value="baseline"):
-                    with patch.object(swarm.State, 'add_worker'):
-                        with patch('time.sleep'):
-                            # Return stuck content — but since it's iteration 2, pre-flight should NOT run
-                            with patch('swarm.tmux_capture_pane',
-                                       return_value="Select login method\nOption 1"):
-                                with patch('swarm.kill_worker_for_ralph') as mock_kill:
-                                    with patch('builtins.print'):
-                                        # Should complete without error since pre-flight is skipped for iteration 2
-                                        swarm.cmd_ralph_run(args)
+        with patch('time.sleep') as mock_sleep:
+            with patch('swarm.tmux_capture_pane',
+                       return_value="Select login method\nOption 1"):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    # Should NOT exit with error since pre-flight is skipped for iteration 2
+                    swarm._run_preflight_check('ralph-worker')
 
         # Worker should NOT have been killed by pre-flight
         mock_kill.assert_not_called()
+        # time.sleep should not have been called (pre-flight skipped entirely)
+        mock_sleep.assert_not_called()
 
 
 class TestRalphSpawnForegroundFlag(unittest.TestCase):

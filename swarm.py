@@ -6751,6 +6751,57 @@ def _check_monitor_disconnect(worker_name: str) -> None:
             print(f"[ralph] {worker_name}: monitor disconnected (worker still running)")
 
 
+def _run_preflight_check(worker_name: str) -> None:
+    """Run pre-flight check on iteration 1 to detect stuck patterns.
+
+    Waits 10 seconds after spawn, captures terminal output (including scrollback),
+    and checks for known stuck patterns (login prompts, theme pickers, etc.).
+    If a stuck pattern is detected, kills the worker and exits with error.
+
+    Args:
+        worker_name: Name of the worker to check
+    """
+    import re
+
+    ralph_state = load_ralph_state(worker_name)
+    if not ralph_state or ralph_state.current_iteration != 1:
+        return
+
+    state = State()
+    worker = state.get_worker(worker_name)
+    if not worker or not worker.tmux:
+        return
+
+    time.sleep(10)
+    try:
+        preflight_output = tmux_capture_pane(
+            worker.tmux.session,
+            worker.tmux.window,
+            history_lines=100,
+            socket=worker.tmux.socket
+        )
+        preflight_clean = re.sub(r'\x1b\[[0-9;]*m', '', preflight_output)
+        for stuck_text, stuck_msg in STUCK_PATTERNS.items():
+            if stuck_text in preflight_clean:
+                log_ralph_iteration(
+                    ralph_state.worker_name, "ERROR",
+                    message=f"iteration 1: pre-flight check failed — {stuck_msg}"
+                )
+                print(
+                    f"swarm: error: pre-flight check failed — {stuck_msg}\n"
+                    f"  fix: resolve the issue and re-run ralph spawn",
+                    file=sys.stderr
+                )
+                kill_worker_for_ralph(worker, state)
+                state.remove_worker(worker_name)
+                ralph_state.status = "failed"
+                ralph_state.exit_reason = "preflight_failed"
+                save_ralph_state(ralph_state)
+                sys.exit(1)
+    except subprocess.CalledProcessError:
+        pass  # tmux capture failed, skip pre-flight
+
+
 def _run_ralph_loop_inner(
     args,
     original_cmd: list[str],
@@ -6777,6 +6828,9 @@ def _run_ralph_loop_inner(
         original_worktree: Original worktree info
     """
     import re
+
+    # Pre-flight check: on iteration 1 only, wait and check for stuck patterns
+    _run_preflight_check(args.name)
 
     while True:
         # Reload ralph state (could have been paused externally)
@@ -6873,37 +6927,6 @@ def _run_ralph_loop_inner(
                 # Record baseline content for done-pattern self-match mitigation
                 ralph_state.prompt_baseline_content = baseline_content
                 save_ralph_state(ralph_state)
-
-                # Pre-flight check: on iteration 1 only, wait and check for stuck patterns
-                if ralph_state.current_iteration == 1 and worker.tmux:
-                    time.sleep(10)
-                    try:
-                        preflight_output = tmux_capture_pane(
-                            worker.tmux.session,
-                            worker.tmux.window,
-                            socket=worker.tmux.socket
-                        )
-                        # Strip ANSI codes and check against stuck patterns
-                        preflight_clean = re.sub(r'\x1b\[[0-9;]*m', '', preflight_output)
-                        for stuck_text, stuck_msg in STUCK_PATTERNS.items():
-                            if stuck_text in preflight_clean:
-                                log_ralph_iteration(
-                                    ralph_state.worker_name, "ERROR",
-                                    message=f"iteration 1: pre-flight check failed — {stuck_msg}"
-                                )
-                                print(
-                                    f"swarm: error: pre-flight check failed — {stuck_msg}\n"
-                                    f"  fix: resolve the issue and re-run ralph spawn",
-                                    file=sys.stderr
-                                )
-                                kill_worker_for_ralph(worker, state)
-                                state.remove_worker(args.name)
-                                ralph_state.status = "failed"
-                                ralph_state.exit_reason = "preflight_failed"
-                                save_ralph_state(ralph_state)
-                                sys.exit(1)
-                    except subprocess.CalledProcessError:
-                        pass  # tmux capture failed, skip pre-flight
 
             except Exception as e:
                 print(f"swarm: error: failed to spawn worker: {e}", file=sys.stderr)

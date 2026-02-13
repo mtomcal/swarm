@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Pre-commit hook: runs tests with coverage, fails if <90%
+# Pre-commit hook: runs tests in parallel with coverage, fails if <90%
 #
 
 set -e
@@ -13,14 +13,46 @@ fi
 
 cd "$(git rev-parse --show-toplevel)"
 
-# Run tests with coverage, capturing output
-# Use buffer mode to suppress success output, only show failures
-OUTPUT=$(python3 -m coverage run --source=swarm -m unittest discover -s . -p 'test_*.py' -b 2>&1) || {
-    # On failure, show only relevant error lines
-    echo "$OUTPUT" | grep -E "(FAIL|ERROR|Traceback|File.*line|Assert|Error:)" | head -50
+# Clean old coverage data
+python3 -m coverage erase
+
+# Run each test file in parallel with coverage in parallel mode
+FAIL=0
+TMPDIR_RESULTS=$(mktemp -d)
+
+for f in test_*.py; do
+    mod="${f%.py}"
+    (
+        python3 -m coverage run --parallel-mode --source=swarm -m unittest "$mod" -b 2>"${TMPDIR_RESULTS}/${mod}.err" >"${TMPDIR_RESULTS}/${mod}.out"
+        echo $? > "${TMPDIR_RESULTS}/${mod}.rc"
+    ) &
+done
+
+# Wait for all test processes
+wait
+
+# Check for failures
+for f in test_*.py; do
+    mod="${f%.py}"
+    rc=0
+    [ -f "${TMPDIR_RESULTS}/${mod}.rc" ] && rc=$(cat "${TMPDIR_RESULTS}/${mod}.rc")
+    if [ "$rc" != "0" ]; then
+        echo "FAIL: $mod"
+        cat "${TMPDIR_RESULTS}/${mod}.err" | grep -E "(FAIL|ERROR|Traceback|File.*line|Assert|Error:)" | head -20
+        FAIL=1
+    fi
+done
+
+rm -rf "$TMPDIR_RESULTS"
+
+if [ "$FAIL" != "0" ]; then
     echo "Tests failed"
+    python3 -m coverage combine 2>/dev/null || true
     exit 1
-}
+fi
+
+# Combine parallel coverage data and check
+python3 -m coverage combine
 
 # Get coverage percentage
 TOTAL=$(python3 -m coverage report --format=total 2>/dev/null || python3 -m coverage report | grep -E "^TOTAL" | awk '{print $NF}' | tr -d '%')
