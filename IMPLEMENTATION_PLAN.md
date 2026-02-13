@@ -212,19 +212,19 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 9: Verify
 
-- [ ] **9.1 Run new/modified unit tests**
+- [x] **9.1 Run new/modified unit tests**
   - `python3 -m unittest test_cmd_ralph -v`
   - `python3 -m unittest test_cmd_spawn -v`
   - `python3 -m unittest test_cmd_heartbeat -v`
   - `python3 -m unittest test_state_file_locking -v`
 
-- [ ] **9.2 Verify CLI changes**
+- [x] **9.2 Verify CLI changes**
   - `python3 swarm.py ralph spawn --help` → shows `--max-context`, `--max-iterations` default 50, `--worktree`/`--no-worktree`
   - `python3 swarm.py send --help` → shows `--raw`
   - `python3 swarm.py ralph stop --help` → works
   - `python3 swarm.py heartbeat ls` → works
 
-- [ ] **9.3 Run full test suite**
+- [x] **9.3 Run full test suite**
   - `python3 -m unittest discover -s . -p 'test_*.py' -v`
 
 ---

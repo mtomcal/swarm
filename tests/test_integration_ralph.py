@@ -67,6 +67,7 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
             '--prompt-file', '/nonexistent/PROMPT.md',
             '--max-iterations', '3',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'echo', 'hello'
         )
@@ -93,6 +94,7 @@ class TestRalphSpawn(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -180,6 +182,7 @@ class TestRalphStatus(TmuxIsolatedTestCase):
             '--max-iterations', '5',
             '--inactivity-timeout', '30',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -247,6 +250,7 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -286,6 +290,7 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -329,6 +334,7 @@ class TestRalphPauseResume(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -394,6 +400,7 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -423,6 +430,7 @@ class TestRalphInactivityDetection(TmuxIsolatedTestCase):
             '--max-iterations', '3',
             '--inactivity-timeout', '10',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -467,6 +475,7 @@ sleep 30
             '--max-iterations', '3',
             '--inactivity-timeout', '5',  # 5 second timeout for quick test
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             str(script_file)
         )
@@ -526,6 +535,7 @@ class TestRalphList(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -559,6 +569,7 @@ class TestRalphList(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',  # Don't auto-start loop for this test
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -735,6 +746,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -759,6 +771,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '5',
             '--no-run',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -782,6 +795,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--max-iterations', '5',
             '--no-run',
             '--replace',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -815,6 +829,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -867,6 +882,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -923,6 +939,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--prompt-file', str(self.prompt_file),
             '--max-iterations', '3',
             '--no-run',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
@@ -955,6 +972,7 @@ class TestRalphNewFeatures(TmuxIsolatedTestCase):
             '--max-iterations', '5',
             '--no-run',
             '--clean-state',
+            '--no-worktree',
             '--',
             'bash', '-c', 'echo "$ ready"; sleep 30'
         )
