@@ -317,7 +317,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #3 — `swarm send` reliably delivers text
 
-- [ ] **10.3 Smoke test: send pre-clear delivers text**
+- [x] **10.3 Smoke test: send pre-clear delivers text**
   - Write and run a test script that:
     1. Runs: `python3 swarm.py spawn --name smoke-fb3 --tmux -- bash -c 'echo "$ ready"; read line; echo "GOT:$line"; sleep 10'`
     2. Waits for ready (poll `python3 swarm.py status smoke-fb3` until running)
