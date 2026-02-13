@@ -55,9 +55,10 @@ The agent receives your prompt and starts working autonomously.
 
 ```bash
 # 3. Monitor progress
+swarm peek agent1        # Quick look at terminal output (last 30 lines)
+swarm status agent1      # Check if still running
 swarm attach agent1      # Live view (Ctrl-B D to detach)
 swarm logs agent1        # View output history
-swarm status agent1      # Check if still running
 ```
 
 > **⚠️ Security:** The `--dangerously-skip-permissions` flag enables autonomous operation by bypassing Claude's interactive prompts. See [Security Considerations](#security-considerations) for sandboxing options.
@@ -153,24 +154,25 @@ swarm ls --tag team-a            # List only team-a workers
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
-| `spawn` | Create worker process | `--tmux` `--worktree` `--ready-wait` `--tag` `--env` |
-| `ls` | List workers | `--format json\|table\|names` `--tag` |
+| `spawn` | Create worker process | `--tmux` `--worktree` `--ready-wait` `--tag` `--env` `--heartbeat` |
+| `ls` | List workers | `--format json\|table\|names` `--status running\|stopped` `--tag` |
 | `status` | Check worker state | Exit: 0=running, 1=stopped, 2=not found |
+| `peek` | View terminal output | `-n/--lines` (default: 30) `--all` |
 | `send` | Send text to worker | `--all` `--no-enter` |
 | `attach` | Connect to tmux window | |
-| `logs` | View worker output | `-f` (follow) |
+| `logs` | View worker output | `-f` (follow) `--history` `--lines` |
 | `wait` | Block until exit | `--all` `--timeout` |
-| `kill` | Terminate worker | `--rm-worktree` |
-| `clean` | Remove stopped workers | `--all` `--rm-worktree` |
+| `kill` | Terminate worker | `--rm-worktree` `--force-dirty` `--all` |
+| `clean` | Remove stopped workers | `--all` `--rm-worktree` `--force-dirty` |
 | `interrupt` | Send Ctrl-C | `--all` |
 | `eof` | Send Ctrl-D | |
-| `respawn` | Restart dead worker | `--clean-first` |
+| `respawn` | Restart dead worker | `--clean-first` `--force-dirty` |
 
 ### Subcommand Groups
 
 | Group | Description | Subcommands |
 |-------|-------------|-------------|
-| `ralph` | Autonomous looping | `spawn` `run` `init` `status` `pause` `resume` `list` `ls` `clean` |
+| `ralph` | Autonomous looping | `spawn` `run` `init` `status` `logs` `pause` `resume` `list` `ls` `clean` |
 | `heartbeat` | Rate limit recovery | `start` `stop` `list` `status` `pause` `resume` |
 
 ## Ralph Mode (Autonomous Looping)
@@ -199,17 +201,22 @@ EOF
 swarm ralph spawn --name refactor --prompt-file ./PROMPT.md --max-iterations 20 -- claude --dangerously-skip-permissions
 
 # Monitor
-swarm ralph status refactor    # Check iteration count, status
-swarm attach refactor          # Watch live (Ctrl-B D to detach)
-tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
+swarm ralph status refactor    # Iteration count, ETA, status
+swarm peek refactor            # Quick look at terminal output
+swarm ralph logs refactor      # Iteration history
+swarm ralph logs refactor --live  # Tail iteration log in real-time
+swarm attach refactor          # Full interactive view (Ctrl-B D to detach)
 ```
+
+`swarm ralph spawn` starts the monitoring loop in the background and returns immediately — you can start monitoring right away.
 
 ### How It Works
 
-1. Each iteration reads your prompt file and sends it to a fresh agent
+1. Each iteration reads your prompt file from disk and sends it to a fresh agent
 2. The agent works until it exits or goes inactive (no output for 180s by default)
-3. Loop restarts with fresh context, re-reading the prompt file
-4. Stops when: max iterations reached, `--done-pattern` matched, or 5 consecutive failures
+3. Loop restarts with fresh context, re-reading the prompt file (you can edit it mid-loop)
+4. The same worktree is reused across iterations — work persists through git commits
+5. Stops when: max iterations reached, `--done-pattern` matched, or 5 consecutive failures
 
 ### Key Options
 
@@ -219,6 +226,24 @@ tail -f ~/.swarm/ralph/refactor/iterations.log  # Iteration history
 | `--max-iterations` | unlimited | Stop after N iterations |
 | `--inactivity-timeout` | 180s | Restart after N seconds of no output |
 | `--done-pattern` | none | Regex to stop loop when matched |
+| `--check-done-continuous` | off | Check done pattern during iteration, not just after exit |
+| `--foreground` | off | Block while the loop runs (for human terminal use) |
+| `--replace` | off | Auto-clean existing worker before spawning |
+| `--clean-state` | off | Reset ralph state only (keep worker/worktree) |
+| `--no-run` | off | Spawn worker without starting the monitoring loop |
+
+### Monitoring the Loop
+
+```bash
+swarm ralph status refactor    # Iteration progress + ETA (calculated from iteration durations)
+swarm peek refactor            # Last 30 lines of terminal output
+swarm peek refactor -n 100    # Last 100 lines
+swarm ralph logs refactor      # Iteration history (start/stop/exit reasons)
+swarm ralph logs refactor --live  # Tail iteration log in real-time
+swarm attach refactor          # Full interactive tmux view
+```
+
+`swarm peek` is the fastest way to see what the agent is doing right now without risk of accidentally sending keystrokes (unlike `attach`).
 
 ### Controlling the Loop
 
@@ -230,13 +255,72 @@ swarm ralph ls                 # Alias for ralph list
 swarm ralph clean refactor     # Remove ralph state for a worker
 swarm ralph clean --all        # Remove all ralph state
 swarm kill refactor            # Stop immediately
+swarm kill refactor --rm-worktree  # Stop + remove worktree + ralph state
+```
+
+### Advanced Ralph Usage
+
+**Foreground mode** (blocks until loop finishes — useful in a dedicated terminal):
+
+```bash
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 50 --foreground \
+    -- claude --dangerously-skip-permissions
+```
+
+**Spawn without starting the loop** (manual two-step workflow):
+
+```bash
+# Step 1: Create worker only
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --max-iterations 50 --no-run \
+    -- claude --dangerously-skip-permissions
+
+# Step 2: Start the monitoring loop later
+swarm ralph run agent
+```
+
+**Replace an existing worker** (auto-cleans worker, worktree, and ralph state):
+
+```bash
+swarm ralph spawn --name agent --replace --prompt-file ./PROMPT.md --max-iterations 50 \
+    -- claude --dangerously-skip-permissions
+```
+
+**Attach heartbeat for rate limit recovery**:
+
+```bash
+swarm ralph spawn --name agent --prompt-file ./PROMPT.md --heartbeat 4h --heartbeat-expire 24h \
+    -- claude --dangerously-skip-permissions
+```
+
+### Stuck Worker Detection
+
+Ralph detects common stuck states during the first iteration and logs warnings:
+
+| Terminal Output | Meaning | Fix |
+|----------------|---------|-----|
+| `Select login method` | OAuth login prompt blocking agent | Use `ANTHROPIC_API_KEY` env var instead |
+| `Choose the text style` | First-run theme picker | Pre-configure in Dockerfile (see [Docker Sandbox](#docker-sandbox)) |
+| `Paste code here` | OAuth code entry prompt | Use `ANTHROPIC_API_KEY` env var instead |
+
+On the first iteration, Ralph runs a pre-flight check: if a stuck pattern is detected within 10 seconds, it aborts immediately with an actionable error instead of waiting for the inactivity timeout.
+
+Stuck pattern warnings also appear in `swarm ralph logs`, so you don't need to peek at the terminal to discover them.
+
+### Monitor Disconnect Recovery
+
+The ralph monitoring process can crash or disconnect while the tmux worker keeps running. When this happens:
+
+```bash
+swarm ralph status agent     # Shows exit_reason: monitor_disconnected
+swarm status agent           # Shows worker is still running
+swarm ralph resume agent     # Resume monitoring from where it left off
 ```
 
 ### Caveats
 
-**Done pattern + prompt content**: When using `--done-pattern` with `--check-done-continuous`, the pattern must NOT appear literally in your prompt file. The prompt text is typed into the terminal, and the done pattern scans the full buffer — including the prompt. Use a unique signal pattern (e.g., `SWARM_DONE_X9K`).
+**Done pattern + prompt content**: When using `--done-pattern` with `--check-done-continuous`, Ralph captures a baseline of the terminal after injecting the prompt and only checks *new* output for the done pattern. This prevents self-matching when the pattern appears in your prompt text. As defense-in-depth, prefer a unique signal pattern (e.g., `SWARM_DONE_X9K`) that won't appear in prose.
 
-**Docker sandbox**: If using `sandbox.sh`, ensure `docker run --rm -it` (needs `-it` for TTY). Fresh containers need theme pre-configuration in the Dockerfile to avoid the first-time theme picker. Omit `--worktree` with Docker (Docker provides its own isolation).
+**Docker sandbox**: If using `sandbox.sh`, ensure `docker run --rm -it` (needs `-it` for TTY). Fresh containers need theme pre-configuration in the Dockerfile to avoid the first-time theme picker. Omit `--worktree` with Docker (Docker provides its own isolation). See [Docker Sandbox](#docker-sandbox) for details.
 
 ## Heartbeat (Rate Limit Recovery)
 
@@ -340,6 +424,48 @@ for name in $(swarm ls --format names); do
 done
 ```
 
+## Scripting Tips
+
+### Exit Codes
+
+`swarm status` returns meaningful exit codes for scripting:
+
+```bash
+swarm status agent1
+# Exit 0 = running
+# Exit 1 = stopped
+# Exit 2 = not found
+
+# Use in conditionals
+if swarm status agent1 2>/dev/null; then
+    echo "agent1 is still running"
+else
+    echo "agent1 has stopped"
+fi
+```
+
+### Machine-Readable Output
+
+```bash
+# JSON output for parsing with jq
+swarm ls --format json | jq '.[] | select(.status == "running") | .name'
+
+# Names only for piping
+swarm ls --format names | xargs -I{} swarm peek {}
+
+# Filter by status
+swarm ls --status running              # Only running workers
+swarm ls --status stopped              # Only stopped workers
+swarm ls --status running --tag team-a # Combine filters
+```
+
+### Peek All Workers
+
+```bash
+# Quick snapshot of all running workers
+swarm peek --all
+```
+
 ## State & Logs
 
 All state is stored in `~/.swarm/`:
@@ -360,9 +486,11 @@ All state is stored in `~/.swarm/`:
 Useful debugging commands:
 
 ```bash
-cat ~/.swarm/state.json | jq .                     # View all workers
-swarm logs worker1                                  # Tmux scrollback
-tail -f ~/.swarm/ralph/agent/iterations.log         # Watch Ralph progress
+swarm peek worker1                                  # Quick look at terminal output
+swarm logs worker1                                  # Full tmux scrollback
+swarm ralph logs agent                              # Ralph iteration history
+swarm ralph logs agent --live                       # Tail Ralph iteration log
+cat ~/.swarm/state.json | jq .                      # View all worker state
 swarm heartbeat list                                # Check heartbeat status
 ```
 
@@ -381,11 +509,11 @@ Claude Code normally prompts for confirmation before running commands, editing f
 
 ### Mitigation Strategies
 
-**1. Worktree Isolation (Built-in)**
+#### Worktree Isolation
 
 Always use `--worktree`. Each agent works in its own directory and branch, limiting blast radius.
 
-**2. Docker Isolation (Recommended)**
+#### Docker Sandbox
 
 Use `sandbox.sh` to run workers inside Docker containers with resource limits and network lockdown:
 
@@ -398,18 +526,32 @@ docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) \
     -t sandbox-loop -f Dockerfile.sandbox .
 sudo ./setup-sandbox-network.sh    # iptables allowlist (does not survive reboot)
 
-# Run sandboxed worker
+# Run sandboxed worker (use --env to pass API key into container)
 swarm ralph spawn --name dev --prompt-file PROMPT.md --max-iterations 50 \
+    --env ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
     -- ./sandbox.sh --dangerously-skip-permissions
 ```
 
-Provides hard memory caps (OOM kills container, not host), network allowlist, and filesystem isolation.
+Default container limits: 8 GB memory (no swap), 4 CPUs, 512 PIDs. OOM kills the container (not the host), and Ralph auto-continues on the next iteration.
+
+**Authentication**: Use `ANTHROPIC_API_KEY` for Docker sandboxes. OAuth credentials (`.credentials.json`) don't work reliably in Docker — Claude Code's interactive mode shows a login picker even with valid tokens. The API key bypasses OAuth entirely and is the recommended auth method for containers.
+
+**Environment variable propagation**: `--env KEY=VAL` on `swarm ralph spawn` propagates through tmux → `sandbox.sh` → `docker run -e` → the agent inside the container. Omit `--worktree` when using Docker (Docker provides its own filesystem isolation).
+
+**Theme picker**: Fresh containers hit Claude Code's first-run theme picker. Pre-configure in your Dockerfile:
+
+```dockerfile
+RUN mkdir -p /home/loopuser/.claude && \
+    echo '{"theme":"dark"}' > /home/loopuser/.claude/settings.local.json
+```
+
+See [`docs/autonomous-loop-guide.md`](docs/autonomous-loop-guide.md) for a complete setup walkthrough and [`docs/sandbox-loop-spec.md`](docs/sandbox-loop-spec.md) for the full technical spec.
 
 ### Best Practices
 
 1. **Use disposable environments** — VMs, containers, or cloud instances you can destroy
 2. **Set iteration limits** — `--max-iterations` in Ralph prevents runaway loops
-3. **Monitor activity** — `swarm attach` or `swarm logs -f` to watch agents
+3. **Monitor activity** — `swarm peek` for quick checks, `swarm attach` or `swarm logs -f` for full output
 4. **Review before merge** — Treat all agent commits as untrusted code
 
 ## Requirements
@@ -446,17 +588,49 @@ sudo dnf install -y tmux git python3
 
 **Agent not receiving prompts**
 - Use `--ready-wait` to ensure agent is ready before sending
-- Check if agent is in a different state: `swarm attach <name>`
+- Check what the agent is doing: `swarm peek <name>`
+- If stuck at a prompt (login, theme picker), see [Stuck Worker Detection](#stuck-worker-detection)
+
+**Worker spawned but not doing anything**
+- `swarm peek <name>` to see terminal output — look for login prompts, theme pickers, or permission dialogs
+- `swarm ralph status <name>` may show `running` even when stuck — status tracks the loop, not the agent's progress
+- If the agent is at a login prompt: use `ANTHROPIC_API_KEY` env var (see [Docker Sandbox](#docker-sandbox))
 
 **Worktree cleanup fails**
 - Dirty worktrees (uncommitted changes) block removal by default
 - Use `--force-dirty` to override, or commit/discard changes first
 - Manual cleanup: `git worktree remove <path>`
 
+**`git config core.bare = true` corruption**
+- Worktree operations can sometimes set `core.bare = true`, breaking git commands
+- Swarm detects and auto-fixes this, but if you encounter it manually: `git config core.bare false`
+
 **Ralph loop stops unexpectedly**
 - Check `~/.swarm/ralph/<name>/state.json` for failure count
-- View iteration history: `cat ~/.swarm/ralph/<name>/iterations.log`
+- View iteration history: `swarm ralph logs <name>` or `cat ~/.swarm/ralph/<name>/iterations.log`
 - 5 consecutive failures trigger automatic stop
+
+**Ralph monitor disconnected but worker still running**
+- `swarm ralph status <name>` shows `exit_reason: monitor_disconnected`
+- `swarm status <name>` confirms worker is still alive
+- `swarm ralph resume <name>` resumes monitoring from where it left off
+
+**Ralph state file corrupted**
+- Swarm recovers from corrupt JSON automatically (backs up to `state.json.corrupted`, reinitializes)
+- If needed, manually reset: `swarm ralph clean <name>` then respawn
+
+**Stale workers cluttering `swarm ls`**
+- Filter to running workers: `swarm ls --status running`
+- Clean up stopped workers: `swarm clean --all --rm-worktree`
+
+**Docker auth not working (login picker appears)**
+- OAuth credentials don't work reliably in Docker containers
+- Use `ANTHROPIC_API_KEY` instead: `swarm ralph spawn --env ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ...`
+- Verify with `swarm peek <name>` — you should see the agent working, not a login prompt
+
+**Ralph inactivity timeout too short**
+- If Ralph restarts prematurely (e.g., during slow pre-commit hooks), increase the timeout:
+  `swarm ralph spawn --inactivity-timeout 300 ...` (default: 180s)
 
 **Heartbeat not sending**
 - Check status: `swarm heartbeat status <worker>`
