@@ -108,12 +108,12 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 4: `--max-context` Enforcement
 
-- [ ] **4.1 Add `--max-context` flag to ralph spawn**
+- [x] **4.1 Add `--max-context` flag to ralph spawn**
   - Add `--max-context` argument: `type=int, default=None` (~line 3990)
   - Store in `RalphState` as `max_context: Optional[int] = None`
   - File: `swarm.py` (argparse + `RalphState` dataclass)
 
-- [ ] **4.2 Add context percentage scanning to `detect_inactivity()`**
+- [x] **4.2 Add context percentage scanning to `detect_inactivity()`**
   - After capturing pane content, if `max_context` is set:
     1. Scan last 3 lines for `(\d+)%` regex
     2. If percentage >= `max_context`: return `"context_nudge"` (first hit)
@@ -121,13 +121,13 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
   - Track whether nudge was already sent (avoid spam) via flag in state or local var
   - File: `swarm.py` (`detect_inactivity()`)
 
-- [ ] **4.3 Handle context returns in ralph monitor loop**
+- [x] **4.3 Handle context returns in ralph monitor loop**
   - `"context_nudge"`: send nudge message to worker via `tmux_send()`:
     `"You're at {n}% context. Commit WIP and /exit NOW."`
   - `"context_threshold"`: SIGTERM the worker, log `[FATAL] context threshold exceeded`, set `exit_reason: "context_threshold"`
   - File: `swarm.py` (ralph monitor loop)
 
-- [ ] **4.4 Add unit tests for max-context**
+- [x] **4.4 Add unit tests for max-context**
   - Test: pane with `72%` and `max_context=70` → returns nudge
   - Test: pane with `87%` and `max_context=70` → returns threshold (70+15=85)
   - Test: no `--max-context` → no scanning

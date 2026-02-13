@@ -12274,5 +12274,411 @@ class TestFatalPatternDetection(unittest.TestCase):
                        "FATAL log should mention compaction")
 
 
+class TestMaxContextEnforcement(unittest.TestCase):
+    """Test --max-context percentage scanning and enforcement."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.original_swarm_dir = swarm.SWARM_DIR
+        self.original_ralph_dir = swarm.RALPH_DIR
+        self.original_state_file = swarm.STATE_FILE
+        self.original_state_lock_file = swarm.STATE_LOCK_FILE
+        swarm.SWARM_DIR = Path(self.temp_dir)
+        swarm.RALPH_DIR = Path(self.temp_dir) / "ralph"
+        swarm.STATE_FILE = Path(self.temp_dir) / "state.json"
+        swarm.STATE_LOCK_FILE = Path(self.temp_dir) / "state.lock"
+
+        # Create a prompt file
+        self.prompt_path = Path(self.temp_dir) / "prompt.md"
+        self.prompt_path.write_text("test prompt content")
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        swarm.SWARM_DIR = self.original_swarm_dir
+        swarm.RALPH_DIR = self.original_ralph_dir
+        swarm.STATE_FILE = self.original_state_file
+        swarm.STATE_LOCK_FILE = self.original_state_lock_file
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_ralph_state_has_max_context_field(self):
+        """Test RalphState dataclass has max_context and context_nudge_sent fields."""
+        rs = swarm.RalphState(
+            worker_name="test", prompt_file="p.md", max_iterations=10,
+            max_context=70
+        )
+        self.assertEqual(rs.max_context, 70)
+        self.assertFalse(rs.context_nudge_sent)
+
+    def test_ralph_state_max_context_serialization(self):
+        """Test max_context and context_nudge_sent roundtrip through to_dict/from_dict."""
+        rs = swarm.RalphState(
+            worker_name="test", prompt_file="p.md", max_iterations=10,
+            max_context=75, context_nudge_sent=True
+        )
+        d = rs.to_dict()
+        self.assertEqual(d["max_context"], 75)
+        self.assertTrue(d["context_nudge_sent"])
+
+        rs2 = swarm.RalphState.from_dict(d)
+        self.assertEqual(rs2.max_context, 75)
+        self.assertTrue(rs2.context_nudge_sent)
+
+    def test_ralph_state_max_context_defaults_none(self):
+        """Test max_context defaults to None when not provided."""
+        rs = swarm.RalphState(
+            worker_name="test", prompt_file="p.md", max_iterations=10
+        )
+        self.assertIsNone(rs.max_context)
+        self.assertFalse(rs.context_nudge_sent)
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_context_nudge_at_threshold(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: pane with 72% and max_context=70 → returns context_nudge."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = "Working on task...\nSome output\n72%"
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=70, context_nudge_sent=False
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=180, ralph_state=ralph_state)
+        self.assertEqual(result, "context_nudge")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_context_threshold_at_kill_level(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: pane with 87% and max_context=70 → returns context_threshold (70+15=85)."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = "Working on task...\nSome output\n87%"
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=70, context_nudge_sent=False
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=180, ralph_state=ralph_state)
+        self.assertEqual(result, "context_threshold")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_no_max_context_no_scanning(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: no max_context set → percentage in output is ignored, goes inactive."""
+        mock_refresh.return_value = 'running'
+        content = "Working on task...\nSome output\n95%"
+        mock_capture.return_value = content
+        # time.time() calls: stable_start = time.time() → 100, then check → 102 >= 1
+        mock_time.side_effect = [100, 102]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        # No max_context set (None)
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=None
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_percentage_below_threshold_no_action(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: percentage below threshold → no context action, goes inactive."""
+        mock_refresh.return_value = 'running'
+        content = "Working on task...\nSome output\n50%"
+        mock_capture.return_value = content
+        # time.time() calls: stable_start = time.time() → 100, then check → 102 >= 1
+        mock_time.side_effect = [100, 102]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=70
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_nudge_sent_only_once(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: nudge sent only once per iteration (context_nudge_sent flag)."""
+        mock_refresh.return_value = 'running'
+        content = "Working on task...\nSome output\n72%"
+        mock_capture.return_value = content
+        # time.time() calls: stable_start = time.time() → 100, then check → 102 >= 1
+        mock_time.side_effect = [100, 102]
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        # context_nudge_sent=True means nudge was already sent
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=70, context_nudge_sent=True
+        )
+
+        # Should go inactive, NOT return context_nudge again
+        result = swarm.detect_inactivity(worker, timeout=1, ralph_state=ralph_state)
+        self.assertEqual(result, "inactive")
+
+    @patch('swarm.save_ralph_state')
+    @patch('swarm.refresh_worker_status')
+    @patch('swarm.tmux_capture_pane')
+    @patch('time.time')
+    @patch('time.sleep')
+    def test_context_threshold_still_fires_after_nudge(
+            self, mock_sleep, mock_time, mock_capture, mock_refresh, mock_save):
+        """Test: context_threshold fires even when nudge was already sent."""
+        mock_refresh.return_value = 'running'
+        mock_capture.return_value = "Working on task...\nSome output\n87%"
+        mock_sleep.return_value = None
+
+        worker = swarm.Worker(
+            name='test-worker', status='running', cmd=['claude'],
+            started='2024-01-15T10:30:00', cwd='/tmp',
+            tmux=swarm.TmuxInfo(session='swarm', window='test')
+        )
+        ralph_state = swarm.RalphState(
+            worker_name='test-worker', prompt_file='p.md', max_iterations=10,
+            max_context=70, context_nudge_sent=True
+        )
+
+        result = swarm.detect_inactivity(worker, timeout=180, ralph_state=ralph_state)
+        self.assertEqual(result, "context_threshold")
+
+    def test_context_nudge_in_ralph_loop_sends_message(self):
+        """Test: context_nudge return in ralph loop sends nudge and continues monitoring."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker', status='running', cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00', cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker', prompt_file=str(self.prompt_path),
+            max_iterations=3, current_iteration=1, status='running',
+            max_context=70
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # First call returns context_nudge, second returns exited (normal completion)
+        call_count = [0]
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return "context_nudge"
+            return "exited"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('swarm.tmux_send') as mock_tmux_send:
+                                        with patch('builtins.print') as mock_print:
+                                            mock_worker = swarm.Worker(
+                                                name='ralph-worker', status='running',
+                                                cmd=['echo', 'test'],
+                                                started='2024-01-15T10:30:00',
+                                                cwd=self.temp_dir,
+                                                tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                            )
+                                            mock_spawn.return_value = mock_worker
+
+                                            swarm.cmd_ralph_run(args)
+
+        # Verify nudge message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('context nudge sent', output)
+
+        # Verify tmux_send was called with nudge message
+        self.assertTrue(mock_tmux_send.called, "tmux_send should be called to deliver nudge")
+        nudge_calls = [c for c in mock_tmux_send.call_args_list
+                       if 'context' in str(c).lower() or '/exit' in str(c)]
+        self.assertGreater(len(nudge_calls), 0, "Should send a nudge message containing '/exit'")
+
+    def test_context_threshold_in_ralph_loop_kills_worker(self):
+        """Test: context_threshold return in ralph loop kills worker and sets exit_reason."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker', status='running', cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00', cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker', prompt_file=str(self.prompt_path),
+            max_iterations=2, current_iteration=1, status='running',
+            max_context=70
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # First call returns context_threshold, then exited
+        call_count = [0]
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return "context_threshold"
+            return "exited"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph') as mock_kill:
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('swarm.log_ralph_iteration') as mock_log:
+                                        with patch('builtins.print') as mock_print:
+                                            mock_worker = swarm.Worker(
+                                                name='ralph-worker', status='running',
+                                                cmd=['echo', 'test'],
+                                                started='2024-01-15T10:30:00',
+                                                cwd=self.temp_dir,
+                                                tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                            )
+                                            mock_spawn.return_value = mock_worker
+
+                                            swarm.cmd_ralph_run(args)
+
+        # Verify kill was called (for context_threshold)
+        self.assertTrue(mock_kill.called, "Worker should be killed on context threshold")
+
+        # Verify context threshold message was printed
+        output = '\n'.join([str(call) for call in mock_print.call_args_list])
+        self.assertIn('context threshold exceeded', output)
+
+        # Verify FATAL was logged with context threshold message
+        fatal_calls = [c for c in mock_log.call_args_list
+                       if len(c[0]) >= 2 and c[0][1] == 'FATAL']
+        self.assertGreaterEqual(len(fatal_calls), 1,
+                                "Context threshold should log a FATAL entry")
+        fatal_kwargs = fatal_calls[0][1] if fatal_calls[0][1] else {}
+        self.assertIn('context threshold', fatal_kwargs.get('message', '').lower(),
+                       "FATAL log should mention context threshold")
+
+    def test_max_context_argparse_flag(self):
+        """Test --max-context flag is accepted in ralph spawn."""
+        result = subprocess.run(
+            [sys.executable, 'swarm.py', 'ralph', 'spawn', '--help'],
+            capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('--max-context', result.stdout)
+
+    def test_context_nudge_sent_reset_on_new_iteration(self):
+        """Test context_nudge_sent is reset when a new iteration starts."""
+        state = swarm.State()
+        worker = swarm.Worker(
+            name='ralph-worker', status='running', cmd=['echo', 'test'],
+            started='2024-01-15T10:30:00', cwd=self.temp_dir,
+            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+        )
+        state.workers.append(worker)
+        state.save()
+
+        ralph_state = swarm.RalphState(
+            worker_name='ralph-worker', prompt_file=str(self.prompt_path),
+            max_iterations=3, current_iteration=1, status='running',
+            max_context=70, context_nudge_sent=True
+        )
+        swarm.save_ralph_state(ralph_state)
+
+        args = Namespace(name='ralph-worker')
+
+        # Worker exits normally, then on next iteration check state
+        call_count = [0]
+        def mock_inactivity(w, t, done_pattern=None, check_done_continuous=False,
+                            prompt_baseline_content="", ralph_state=None):
+            call_count[0] += 1
+            return "exited"
+
+        with patch('swarm.refresh_worker_status', return_value='stopped'):
+            with patch('swarm.detect_inactivity', side_effect=mock_inactivity):
+                with patch('swarm.kill_worker_for_ralph'):
+                    with patch('swarm.spawn_worker_for_ralph') as mock_spawn:
+                        with patch('swarm.send_prompt_to_worker', return_value=""):
+                            with patch.object(swarm.State, 'add_worker'):
+                                with patch.object(swarm.State, 'remove_worker'):
+                                    with patch('builtins.print'):
+                                        mock_worker = swarm.Worker(
+                                            name='ralph-worker', status='running',
+                                            cmd=['echo', 'test'],
+                                            started='2024-01-15T10:30:00',
+                                            cwd=self.temp_dir,
+                                            tmux=swarm.TmuxInfo(session='swarm', window='ralph-worker')
+                                        )
+                                        mock_spawn.return_value = mock_worker
+
+                                        swarm.cmd_ralph_run(args)
+
+        # After loop completes, check that context_nudge_sent was reset
+        # (it was True initially but should be False after iteration reset)
+        updated_state = swarm.load_ralph_state('ralph-worker')
+        self.assertFalse(updated_state.context_nudge_sent,
+                         "context_nudge_sent should be reset at start of new iteration")
+
+
 if __name__ == "__main__":
     unittest.main()

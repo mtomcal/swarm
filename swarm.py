@@ -2055,6 +2055,8 @@ class RalphState:
     prompt_baseline_content: str = ""  # Pane content snapshot after prompt injection, for done-pattern baseline filtering
     last_screen_change: Optional[str] = None  # ISO format timestamp of last screen content change
     monitor_pid: Optional[int] = None  # PID of background monitoring loop process
+    max_context: Optional[int] = None  # Context percentage threshold for nudge/kill
+    context_nudge_sent: bool = False  # Whether context nudge has been sent this iteration
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -2077,6 +2079,8 @@ class RalphState:
             "prompt_baseline_content": self.prompt_baseline_content,
             "last_screen_change": self.last_screen_change,
             "monitor_pid": self.monitor_pid,
+            "max_context": self.max_context,
+            "context_nudge_sent": self.context_nudge_sent,
         }
 
     @classmethod
@@ -2101,6 +2105,8 @@ class RalphState:
             prompt_baseline_content=d.get("prompt_baseline_content", ""),
             last_screen_change=d.get("last_screen_change"),
             monitor_pid=d.get("monitor_pid"),
+            max_context=d.get("max_context"),
+            context_nudge_sent=d.get("context_nudge_sent", False),
         )
 
 
@@ -4036,6 +4042,10 @@ def main() -> None:
                                help="Screen stability timeout in seconds. Default: 180. "
                                     "Agent is restarted when tmux screen is unchanged for this duration. "
                                     "Increase for repos with slow CI/pre-commit hooks (e.g., 300).")
+    ralph_spawn_p.add_argument("--max-context", type=int, default=None,
+                               help="Context percentage threshold for nudge/kill. "
+                                    "When the agent's context usage reaches this %%, send a nudge. "
+                                    "At threshold+15%%, force-kill the worker. Default: none (disabled).")
     ralph_spawn_p.add_argument("--done-pattern", type=str, default=None,
                                help="Regex pattern to stop the loop when matched in output. "
                                     "Default: none. Example: '/done' or 'All tasks complete'.")
@@ -5726,6 +5736,7 @@ def cmd_ralph_spawn(args) -> None:
             inactivity_timeout=args.inactivity_timeout,
             done_pattern=args.done_pattern,
             check_done_continuous=bool(args.check_done_continuous),
+            max_context=getattr(args, 'max_context', None),
         )
         save_ralph_state(ralph_state)
         ralph_state_created = True
@@ -6379,6 +6390,8 @@ def detect_inactivity(
         - "inactive": Inactivity timeout reached
         - "done_pattern": Done pattern matched (only if check_done_continuous)
         - "compaction": Fatal pattern detected (e.g. "Compacting conversation")
+        - "context_nudge": Context usage reached max_context threshold (first time only)
+        - "context_threshold": Context usage reached max_context+15 threshold (force kill)
     """
     import hashlib
     import re
@@ -6469,6 +6482,21 @@ def detect_inactivity(
             # Check for fatal patterns (compaction, etc.) — immediate kill required
             if any(p in normalized for p in FATAL_PATTERNS):
                 return "compaction"
+
+            # Check context percentage if max_context is set
+            if ralph_state is not None and ralph_state.max_context is not None:
+                # Scan last 3 lines for percentage pattern
+                last_3_lines = normalized.split('\n')[-3:]
+                pct_pattern = re.compile(r'(\d+)%')
+                for line in last_3_lines:
+                    match = pct_pattern.search(line)
+                    if match:
+                        pct = int(match.group(1))
+                        kill_threshold = ralph_state.max_context + 15
+                        if pct >= kill_threshold:
+                            return "context_threshold"
+                        if pct >= ralph_state.max_context and not ralph_state.context_nudge_sent:
+                            return "context_nudge"
 
             # Compare hashes
             if current_hash != last_hash:
@@ -6926,9 +6954,10 @@ def _run_ralph_loop_inner(
 
         # If worker is not running, spawn a new one
         if not worker or refresh_worker_status(worker) == "stopped":
-            # Increment iteration counter
+            # Increment iteration counter and reset per-iteration flags
             ralph_state.current_iteration += 1
             ralph_state.last_iteration_started = datetime.now().isoformat()
+            ralph_state.context_nudge_sent = False
             save_ralph_state(ralph_state)
 
             print(f"[ralph] {args.name}: starting iteration {ralph_state.current_iteration}/{ralph_state.max_iterations}")
@@ -7037,7 +7066,52 @@ def _run_ralph_loop_inner(
                 kill_worker_for_ralph(worker, state)
             return
 
-        if monitor_result == "compaction":
+        if monitor_result == "context_nudge":
+            # Context usage reached threshold — send nudge and continue monitoring
+            pct_msg = f"{ralph_state.max_context}%" if ralph_state.max_context else "?"
+            nudge_text = f"You're at {pct_msg} context. Commit WIP and /exit NOW."
+            print(f"[ralph] {args.name}: context nudge sent ({pct_msg})")
+            log_ralph_iteration(
+                args.name,
+                "WARN",
+                iteration=ralph_state.current_iteration,
+                message=f"iteration {ralph_state.current_iteration} -- context nudge sent at {pct_msg}"
+            )
+            ralph_state.context_nudge_sent = True
+            save_ralph_state(ralph_state)
+
+            # Send nudge to worker
+            if worker and worker.tmux:
+                tmux_send(
+                    worker.tmux.session,
+                    worker.tmux.window,
+                    nudge_text,
+                    enter=True,
+                    socket=worker.tmux.socket,
+                    pre_clear=False,
+                )
+            # Continue monitoring (don't restart) — loop back to detect_inactivity
+            continue
+
+        elif monitor_result == "context_threshold":
+            # Context usage exceeded kill threshold — force kill
+            kill_pct = (ralph_state.max_context + 15) if ralph_state.max_context else "?"
+            print(f"[ralph] {args.name}: context threshold exceeded ({kill_pct}%), killing iteration {ralph_state.current_iteration}")
+            log_ralph_iteration(
+                args.name,
+                "FATAL",
+                iteration=ralph_state.current_iteration,
+                message=f"iteration {ralph_state.current_iteration} -- context threshold exceeded, killing"
+            )
+            ralph_state.exit_reason = "context_threshold"
+            save_ralph_state(ralph_state)
+
+            # Kill the worker — do NOT count as consecutive failure
+            if worker:
+                kill_worker_for_ralph(worker, state)
+            # Proceed to next iteration (continue the while loop)
+
+        elif monitor_result == "compaction":
             # Fatal pattern detected (e.g. "Compacting conversation") — kill and restart
             print(f"[ralph] {args.name}: compaction detected, killing iteration {ralph_state.current_iteration}")
             log_ralph_iteration(
