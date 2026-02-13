@@ -341,7 +341,7 @@ Live-tmux integration tests that verify each FEEDBACK.md issue is actually fixed
 
 ### FEEDBACK #5 — Screen change tracking works
 
-- [ ] **10.5 Smoke test: last screen change timestamp**
+- [x] **10.5 Smoke test: last screen change timestamp**
   - Write and run a test script that:
     1. Creates a minimal prompt file: `echo "just exit" > /tmp/fb5-prompt.md`
     2. Runs: `python3 swarm.py ralph spawn --name smoke-fb5 --prompt-file /tmp/fb5-prompt.md --max-iterations 2 --no-worktree -- bash -c 'echo "$ ready"; while true; do echo "tick"; sleep 2; done'`
