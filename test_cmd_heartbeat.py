@@ -1123,7 +1123,7 @@ class TestRunHeartbeatMonitor(unittest.TestCase):
 
         # Verify tmux_send was called
         mock_tmux_send.assert_called_once_with(
-            'session', 'window', 'continue', enter=True, socket=None
+            'session', 'window', 'continue', enter=True, socket=None, pre_clear=False
         )
 
     @patch('swarm.tmux_send')
@@ -1272,7 +1272,7 @@ class TestRunHeartbeatMonitor(unittest.TestCase):
 
         # tmux_send SHOULD have been called
         mock_tmux_send.assert_called_once_with(
-            'session', 'window', 'continue', enter=True, socket=None
+            'session', 'window', 'continue', enter=True, socket=None, pre_clear=False
         )
 
         # beat_count should be incremented

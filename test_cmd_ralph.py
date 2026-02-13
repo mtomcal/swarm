@@ -7713,7 +7713,7 @@ class TestRalphSpawnSendsPromptIntegration(unittest.TestCase):
         # Track what gets sent via tmux_send
         sent_prompts = []
 
-        def capture_tmux_send(session, window, text, enter=True, socket=None):
+        def capture_tmux_send(session, window, text, enter=True, socket=None, pre_clear=True):
             """Capture calls to tmux_send to verify prompt is sent."""
             sent_prompts.append({
                 'session': session,
@@ -7788,7 +7788,7 @@ class TestRalphSpawnSendsPromptIntegration(unittest.TestCase):
 
         sent_texts = []
 
-        def capture_send(session, window, text, enter=True, socket=None):
+        def capture_send(session, window, text, enter=True, socket=None, pre_clear=True):
             sent_texts.append(text)
 
         with patch('swarm.create_tmux_window'):

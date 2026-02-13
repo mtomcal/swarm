@@ -78,7 +78,7 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 3: Pre-Clear Sequence in `tmux_send()`
 
-- [ ] **3.1 Add `pre_clear` parameter to `tmux_send()`**
+- [x] **3.1 Add `pre_clear` parameter to `tmux_send()`**
   - Add `pre_clear: bool = True` parameter (~line 3235)
   - When `pre_clear=True`:
     1. Send `Escape` key: `send-keys -t <target> Escape`
@@ -88,18 +88,18 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
   - When `pre_clear=False`: current behavior (send text directly)
   - File: `swarm.py` (`tmux_send()`)
 
-- [ ] **3.2 Add `--raw` flag to `swarm send`**
+- [x] **3.2 Add `--raw` flag to `swarm send`**
   - Add `--raw` argument to send subparser (~line 3680)
   - In `cmd_send()`, pass `pre_clear=not args.raw` to `tmux_send()`
   - File: `swarm.py` (parser + `cmd_send()`)
 
-- [ ] **3.3 Update internal callers to use `pre_clear=False`**
+- [x] **3.3 Update internal callers to use `pre_clear=False`**
   - `send_prompt_to_worker()` — prompt injection should NOT pre-clear (it manages its own sequence)
   - `run_heartbeat_monitor()` — heartbeat nudges should NOT pre-clear (they may interrupt work)
   - Any other internal `tmux_send()` callers: audit and set `pre_clear=False` where appropriate
   - File: `swarm.py`
 
-- [ ] **3.4 Add unit tests for pre-clear**
+- [x] **3.4 Add unit tests for pre-clear**
   - Test: `tmux_send()` with `pre_clear=True` sends Escape + Ctrl-U before text
   - Test: `tmux_send()` with `pre_clear=False` sends text directly
   - Test: `--raw` flag skips pre-clear

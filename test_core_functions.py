@@ -181,10 +181,10 @@ class TestTmuxSend(unittest.TestCase):
     @patch('subprocess.run')
     @patch('time.sleep')
     def test_tmux_send_with_enter(self, mock_sleep, mock_run):
-        """Test tmux_send sends text and Enter key."""
+        """Test tmux_send sends text and Enter key (no pre-clear)."""
         mock_run.return_value = MagicMock(returncode=0)
 
-        swarm.tmux_send("test-session", "test-window", "hello world", enter=True)
+        swarm.tmux_send("test-session", "test-window", "hello world", enter=True, pre_clear=False)
 
         # Should be called twice: once for text, once for Enter
         self.assertEqual(mock_run.call_count, 2)
@@ -199,10 +199,10 @@ class TestTmuxSend(unittest.TestCase):
 
     @patch('subprocess.run')
     def test_tmux_send_without_enter(self, mock_run):
-        """Test tmux_send sends only text when enter=False."""
+        """Test tmux_send sends only text when enter=False (no pre-clear)."""
         mock_run.return_value = MagicMock(returncode=0)
 
-        swarm.tmux_send("test-session", "test-window", "hello world", enter=False)
+        swarm.tmux_send("test-session", "test-window", "hello world", enter=False, pre_clear=False)
 
         # Should be called once: only for text
         mock_run.assert_called_once()
@@ -212,10 +212,10 @@ class TestTmuxSend(unittest.TestCase):
     @patch('subprocess.run')
     @patch('time.sleep')
     def test_tmux_send_with_socket(self, mock_sleep, mock_run):
-        """Test tmux_send uses socket parameter."""
+        """Test tmux_send uses socket parameter (no pre-clear)."""
         mock_run.return_value = MagicMock(returncode=0)
 
-        swarm.tmux_send("test-session", "test-window", "hello", enter=True, socket="custom-socket")
+        swarm.tmux_send("test-session", "test-window", "hello", enter=True, socket="custom-socket", pre_clear=False)
 
         # First call should include -L flag
         first_call = mock_run.call_args_list[0]
@@ -229,7 +229,7 @@ class TestTmuxSend(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0)
 
         # Send multiline content
-        swarm.tmux_send("test-session", "test-window", "line1\nline2", enter=True)
+        swarm.tmux_send("test-session", "test-window", "line1\nline2", enter=True, pre_clear=False)
 
         # Check that sleep was called with 0.5 for multiline content
         mock_sleep.assert_called_with(0.5)
@@ -241,10 +241,83 @@ class TestTmuxSend(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0)
 
         # Send single line content
-        swarm.tmux_send("test-session", "test-window", "single line", enter=True)
+        swarm.tmux_send("test-session", "test-window", "single line", enter=True, pre_clear=False)
 
         # Check that sleep was called with 0.1 for single line
         mock_sleep.assert_called_with(0.1)
+
+    @patch('subprocess.run')
+    @patch('time.sleep')
+    def test_tmux_send_pre_clear_sends_escape_and_ctrl_u(self, mock_sleep, mock_run):
+        """Test tmux_send with pre_clear=True sends Escape + Ctrl-U before text."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        swarm.tmux_send("test-session", "test-window", "hello", enter=True, pre_clear=True)
+
+        # Should be called 4 times: Escape, C-u, text, Enter
+        self.assertEqual(mock_run.call_count, 4)
+
+        target = "test-session:test-window"
+
+        # First call: Escape
+        self.assertEqual(mock_run.call_args_list[0][0][0],
+                        ["tmux", "send-keys", "-t", target, "Escape"])
+
+        # Second call: Ctrl-U
+        self.assertEqual(mock_run.call_args_list[1][0][0],
+                        ["tmux", "send-keys", "-t", target, "C-u"])
+
+        # Third call: literal text
+        self.assertEqual(mock_run.call_args_list[2][0][0],
+                        ["tmux", "send-keys", "-t", target, "-l", "hello"])
+
+        # Fourth call: Enter
+        self.assertEqual(mock_run.call_args_list[3][0][0],
+                        ["tmux", "send-keys", "-t", target, "Enter"])
+
+    @patch('subprocess.run')
+    def test_tmux_send_pre_clear_without_enter(self, mock_run):
+        """Test tmux_send with pre_clear=True and enter=False."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        swarm.tmux_send("test-session", "test-window", "hello", enter=False, pre_clear=True)
+
+        # Should be called 3 times: Escape, C-u, text (no Enter)
+        self.assertEqual(mock_run.call_count, 3)
+
+        target = "test-session:test-window"
+        self.assertEqual(mock_run.call_args_list[0][0][0],
+                        ["tmux", "send-keys", "-t", target, "Escape"])
+        self.assertEqual(mock_run.call_args_list[1][0][0],
+                        ["tmux", "send-keys", "-t", target, "C-u"])
+        self.assertEqual(mock_run.call_args_list[2][0][0],
+                        ["tmux", "send-keys", "-t", target, "-l", "hello"])
+
+    @patch('subprocess.run')
+    @patch('time.sleep')
+    def test_tmux_send_pre_clear_default_is_true(self, mock_sleep, mock_run):
+        """Test tmux_send defaults to pre_clear=True."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        # Call without specifying pre_clear — should default to True
+        swarm.tmux_send("test-session", "test-window", "hello", enter=True)
+
+        # Should be 4 calls: Escape, C-u, text, Enter
+        self.assertEqual(mock_run.call_count, 4)
+
+    @patch('subprocess.run')
+    @patch('time.sleep')
+    def test_tmux_send_pre_clear_with_socket(self, mock_sleep, mock_run):
+        """Test pre_clear uses correct socket in tmux commands."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        swarm.tmux_send("sess", "win", "hello", enter=True, socket="my-sock", pre_clear=True)
+
+        # All 4 calls should use -L my-sock prefix
+        self.assertEqual(mock_run.call_count, 4)
+        for call in mock_run.call_args_list:
+            cmd = call[0][0]
+            self.assertEqual(cmd[0:3], ["tmux", "-L", "my-sock"])
 
 
 class TestTmuxWindowExists(unittest.TestCase):

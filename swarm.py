@@ -2376,7 +2376,8 @@ def run_heartbeat_monitor(worker_name: str) -> None:
                     worker.tmux.window,
                     heartbeat_state.message,
                     enter=True,
-                    socket=worker.tmux.socket
+                    socket=worker.tmux.socket,
+                    pre_clear=False
                 )
                 # Update state
                 heartbeat_state.last_beat_at = datetime.now(timezone.utc).isoformat()
@@ -3236,12 +3237,34 @@ def create_tmux_window(session: str, window: str, cwd: Path, cmd: list[str], soc
     )
 
 
-def tmux_send(session: str, window: str, text: str, enter: bool = True, socket: Optional[str] = None) -> None:
-    """Send text to a tmux window."""
+def tmux_send(session: str, window: str, text: str, enter: bool = True, socket: Optional[str] = None, pre_clear: bool = True) -> None:
+    """Send text to a tmux window.
+
+    Args:
+        session: Tmux session name
+        window: Tmux window name
+        text: Text to send
+        enter: Whether to send Enter after text
+        socket: Optional tmux socket name
+        pre_clear: If True, send Escape + Ctrl-U before text to clear any
+                   partial input on the command line. Default True for
+                   user-facing sends; internal callers should pass False.
+    """
     target = f"{session}:{window}"
+    cmd_prefix = tmux_cmd_prefix(socket)
+
+    # Pre-clear: send Escape (exit any mode) + Ctrl-U (clear line) before text
+    if pre_clear:
+        subprocess.run(
+            cmd_prefix + ["send-keys", "-t", target, "Escape"],
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            cmd_prefix + ["send-keys", "-t", target, "C-u"],
+            capture_output=True, check=True,
+        )
 
     # Use send-keys with literal text
-    cmd_prefix = tmux_cmd_prefix(socket)
     cmd = cmd_prefix + ["send-keys", "-t", target, "-l", text]
     subprocess.run(cmd, capture_output=True, check=True)
 
@@ -3701,6 +3724,10 @@ def main() -> None:
                        help="Broadcast to all running tmux workers. Non-tmux and "
                             "non-running workers are silently skipped. Cannot be "
                             "used with a worker name.")
+    send_p.add_argument("--raw", action="store_true",
+                       help="Skip the pre-clear sequence (Escape + Ctrl-U) that is "
+                            "normally sent before the text. Use this when sending to "
+                            "programs that should not receive escape sequences.")
 
     # interrupt
     int_p = subparsers.add_parser(
@@ -4688,7 +4715,7 @@ def cmd_send(args) -> None:
 
         # Send text to tmux window
         socket = worker.tmux.socket if worker.tmux else None
-        tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter, socket=socket)
+        tmux_send(worker.tmux.session, worker.tmux.window, args.text, enter=not args.no_enter, socket=socket, pre_clear=not args.raw)
 
         # Print confirmation
         print(f"sent to {worker.name}")
@@ -6616,7 +6643,8 @@ def send_prompt_to_worker(worker: Worker, prompt_content: str) -> str:
         worker.tmux.window,
         prompt_content,
         enter=True,
-        socket=socket
+        socket=socket,
+        pre_clear=False
     )
 
     # Capture pane content (with scrollback) after prompt injection for done-pattern baseline
