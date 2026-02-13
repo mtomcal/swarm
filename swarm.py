@@ -666,9 +666,12 @@ See Also:
 STATUS_HELP_DESCRIPTION = """\
 Show detailed status information for a single worker.
 
-Displays the worker's current state (running/stopped) along with execution
+Displays the worker's PROCESS state (running/stopped) along with execution
 context: tmux session and window (for tmux workers), process ID (for background
 workers), worktree path (if using git isolation), and uptime since spawn.
+
+NOTE: For ralph LOOP status (iteration progress, ETA, failures),
+use: swarm ralph status <name>
 
 Exit Codes:
   0  Worker is running
@@ -882,7 +885,7 @@ See Also:
 
 # Logs command help
 LOGS_HELP_DESCRIPTION = """\
-View worker output from tmux panes or log files.
+View worker TERMINAL output from tmux panes or log files.
 
 For tmux workers, captures output directly from the tmux pane. By default,
 shows only the visible pane content. Use --history to include scrollback
@@ -890,6 +893,9 @@ buffer (up to --lines lines). Use --follow for live tailing.
 
 For background (non-tmux) workers, reads from log files stored in
 ~/.swarm/logs/<name>.stdout.log. Use --follow to tail the log file.
+
+NOTE: For ralph ITERATION history (start/stop timestamps, durations),
+use: swarm ralph logs <name>
 """
 
 LOGS_HELP_EPILOG = r"""Log Storage:
@@ -1013,12 +1019,15 @@ See Also:
 """
 
 CLEAN_HELP_DESCRIPTION = """\
-Remove stopped workers from swarm state and clean up associated resources.
+Remove stopped WORKERS from swarm state and clean up associated resources.
 
 Removes worker entries from ~/.swarm/state.json and deletes associated log files
 (~/.swarm/logs/<name>.{stdout,stderr}.log). By default, git worktrees are also
 removed unless they have uncommitted changes. Only stopped workers can be cleaned;
 running workers must be killed first with 'swarm kill'.
+
+NOTE: For ralph STATE cleanup (iterations.log, state.json),
+use: swarm ralph clean <name>
 
 What Gets Cleaned:
   - Worker entry in state file (~/.swarm/state.json)
@@ -1580,8 +1589,11 @@ See Also:
 """
 
 RALPH_STATUS_HELP_EPILOG = """\
-Shows detailed ralph loop status including iteration progress, failures,
+Shows detailed ralph LOOP status including iteration progress, failures,
 timing information, and estimated time remaining.
+
+NOTE: For worker PROCESS status (running/stopped),
+use: swarm status <name>
 
 Output includes:
   - Current status (running/paused/stopped/failed)
@@ -5247,6 +5259,7 @@ def cmd_respawn(args) -> None:
     original_tags = worker.tags
     original_tmux = worker.tmux
     original_worktree = worker.worktree
+    original_metadata = worker.metadata
 
     # Remove old worker from state
     state.remove_worker(args.name)
@@ -5311,6 +5324,7 @@ def cmd_respawn(args) -> None:
         tmux=tmux_info,
         worktree=worktree_info,
         pid=pid,
+        metadata=original_metadata,
     )
 
     # Add to state

@@ -194,19 +194,19 @@ A spec-vs-implementation audit on 2026-02-13 found 14 gaps. The highest-impact i
 
 ### Phase 8: Help Text & Metadata Fixes
 
-- [ ] **8.1 Add disambiguation notes to help text**
+- [x] **8.1 Add disambiguation notes to help text**
   - `STATUS_HELP_DESCRIPTION`: add note about `swarm ralph status`
   - `LOGS_HELP_DESCRIPTION`: add note about `swarm ralph logs`
   - `CLEAN_HELP_DESCRIPTION`: add note about `swarm ralph clean`
   - `RALPH_STATUS_HELP_EPILOG`: add note about `swarm status`
   - File: `swarm.py` (help constant strings)
 
-- [ ] **8.2 Preserve `metadata` in `cmd_respawn()`**
+- [x] **8.2 Preserve `metadata` in `cmd_respawn()`**
   - In `cmd_respawn()` (~line 5168), include `metadata` in preserved fields
   - Pass `metadata` to new Worker creation
   - File: `swarm.py`
 
-- [ ] **8.3 Add unit test for metadata preservation**
+- [x] **8.3 Add unit test for metadata preservation**
   - Test: respawned worker retains `metadata` from original
   - File: `test_cmd_spawn.py` (extend existing, respawn tests)
 

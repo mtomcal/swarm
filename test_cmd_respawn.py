@@ -23,11 +23,14 @@ class TestCmdRespawn(unittest.TestCase):
         self.state_file = self.swarm_dir / "state.json"
 
         # Patch constants
+        self.state_lock_file = self.swarm_dir / "state.lock"
         self.patcher_swarm_dir = patch.object(swarm, 'SWARM_DIR', self.swarm_dir)
         self.patcher_state_file = patch.object(swarm, 'STATE_FILE', self.state_file)
+        self.patcher_state_lock_file = patch.object(swarm, 'STATE_LOCK_FILE', self.state_lock_file)
         self.patcher_logs_dir = patch.object(swarm, 'LOGS_DIR', self.logs_dir)
         self.patcher_swarm_dir.start()
         self.patcher_state_file.start()
+        self.patcher_state_lock_file.start()
         self.patcher_logs_dir.start()
 
         # Create directories
@@ -38,6 +41,7 @@ class TestCmdRespawn(unittest.TestCase):
         """Clean up test fixtures."""
         self.patcher_swarm_dir.stop()
         self.patcher_state_file.stop()
+        self.patcher_state_lock_file.stop()
         self.patcher_logs_dir.stop()
         # Clean up temp directory
         import shutil
@@ -465,6 +469,36 @@ class TestCmdRespawn(unittest.TestCase):
         output = mock_stderr.getvalue()
         self.assertIn("cannot remove worktree", output)
         self.assertIn("uncommitted changes", output)
+
+
+    def test_respawn_preserves_metadata(self):
+        """Test that respawn preserves the metadata field from original worker."""
+        self._create_worker_state({
+            "name": "meta-worker",
+            "status": "stopped",
+            "cmd": ["echo", "hello"],
+            "started": "2024-01-01T00:00:00",
+            "cwd": "/tmp",
+            "env": {},
+            "tags": [],
+            "tmux": None,
+            "worktree": None,
+            "pid": 12345,
+            "metadata": {"ralph": True, "custom_key": "custom_value", "iteration": 5}
+        })
+
+        args = Namespace(name="meta-worker", clean_first=False)
+
+        with patch('swarm.refresh_worker_status', return_value="stopped"):
+            with patch('swarm.spawn_process', return_value=54321) as mock_spawn:
+                with patch('builtins.print'):
+                    swarm.cmd_respawn(args)
+
+        # Verify state preserved metadata
+        with open(self.state_file) as f:
+            state = json.load(f)
+            worker = state["workers"][0]
+            self.assertEqual(worker["metadata"], {"ralph": True, "custom_key": "custom_value", "iteration": 5})
 
 
 if __name__ == "__main__":
