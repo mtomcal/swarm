@@ -1,5 +1,8 @@
 # Swarm
 
+> [!CAUTION]
+> **Swarm is a research project. If your name is not Michael Tomcal then do not use.** Feel free to grab the specs and build your own. This software is experimental, unstable, and under active development. APIs will change without notice. Features may be incomplete or broken. There is no support, no documentation guarantees, and no warranty of any kind. Use at your own risk.
+
 **Orchestrate AI coding agents at scale.**
 
 Swarm is a process manager for AI agent CLIs that lets you run multiple autonomous agents in parallel, each in its own isolated git worktree. Think of it as `tmux` + `git worktree` + agent lifecycle management, designed for engineers who want to scale AI-assisted development beyond a single chat session.
